@@ -84,8 +84,11 @@ the lint gate alongside the provider-import rule.
 ### 3.3 Modules, and the layers inside each
 
 **Feature modules:** `auth/`, `conversations/`, `generations/`, `providers/`, `quota/`,
-`attachments/`, `storage/`, `admin/`, `jobs/`, `reporting/`.
-**Platform (cross-cutting):** `config/`, `db/`, `http/`, `observability/`, `clock/`.
+`attachments/`, `storage/`, `admin/`, `jobs/`, `reporting/`, `audit/`.
+**Platform (cross-cutting):** `config/`, `db/`, `http/`, `observability/`, `clock/`, plus the
+root-level `errors.ts` (error vocabulary / `AppError`), `crypto.ts` (session-token & hash helpers) and
+`csrf.ts` (stateless CSRF tokens) — importable by `http/`, `application/` and `infrastructure/`,
+never by `domain/`.
 **Glue (the only cross-module orchestrators — PRD §8.2):** `orchestrator/`, `context-builder/`,
 `artifactsink/`.
 
@@ -143,13 +146,18 @@ adapter. The "clean" ceremony is applied **only** here, not between every layer.
 src/
   # platform — cross-cutting; imports no feature module
   config/                # env schema (Zod) + constants
-  db/                    # pool, drizzle client, withTransaction (Unit of Work)
-  http/                  # middleware: request-id, auth, rate limit, error envelope
+  db/                    # pool, drizzle client, schema, withTransaction (Unit of Work)
+  http/                  # middleware: request-id, cors, auth, csrf, rate limit, error envelope
   observability/         # pino, metrics, tracing
   clock/                 # Clock + IdGenerator ports and implementations
+  errors.ts              # error vocabulary + AppError (shared by application & http)
+  crypto.ts              # session-token generation/hashing, UA hashing
+  csrf.ts                # stateless signed CSRF tokens
+  request-context.ts     # RequestMeta (audit provenance)
 
   # feature modules — each layered internally (§3.3)
-  auth/                  # password hashing, sessions, RBAC, bootstrap-admin CLI
+  auth/                  # password hashing, sessions, RBAC, auth HTTP routes
+  audit/                 # audit_logs writer (append-only; audit actions)
   conversations/         # conversations, messages, message_parts
   generations/           # generation record, runner, checkpointing, finalizer
   providers/             # PAL interfaces + adapters/<name>/  (ONLY place with provider SDKs)
@@ -166,7 +174,8 @@ src/
   artifactsink/          # provider-emitted bytes → StorageProvider → attachments row → part
 
   # composition root
-  app.ts                 # Hono app assembly; wires infrastructure into ports
+  services.ts            # assembles infrastructure implementations into ports
+  app.ts                 # Hono app assembly; wires middleware and the /api tree
   server.ts              # boot, env validation, graceful shutdown
 
 docs/                    # PRD.md, API_CONTRACTS.md, IMPLEMENTATION_PLAN.md
@@ -215,6 +224,13 @@ docker compose up -d pg redis   # local dev deps
 - **Every admin mutation and security event** writes an `audit_logs` row in the same transaction.
 - **Money is integer micros** (`bigint`); **all timestamps are `timestamptz` UTC**; DB stores UTC only.
 - **IDs are UUIDv7**, generated in the application (time-ordered → good index locality).
+- **Session cookie & CSRF (PRD §15.1).** Auth is an opaque `__Host-session` cookie (`HttpOnly; Secure;
+  SameSite=Lax; Path=/`, never `Domain`), stored server-side keyed by `sha256(value)`. The SPA/API are
+  same-site different-origin, so CORS uses an exact `ALLOWED_ORIGINS` allow-list (never `*`) with
+  `credentials: true` and `Vary: Origin`. Every non-GET `/api` request needs a valid `X-CSRF-Token`
+  (stateless HMAC over `nonce:issuedAt`, 12 h) **and** a passing `Origin` check; `POST /api/auth/login`
+  is origin-only because it issues the token. Routes never touch cookies or the CSRF secret directly —
+  use the shared middleware.
 
 ---
 

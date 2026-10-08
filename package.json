@@ -20,8 +20,8 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "verify": "bun run typecheck && bun run lint && bun run depcruise && bun run test",
-    "db:migrate": "bun run src/cli/migrate.ts",
-    "db:seed:example": "bun run src/cli/seed-example.ts",
+    "db:migrate": "bun run src/cli/index.ts migrate",
+    "db:seed:example": "bun run src/cli/index.ts seed-example",
     "cli": "bun run src/cli/index.ts"
   },
   "dependencies": {

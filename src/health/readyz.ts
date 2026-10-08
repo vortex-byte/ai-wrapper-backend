@@ -1,6 +1,7 @@
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Config } from '../config/index.ts';
+import { getMigrationState } from '../db/migrations.ts';
 import { getPool } from '../db/pool.ts';
 
 export interface CheckResult {
@@ -24,13 +25,14 @@ async function checkDatabase(): Promise<CheckResult> {
 
 async function checkMigrations(): Promise<CheckResult> {
   try {
-    const { rows } = await getPool().query<{ present: string | null }>(
-      `SELECT to_regclass('public.schema_migrations')::text AS present`,
-    );
-    if (rows[0]?.present === null || rows[0]?.present === undefined) {
-      return { ok: false, detail: 'schema_migrations missing (run migrations)' };
+    const state = await getMigrationState();
+    if (state.drifted.length > 0) {
+      return { ok: false, detail: `checksum drift: ${state.drifted.join(', ')}` };
     }
-    return { ok: true, detail: 'ok' };
+    if (state.pending.length > 0) {
+      return { ok: false, detail: `${state.pending.length} pending migration(s)` };
+    }
+    return { ok: true, detail: `${state.appliedCount} applied` };
   } catch (error) {
     return { ok: false, detail: error instanceof Error ? error.message : 'unavailable' };
   }

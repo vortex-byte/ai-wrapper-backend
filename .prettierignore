@@ -1,0 +1,14 @@
+node_modules
+dist
+coverage
+.var
+tmp
+bun.lock
+bun.lockb
+
+# Docs are long-form specs; keep their hand-authored formatting.
+docs
+*.md
+
+# Forward-only SQL migrations are hand-authored.
+migrations

@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+.vitest/
+
+# Logs
+*.log
+logs/
+
+# Local runtime data (storage root, tmp)
+tmp/
+.var/
+
+# Env / secrets — never commit
+.env
+.env.*
+!.env.example
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

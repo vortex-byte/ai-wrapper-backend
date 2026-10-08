@@ -1,0 +1,49 @@
+{
+  "name": "ai-chat-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "module": "src/server.ts",
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/server.ts",
+    "start": "bun run src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "depcruise": "depcruise src",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "verify": "bun run typecheck && bun run lint && bun run depcruise && bun run test",
+    "db:migrate": "bun run src/cli/migrate.ts",
+    "db:seed:example": "bun run src/cli/seed-example.ts",
+    "cli": "bun run src/cli/index.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.13.13",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.2",
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "@vitest/coverage-v8": "^5.0.3",
+    "dependency-cruiser": "^18.5.0",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^10.12.0",
+    "pino-pretty": "^13.2.0",
+    "prettier": "^3.9.9",
+    "typescript": "^6",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  }
+}

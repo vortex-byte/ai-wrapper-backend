@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getPool } from './pool.ts';
 
 /**
@@ -20,7 +21,10 @@ export interface MigrationFile {
 export const MIGRATIONS_TABLE = 'schema_migrations';
 
 /** Resolved from this file's location: src/db/ → repo-root/migrations. */
-export const MIGRATIONS_DIR = path.resolve(import.meta.dir, '../../migrations');
+export const MIGRATIONS_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../migrations',
+);
 
 export function checksumOf(sql: string): string {
   return createHash('sha256').update(sql, 'utf8').digest('hex');

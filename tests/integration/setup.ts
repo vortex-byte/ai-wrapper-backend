@@ -47,5 +47,5 @@ if (!/test/i.test(databaseName)) {
 }
 
 process.env.DATABASE_URL = testUrl;
-process.env.LOG_LEVEL ??= 'silent';
+process.env.LOG_LEVEL = process.env.TEST_LOG_LEVEL ?? 'silent';
 process.env.NODE_ENV = 'test';

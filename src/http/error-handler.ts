@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Config } from '../config/index.ts';
 import { getLogger } from '../observability/logger.ts';
 import { errorEnvelope, envelopeFromError } from './envelope.ts';
-import { AppError, isAppError } from './errors.ts';
+import { AppError, isAppError } from '../errors.ts';
 import type { AppEnv } from './types.ts';
 
 /**

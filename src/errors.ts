@@ -1,8 +1,11 @@
 /**
- * The error vocabulary of `docs/API_CONTRACTS.md` §14. `code` values are stable
- * and machine-readable; `message` is display text. `AppError` is the only error
- * type the HTTP layer turns into an error envelope — anything else becomes
- * `internal_error` with a generic message.
+ * The error vocabulary of `docs/API_CONTRACTS.md` §14. `code` values are stable and
+ * machine-readable; `message` is display text. `AppError` is the only error type the
+ * HTTP layer turns into an error envelope — anything else becomes `internal_error`
+ * with a generic message.
+ *
+ * This lives at the platform root (not under `http/`) so the application layer can
+ * throw typed errors without importing HTTP (AGENTS §3.2 dependency rule).
  */
 
 export interface ErrorDescriptor {

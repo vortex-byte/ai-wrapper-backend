@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { errorEnvelope, envelopeFromError, ok, okEmpty } from '../../../src/http/envelope.ts';
-import { AppError } from '../../../src/http/errors.ts';
+import { AppError } from '../../../src/errors.ts';
 
 describe('success envelope', () => {
   it('always carries status/message and the payload under data', () => {

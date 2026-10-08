@@ -1,4 +1,4 @@
-import { AppError, HTTP_ERRORS, isAppError, type ErrorCode } from './errors.ts';
+import { AppError, HTTP_ERRORS, isAppError, type ErrorCode } from '../errors.ts';
 
 /**
  * The wire envelope (`docs/API_CONTRACTS.md` §1). These builders are pure so they

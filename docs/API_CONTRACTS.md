@@ -71,23 +71,72 @@ environment — PRD A-16).
   contains keys, provider bodies, or SQL parameter values — and is **never** returned in staging or
   production. Request correlation in all environments is via the `X-Request-Id` header.
 
-### 1.3 Common response headers
+### 1.3 Response headers
 
-| Header | When | Notes |
-|---|---|---|
-| `X-Request-Id` | always | correlation id |
-| `Set-Cookie: __Host-session=…` | login | `HttpOnly; Secure; SameSite=Lax; Path=/` |
-| `Idempotency-Replayed: true` | replayed send | same response as the original |
-| `Retry-After` | `429`, `503 provider_*`, `503 service_busy` | seconds |
-| `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` | rate-limited routes | §16 |
-| `Cache-Control: no-store` | all JSON API responses | |
-| `Vary: Origin` | every response when CORS is active | |
-| `Access-Control-Allow-Origin` / `-Credentials` / `-Max-Age` | cross-origin requests (preflight too) | exact origin, `credentials: true`, `Max-Age: 600` |
+Headers are grouped by response class. `always` means every response (success **and** error) unless the
+row says otherwise. All header **values** are strings on the wire; "Value type" describes the logical
+type that string encodes. Header names are case-insensitive on the wire.
 
-**CORS.** The SPA and API are different subdomains of the same site; the API answers preflight with an
-exact `Access-Control-Allow-Origin` (never `*`), `Access-Control-Allow-Credentials: true`,
-`Access-Control-Allow-Headers: Content-Type, X-CSRF-Token, Idempotency-Key, X-Request-Id`, and
-`Access-Control-Max-Age: 600`.
+#### 1.3.1 Always present (2xx and non-2xx)
+
+| Header | Value type | When shown | Notes |
+|---|---|---|---|
+| `X-Request-Id` | string, `^[A-Za-z0-9_-]{8,64}$` | always | Echoes a valid client-supplied id, else a server-generated UUID. Correlation handle in all environments. |
+| `Content-Type` | string | whenever there is a body | `application/json; charset=UTF-8` for enveloped bodies; `text/event-stream` (§7.2) and blob types (§8.4) are exceptions. Absent on bodiless responses. |
+| `Cache-Control` | string, literal `no-store` | always on `/api` JSON and `/metrics` | JSON API responses are never cacheable. Overridden on `GET /api/files/:id/content` → `private, no-store` (§8.4). |
+| `Vary` | string, contains `Origin` | always | Set even when no `Origin` is present, so shared caches never mix origins. |
+| `X-Content-Type-Options` | string, literal `nosniff` | always | Baseline hardening. |
+| `X-Frame-Options` | string, literal `DENY` | always | |
+| `Referrer-Policy` | string, literal `no-referrer` | always | |
+| `Cross-Origin-Opener-Policy` | string, literal `same-origin` | always | |
+| `Cross-Origin-Resource-Policy` | string, literal `same-origin` | always | |
+| `Strict-Transport-Security` | string, literal `max-age=63072000; includeSubDomains` | **production only** | Omitted in development/test (meaningful only behind TLS). |
+
+#### 1.3.2 Success only (2xx)
+
+| Header | Value type | When shown | Notes |
+|---|---|---|---|
+| `Set-Cookie: __Host-session=…` | string (Set-Cookie) | `POST /api/auth/login` (200) and `POST /api/me/password` (200) | Attributes `HttpOnly; Secure; SameSite=Lax; Path=/` and **no** `Domain`. On login it issues the session; on password change it carries the rotated session id. |
+| `Set-Cookie: __Host-session=; Max-Age=0` | string (Set-Cookie) | `DELETE /api/auth/session` (200) | Clears the cookie; same attributes as the issue form. |
+| `Idempotency-Replayed` | string, literal `true` | `2xx` of a replayed `POST …/messages` / retry (§6.2, §6.3) | Omitted on the first, non-replayed response. The body is byte-identical to the original. |
+| `RateLimit-Limit` | integer as string, `>= 0` | 2xx of rate-limited routes | Max requests in the current window (§16). |
+| `RateLimit-Remaining` | integer as string, `>= 0` | 2xx of rate-limited routes | Requests left in the window. Exposed to the SPA via CORS. |
+| `RateLimit-Reset` | integer as string (Unix seconds) | 2xx of rate-limited routes | When the window resets. |
+| `Content-Disposition` | string, `inline` \| `attachment; filename="…"` | `GET /api/files/:id/content` (200/206) | `inline` for validated images, `attachment` otherwise (§8.4). |
+| `Content-Range` | string, `bytes <start>-<end>/<total>` | `GET /api/files/:id/content` **206 only** | Present only when a `Range` request is satisfied. |
+| `Accept-Ranges` | string, literal `bytes` | `GET /api/files/:id/content` (200/206) | Advertises `Range` support. |
+| `Content-Length` | integer as string, `>= 0` | any response with a known-length body | Absent for SSE and chunked streams. |
+
+#### 1.3.3 Error only (non-2xx)
+
+| Header | Value type | When shown | Notes |
+|---|---|---|---|
+| `Retry-After` | integer as string (seconds) or HTTP-date | `429` and `503` (`provider_unavailable`, `provider_rate_limited`, `service_busy`, `storage_unavailable`) | How long to wait before retrying. Mirrors the envelope's `retryable: true`. |
+| `RateLimit-Limit` / `-Remaining` / `-Reset` | as in §1.3.2 | `429 rate_limited` (and other rate-limited errors) | Present on the rejection so the client can back off precisely. |
+
+> Non-2xx responses otherwise reuse the "always" headers in §1.3.1 — an error is still `no-store`, still
+> carries `X-Request-Id`, and still has the hardening headers.
+
+#### 1.3.4 CORS headers (when the request is cross-origin)
+
+Present on any response whose request carried an `Origin` matching `ALLOWED_ORIGINS`, and on the
+matching preflight. A non-allowed origin receives **none** of these (the browser blocks it); the
+preflight is still answered `204`, while a **mutating** request from a non-allowed origin is actively
+rejected with `403 forbidden` by the CSRF/`Origin` check (§1).
+
+| Header | Value type | When shown | Notes |
+|---|---|---|---|
+| `Access-Control-Allow-Origin` | string, an exact origin | origin allowed | **Never `*`** — an exact echo of the allowed origin. |
+| `Access-Control-Allow-Credentials` | string, literal `true` | origin allowed | Required for the session cookie to ride along. |
+| `Access-Control-Expose-Headers` | string, literal `X-Request-Id, RateLimit-Remaining` | origin allowed | Headers the SPA may read from JS. |
+| `Access-Control-Allow-Methods` | string, CSV of methods | **preflight (OPTIONS) only** | `GET, POST, PATCH, DELETE, OPTIONS`. |
+| `Access-Control-Allow-Headers` | string, CSV of names | **preflight only** | `Content-Type, X-CSRF-Token, Idempotency-Key, X-Request-Id`. |
+| `Access-Control-Max-Age` | integer as string (seconds), literal `600` | **preflight only** | Browsers cache the preflight for 10 min. |
+
+**Preflight.** An `OPTIONS` request under `/api` returns **`204 No Content`** with an empty body,
+`Vary: Origin`, and — when the origin is allowed — the `Access-Control-Allow-Methods` / `-Headers` /
+`-Max-Age` headers above. It bypasses auth: a preflight never carries the session cookie, so it must
+not require it.
 
 **CSRF token.** `POST /api/auth/login` returns `data.csrfToken` alongside the session cookie; it is a
 stateless `nonce.base64url(HMAC-SHA256(SESSION_SECRET, nonce + ":" + issuedAt))` valid for **12 h**.

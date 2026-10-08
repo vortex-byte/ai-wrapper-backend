@@ -24,10 +24,8 @@ environment — PRD A-16).
 ## 1. Conventions
 
 - **Fields:** `camelCase`. **IDs:** UUIDv7 strings. **Timestamps:** ISO-8601 UTC (`2026-10-08T09:30:00Z`).
-- **Auth:** a session cookie (`__Host-session`). All `/api` endpoints require it except `/api/auth/login`.
-  Ops endpoints are internal. See §2.
-- **CSRF:** state-changing requests (non-GET) must send `X-Requested-With: ai-chat` and a valid
-  `Origin`/`Sec-Fetch-Site`. Missing/mismatched → `403 forbidden`.
+- **Auth:** a session cookie (`__Host-session`, `HttpOnly; Secure; SameSite=Lax; Path=/`). All `/api` endpoints require it except `/api/auth/login`. Ops endpoints are internal. See §2.
+- **CSRF:** the SPA and API are served from different subdomains of the same site, so the cookie is sent by the browser but CORS applies. Every **non-GET** `/api` request must send `X-CSRF-Token` — the token returned by `POST /api/auth/login` (and re-issued on password change) — and must pass an `Origin` check against `ALLOWED_ORIGINS`. Missing/invalid → `403 forbidden`. **Exception:** `POST /api/auth/login` is validated by the `Origin` check only, since it is the endpoint that issues the token (`SameSite=Lax` + the strict origin allow-list bound the login-CSRF risk).
 - **Request ID:** every response carries `X-Request-Id`. A client-supplied value is honored only if it
   matches `^[A-Za-z0-9_-]{8,64}$`, otherwise the server replaces it. The request id is **not** repeated
   inside response bodies; read it from the header.
@@ -83,6 +81,18 @@ environment — PRD A-16).
 | `Retry-After` | `429`, `503 provider_*`, `503 service_busy` | seconds |
 | `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` | rate-limited routes | §16 |
 | `Cache-Control: no-store` | all JSON API responses | |
+| `Vary: Origin` | every response when CORS is active | |
+| `Access-Control-Allow-Origin` / `-Credentials` / `-Max-Age` | cross-origin requests (preflight too) | exact origin, `credentials: true`, `Max-Age: 600` |
+
+**CORS.** The SPA and API are different subdomains of the same site; the API answers preflight with an
+exact `Access-Control-Allow-Origin` (never `*`), `Access-Control-Allow-Credentials: true`,
+`Access-Control-Allow-Headers: Content-Type, X-CSRF-Token, Idempotency-Key, X-Request-Id`, and
+`Access-Control-Max-Age: 600`.
+
+**CSRF token.** `POST /api/auth/login` returns `data.csrfToken` alongside the session cookie; it is a
+stateless `nonce.base64url(HMAC-SHA256(SESSION_SECRET, nonce + ":" + issuedAt))` valid for **12 h**.
+Send it as `X-CSRF-Token` on every non-GET request. It is re-issued when the password changes (session
+rotation); the SPA should store it in memory only (never `localStorage`).
 
 ---
 
@@ -98,9 +108,11 @@ Success `200`:
 ```json
 { "status": "ok", "message": "", "data": {
     "user": { "id": "0192…", "email": "ada@corp.example", "displayName": "Ada L.",
-              "role": "user", "divisionId": "0192…", "mustChangePassword": false } } }
+              "role": "user", "divisionId": "0192…", "mustChangePassword": false },
+    "csrfToken": "0fT2…​.9c1a…" } }
 ```
-Plus `Set-Cookie: __Host-session=…`.
+Plus `Set-Cookie: __Host-session=…`. The `csrfToken` is required as `X-CSRF-Token` on later non-GET
+requests (§1); store it in memory only.
 
 Failure `401`:
 ```json
@@ -144,11 +156,12 @@ Request:
 { "currentPassword": "old…", "newPassword": "new…" }
 ```
 ```json
-{ "status": "ok", "message": "Password updated." }
+{ "status": "ok", "message": "Password updated.", "data": { "csrfToken": "0fT2….9c1a…" } }
 ```
-`200` (no `data`). Side effects: `password_updated_at` set, `must_change_password` cleared, **all other
-sessions revoked**. The caller's session is kept (rotated). `401 unauthenticated` if `currentPassword`
-is wrong; `400 invalid_request` if the new password fails policy (min length 12).
+`200`. Side effects: `password_updated_at` set, `must_change_password` cleared, **all other sessions
+revoked**, and the caller's session **rotated** (a fresh `__Host-session` cookie is set) with a new
+`csrfToken` returned. `401 unauthenticated` if `currentPassword` is wrong; `400 invalid_request` if the
+new password fails policy (min length 12).
 
 ---
 
@@ -297,7 +310,7 @@ File `status`: `available | processing | expired | missing` (`expired`/`missing`
 
 ### 6.2 `POST /api/conversations/:id/messages` — idempotent
 
-Headers: `Idempotency-Key: 3f2b…` (**required**), `X-Requested-With: ai-chat`.
+Headers: `Idempotency-Key: 3f2b…` (**required**), plus `X-CSRF-Token` (see §1).
 
 ```json
 {

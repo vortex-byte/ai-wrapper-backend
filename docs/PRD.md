@@ -982,7 +982,7 @@ No second job system is needed: the generation record **is** the job record.
 - **Account protection:** per-account lockout after 8 consecutive failures (15 min) plus a per-IP limit on the login route (§15.4). `login`, `logout`, `failed_login`, `password_change`, and admin `password_reset` are audit events.
 - **Provisioning:** admins create accounts (FR-AUTH-2); first login forces a password change via `must_change_password`. While that flag is set, every endpoint except `GET /me`, `POST /me/password`, and `DELETE /auth/session` returns `403 password_change_required`. No self-registration and no email delivery in MVP (self-service reset is P2).
 - **Bootstrap:** the first admin is created by a `bootstrap-admin` CLI/migration with a one-time password (FR-AUTH-8) — this replaces the break-glass question (Q-7, closed).
-- **CSRF:** SameSite=Lax + mandatory `Origin`/`Sec-Fetch-Site` validation on non-GET + requirement of a custom header (`X-Requested-With: ai-chat`) for state-changing calls.
+- **CSRF:** SameSite=Lax cookie **plus** a signed CSRF token. The SPA and API are served from **different subdomains of the same registrable site** (e.g. `app.corp.example` + `api.corp.example`), so the session cookie is still sent by the browser on same-site requests. `POST /auth/login` (and every session rotation) returns a `csrfToken` in the response body: `nonce . base64url(HMAC-SHA256(SESSION_SECRET, nonce + ":" + issuedAt))`, verified statelessly with a **12 h** max age. The SPA keeps it in memory and sends it as `X-CSRF-Token` on every non-GET `/api` request; the server also validates `Origin` against `ALLOWED_ORIGINS`. A missing/invalid token or origin → `403 forbidden`. `POST /auth/login` itself is the exception — it is validated by `Origin` alone, because it is the call that issues the token; the `SameSite=Lax` cookie and the strict origin allow-list bound the resulting login-CSRF risk.
 - **SSO/OIDC is P2** (extension point: `users.idp_subject`, retained nullable). MFA is out of MVP scope (Q-14, closed v1.2).
 
 ### 15.2 Authorization & RBAC
@@ -1028,8 +1028,7 @@ Zod schemas on every route (params, query, body, headers); reject unknown fields
 - Browser never contacts providers; no provider URLs/IDs are exposed except display names.
 
 ### 15.7 CORS & headers
-- Preferred: serve SPA and API under the same origin via the reverse proxy → **no CORS needed**.
-- If cross-origin: exact-origin allow-list (no `*`), `credentials: true`, methods/headers allow-listed, `Vary: Origin`.
+- The SPA and API are served from **different subdomains of the same site** (e.g. `app.corp.example` + `api.corp.example`), so CORS is required with an **exact-origin allow-list** (`ALLOWED_ORIGINS`, no `*`), `credentials: true`, `Vary: Origin`, and `Access-Control-Max-Age: 600`. Allowed request headers: `Content-Type`, `X-CSRF-Token`, `Idempotency-Key`, `X-Request-Id`. Because it is same-*site*, `SameSite=Lax` is sufficient and `__Host-session` remains valid.
 - `hono/secure-headers`: `Strict-Transport-Security` (1 y, includeSubDomains), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` / `frame-ancestors 'none'`, API CSP `default-src 'none'`; `Cache-Control: no-store` for API JSON.
 
 ### 15.8 Prompt-injection and malicious-document considerations

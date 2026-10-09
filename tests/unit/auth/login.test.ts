@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { login } from '../../../src/auth/application/login.ts';
-import { AppError } from '../../../src/errors.ts';
+import { login } from '@/auth/application/login.ts';
+import { AppError } from '@/errors.ts';
 import { createHarness, makeUser } from './fakes.ts';
 
 const meta = { ip: '10.0.0.1', userAgentHash: 'ua-hash', requestId: 'req-1' };

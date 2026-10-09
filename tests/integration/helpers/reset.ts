@@ -1,4 +1,4 @@
-import { getPool } from '../../../src/db/index.ts';
+import { getPool } from '@/db/index.ts';
 
 /**
  * Reset identity data between integration tests, preserving platform seed rows.

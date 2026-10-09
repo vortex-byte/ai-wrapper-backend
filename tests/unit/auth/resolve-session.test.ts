@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSession } from '../../../src/auth/application/resolve-session.ts';
-import { computeExpiry } from '../../../src/auth/domain/session.ts';
-import { hashSessionToken } from '../../../src/crypto.ts';
+import { resolveSession } from '@/auth/application/resolve-session.ts';
+import { computeExpiry } from '@/auth/domain/session.ts';
+import { hashSessionToken } from '@/crypto.ts';
 import { createHarness, makeUser, type TestHarness } from './fakes.ts';
 
 const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;

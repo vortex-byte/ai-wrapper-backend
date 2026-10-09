@@ -4,7 +4,6 @@ import { login, type LoginInput, type LoginSuccess } from './login.ts';
 import { logout, type LogoutInput } from './logout.ts';
 import { resolveSession, type ResolvedSession } from './resolve-session.ts';
 
-/** The auth module's public surface (AGENTS §3.3). */
 export interface AuthService {
   login(input: LoginInput): Promise<LoginSuccess>;
   logout(input: LogoutInput): Promise<void>;

@@ -14,12 +14,6 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-/**
- * Drizzle table definitions. Migrations are the source of truth for DDL (AGENTS §6);
- * this file mirrors them for type-safe queries. Keep the two in lock-step.
- */
-
-/** `citext` is not built into drizzle-orm; declare it explicitly. */
 const citext = customType<{ data: string }>({
   dataType: () => 'citext',
 });

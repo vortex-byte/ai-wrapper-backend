@@ -4,8 +4,8 @@ import { getConfig } from '../config/index.ts';
 
 /**
  * Structured logger. Content (message text, prompts, file bytes, provider bodies,
- * emails) must never be passed to it — see AGENTS §5 / PRD §15.10. The redaction
- * list is a second line of defence for secret-shaped keys.
+ * emails) must never be passed to it.
+ * The redaction list is a second line of defence for secret-shaped keys.
  */
 const REDACT_PATHS = [
   'req.headers.cookie',

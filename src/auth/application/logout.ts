@@ -1,5 +1,5 @@
-import { AUDIT_ACTIONS } from '../../audit/actions.ts';
-import type { RequestMeta } from '../../request-context.ts';
+import { AUDIT_ACTIONS } from '@/audit/actions.ts';
+import type { RequestMeta } from '@/request-context.ts';
 import type { AuthDeps } from './deps.ts';
 
 export interface LogoutInput {
@@ -8,7 +8,6 @@ export interface LogoutInput {
   readonly meta: RequestMeta;
 }
 
-/** Revokes the caller's session. Idempotent: revoking an already-revoked id is a no-op. */
 export async function logout(deps: AuthDeps, input: LogoutInput): Promise<void> {
   const now = deps.clock.now();
   await deps.sessions.revoke(input.sessionId, now);

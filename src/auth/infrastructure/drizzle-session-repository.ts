@@ -1,7 +1,7 @@
 import { and, eq, isNull, ne } from 'drizzle-orm';
-import { runDb } from '../../db/client.ts';
-import { sessions, users } from '../../db/schema.ts';
-import type { TransactionContext } from '../../db/tx.ts';
+import { runDb } from '@/db/client.ts';
+import { sessions, users } from '@/db/schema.ts';
+import type { TransactionContext } from '@/db/tx.ts';
 import type { SessionRecord } from '../domain/session.ts';
 import type {
   NewSession,

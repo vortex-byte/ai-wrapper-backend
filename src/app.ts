@@ -10,27 +10,19 @@ import { apiRouter } from './http/router.ts';
 import type { AppEnv } from './http/types.ts';
 import { healthRoutes } from './health/routes.ts';
 
-/**
- * Composition root (AGENTS §3.7). Wires middleware, the `/api` tree and the raw ops
- * routes. No business logic lives here.
- */
-export function createApp(config: Config): Hono<AppEnv> {
+import type { Services } from './services.ts';
+
+export function createApp(config: Config, customServices?: Services): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const services = createServices(config);
+  const services = customServices ?? createServices(config);
 
   app.use('*', requestId());
   app.use('*', requestLogger());
   app.use('*', securityHeaders(config));
-  // CORS wraps the whole `/api` tree so preflights are answered before auth.
   app.use('/api/*', cors(config));
-
   app.onError(onError(config));
   app.notFound(notFound);
-
-  // Raw ops endpoints (root level, not enveloped).
   app.route('/', healthRoutes(config));
-
-  // Unversioned product API.
   app.route('/api', apiRouter(config, services));
 
   return app;

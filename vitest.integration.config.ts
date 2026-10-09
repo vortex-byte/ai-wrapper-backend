@@ -1,8 +1,12 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-// Integration tests run against a real PostgreSQL (native local PG 18 in dev via
-// TEST_DATABASE_URL; Testcontainers in CI). Never point these at a dev/prod DB.
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   test: {
     environment: 'node',
     include: ['tests/integration/**/*.test.ts'],

@@ -1,9 +1,9 @@
 import type { MiddlewareHandler } from 'hono';
-import type { Config } from '../../config/index.ts';
+import type { Config } from '@/config/index.ts';
 import type { AppEnv } from '../types.ts';
 
 /**
- * CORS for the cross-origin SPA (PRD §15.7). The SPA and API are different subdomains
+ * CORS for the cross-origin SPA. The SPA and API are different subdomains
  * of the same site, so the browser sends the session cookie but the origin still has to
  * be allowed explicitly.
  *
@@ -14,7 +14,7 @@ import type { AppEnv } from '../types.ts';
  * - preflight (`OPTIONS`) answered with the allowed methods/headers and a 600 s cache.
  *
  * A disallowed origin receives no CORS headers (the browser blocks it). It is *not*
- * rejected here — the `Origin` check for CSRF (§1) happens in `requireCsrf`.
+ * rejected here — the `Origin` check for CSRF happens in `requireCsrf`.
  */
 
 const ALLOWED_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS';
@@ -30,7 +30,6 @@ export function cors(config: Config): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const allowed = resolveOrigin(config, c.req.header('origin'));
 
-    // Vary on every response (even without an Origin) so shared caches stay correct.
     c.header('Vary', 'Origin');
 
     if (allowed !== null) {

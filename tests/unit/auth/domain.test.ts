@@ -4,15 +4,15 @@ import {
   isSessionExpired,
   shouldTouch,
   TOUCH_THROTTLE_MS,
-} from '../../../src/auth/domain/session.ts';
-import { passwordProblemMessage, validatePassword } from '../../../src/auth/domain/password-policy.ts';
+} from '@/auth/domain/session.ts';
+import { passwordProblemMessage, validatePassword } from '@/auth/domain/password-policy.ts';
 import {
   authenticationBlock,
   hasRole,
   isActive,
   isLocked,
   nextFailureState,
-} from '../../../src/auth/domain/user.ts';
+} from '@/auth/domain/user.ts';
 
 const t = (iso: string): Date => new Date(iso);
 

@@ -1,13 +1,8 @@
-/**
- * Pure user rules (AGENTS §3.3: real logic lives in `domain`, not in services).
- * No I/O, no Drizzle, no framework — see the `domain-is-pure` dependency-cruiser rule.
- */
-
 export type UserRole = 'user' | 'admin' | 'auditor';
 export type UserStatus = 'active' | 'disabled';
 
-export const USER_ROLES: readonly UserRole[] = ['user', 'admin', 'auditor'];
-export const USER_STATUSES: readonly UserStatus[] = ['active', 'disabled'];
+export const USER_ROLES = ['user', 'admin', 'auditor'] as const satisfies readonly UserRole[];
+export const USER_STATUSES = ['active', 'disabled'] as const satisfies readonly UserStatus[];
 
 export interface User {
   readonly id: string;
@@ -27,7 +22,6 @@ export interface User {
   readonly deletedAt: Date | null;
 }
 
-/** Lockout thresholds, injected from config (LOGIN_MAX_FAILURES / LOGIN_LOCKOUT_MINUTES). */
 export interface LockoutPolicy {
   readonly maxFailures: number;
   readonly lockoutMinutes: number;
@@ -47,11 +41,6 @@ export function hasRole(user: Pick<User, 'role'>, ...roles: UserRole[]): boolean
 
 export type AuthenticationBlock = 'disabled' | 'locked';
 
-/**
- * Whether a row may even attempt to authenticate. Credentials are checked only when
- * this returns `ok` — a locked or disabled account always yields a generic failure
- * to the caller (no user enumeration).
- */
 export function authenticationBlock(
   user: Pick<User, 'status' | 'deletedAt' | 'lockedUntil'>,
   now: Date,
@@ -67,7 +56,6 @@ export interface FailureOutcome {
   readonly lockedNow: boolean;
 }
 
-/** Increment the failure counter and lock the account once the threshold is reached. */
 export function nextFailureState(
   currentFailures: number,
   policy: LockoutPolicy,

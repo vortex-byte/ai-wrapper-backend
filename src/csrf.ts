@@ -1,18 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-/**
- * Stateless CSRF tokens (API_CONTRACTS §1, PRD §15.1).
- *
- * Shape: `nonce.base64url(HMAC-SHA256(secret, nonce + ":" + issuedAt))`, where `issuedAt`
- * is Unix milliseconds. Verification only needs the secret and the current time — no
- * server-side storage — and enforces a maximum age. The token is deliberately **not**
- * bound to a session id: it is re-issued at login and at every session rotation so the
- * SPA can refresh an in-memory value, while a leaked token still expires on its own.
- *
- * This lives on the platform (not under `http/`) so both the HTTP layer and tests can
- * use it without violating the dependency rule (AGENTS §3.2).
- */
-
 /** 12 h — at most the absolute session lifetime, usually far less. */
 export const CSRF_TOKEN_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
@@ -72,7 +59,7 @@ export function verifyCsrfToken(
 
   const now = (options.now ?? new Date()).getTime();
   const age = now - issuedAt;
-  // Reject future-dated tokens (clock skew allowance of 60 s) and stale ones.
+  
   if (age < -60_000) return { ok: false, reason: 'expired' };
   if (age > CSRF_TOKEN_MAX_AGE_MS) return { ok: false, reason: 'expired' };
 

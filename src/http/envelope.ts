@@ -1,7 +1,7 @@
 import { AppError, HTTP_ERRORS, isAppError, type ErrorCode } from '../errors.ts';
 
 /**
- * The wire envelope (`docs/API_CONTRACTS.md` §1). These builders are pure so they
+ * The wire envelope. These builders are pure so they
  * can be unit-tested without an HTTP context; routes serialise them with `c.json`.
  */
 

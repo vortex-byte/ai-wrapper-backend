@@ -2,10 +2,6 @@ import { Pool } from 'pg';
 import { getConfig } from '../config/index.ts';
 import { getLogger } from '../observability/logger.ts';
 
-/**
- * One process-wide connection pool (PRD §24.4: `max` 20/node). The pool is the only
- * place `pg` is constructed; repositories receive a pool client or Drizzle handle.
- */
 let pool: Pool | undefined;
 
 export function getPool(): Pool {

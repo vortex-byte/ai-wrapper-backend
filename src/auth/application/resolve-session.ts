@@ -1,4 +1,4 @@
-import { hashSessionToken } from '../../crypto.ts';
+import { hashSessionToken } from '@/crypto.ts';
 import { computeExpiry, isSessionExpired, shouldTouch, type SessionRecord } from '../domain/session.ts';
 import { isActive, type User } from '../domain/user.ts';
 import type { AuthDeps } from './deps.ts';
@@ -8,12 +8,6 @@ export interface ResolvedSession {
   readonly session: SessionRecord;
 }
 
-/**
- * Validates a cookie value and returns the session + owner, or `null` when it is
- * unknown, expired, revoked, or the user is no longer active. A disabled user's
- * session is revoked on the spot (PRD §15.1). Touches `last_seen_at` at most once
- * per minute and slides the idle window accordingly.
- */
 export async function resolveSession(
   deps: AuthDeps,
   token: string,

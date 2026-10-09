@@ -232,6 +232,71 @@ docker compose up -d pg redis   # local dev deps
   is origin-only because it issues the token. Routes never touch cookies or the CSRF secret directly —
   use the shared middleware.
 
+### 5.1 TypeScript & code rules
+
+Apply these in every module. They are enforced by the lint gate where a rule can be automated; the
+rest are reviewed.
+
+- **No `any`.** Use precise types, generics, or `unknown` plus narrowing. `unknown` is the correct
+  boundary type (Zod parses it into a concrete type). If `any` is genuinely unavoidable (e.g. a
+  third-party type is wrong), isolate it to the smallest possible line, add a one-line `// why:`
+  comment, and prefer `// @ts-expect-error <reason>` over a silent cast. Never let `any` leak into a
+  public signature.
+- **No `as` casts to silence the compiler.** A cast is a promise you are not proving. Narrow with a
+  type guard, parse with Zod, or fix the type. Legitimate narrowing (`as const`, discriminated-union
+  checks) is fine.
+- **No non-null assertion (`!`)** unless the invariant is locally provable and commented. Prefer a
+  guard that returns.
+- **No `@ts-ignore`.** Use `@ts-expect-error` with a reason so it fails when the error disappears.
+- **No `enum`.** Use `as const` object maps or string-literal unions (`type Status = 'active' | 'disabled'`).
+- **Prefer `interface` for object shapes, `type` for unions/intersections/aliases.** Export explicit
+  return types on exported functions.
+- **Immutability by default:** `const` over `let`, readonly params/fields where practical, no in-place
+  mutation of shared state. Mutation is allowed only inside a domain state transition or a DB write.
+- **Named exports only** (no `export default`) so symbols are greppable and renames are safe.
+- **Comments are the exception, not the default.** Do not restate what the code does. Write a comment
+  only when it explains **why** — a non-obvious constant, a workaround, a security/business reason, or
+  the meaning of a magic value. Never commit commented-out code; delete it (git remembers).
+- **No dead code, no speculative abstraction.** Delete unused exports, params and branches. Build the
+  abstraction when the second caller appears, not before.
+- **Small, single-purpose functions with early returns.** Keep branching shallow; extract named
+  helpers over deep nesting.
+- **Strict equality (`===`/`!==`), no truthiness surprises.** Handle `null`/`undefined` explicitly;
+  never conflate `0`, `''` or `false` with "absent".
+- **Boundaries are validated, not trusted.** Parse external input (HTTP body, env, adapter config,
+  provider responses) with Zod at the edge and pass typed values inward.
+- **Errors are values, not throws across layers.** Throw `AppError` with a stable `code` at the
+  boundary; never `throw new Error('...')` for control flow or user-visible outcomes.
+- **Tests are part of the change.** New behavior ships with a Vitest test; a bug fix ships with the
+  regression test that would have caught it.
+- **Formatting and lint are authoritative.** `bun run typecheck` and `bun run lint` must pass; do not
+  hand-format against the configured tooling.
+- **Do NOT commit automatically.** Never run `git commit`, `git push`, `git tag`, or create
+  branches/PRs unless the user explicitly asks or approved your request. Make the requested edits, leave the working tree
+  dirty, and stop — staging, committing, and pushing are the user's decision.
+
+The automatable rules are enforced by ESLint in `eslint.config.mjs`. Do not disable them inline to
+get past CI; fix the code, or if a rule is genuinely wrong for a file, narrow the config there and
+explain why.
+
+| Rule (§5.1) | Enforced by |
+|---|---|
+| No `any` | `@typescript-eslint/no-explicit-any` |
+| No `@ts-ignore`; `@ts-expect-error` needs a reason | `@typescript-eslint/ban-ts-comment` |
+| No non-null assertion (`!`) | `@typescript-eslint/no-non-null-assertion` |
+| No `enum` | `no-restricted-syntax` (`TSEnumDeclaration`) |
+| Named exports only | `no-restricted-syntax` (`ExportDefaultDeclaration`) |
+| `interface` for object shapes | `@typescript-eslint/consistent-type-definitions` |
+| Explicit return types on exports | `@typescript-eslint/explicit-module-boundary-types` |
+| No dead code (unused vars/args) | `@typescript-eslint/no-unused-vars` |
+| Strict equality | `eqeqeq` |
+| `import type` for type-only imports | `@typescript-eslint/consistent-type-imports` |
+| No stray `console` | `no-console` |
+| No provider SDK outside `src/providers/` | `no-restricted-imports` (§3.2, NFR-MAINT-1) |
+
+The rest (comments, immutability, early returns, boundary validation, small functions, tests) are
+reviewed in code review and `dependency-cruiser`, not lint.
+
 ---
 
 ## 6. Recommended PostgreSQL schema

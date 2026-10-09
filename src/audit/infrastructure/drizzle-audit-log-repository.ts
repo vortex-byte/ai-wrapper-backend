@@ -1,6 +1,6 @@
-import { runDb } from '../../db/client.ts';
-import { auditLogs } from '../../db/schema.ts';
-import type { TransactionContext } from '../../db/tx.ts';
+import { runDb } from '@/db/client.ts';
+import { auditLogs } from '@/db/schema.ts';
+import type { TransactionContext } from '@/db/tx.ts';
 import type { AuditEntry, AuditLogRepository } from '../ports/audit-log-repository.ts';
 
 export class DrizzleAuditLogRepository implements AuditLogRepository {

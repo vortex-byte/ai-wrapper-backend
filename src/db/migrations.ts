@@ -4,12 +4,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPool } from './pool.ts';
 
-/**
- * Discovery + integrity for forward-only SQL migrations (AGENTS §6.14). The runner
- * (`migrate.ts`) applies them under an advisory lock; this module only reads and
- * verifies files.
- */
-
 export interface MigrationFile {
   readonly version: string;
   readonly name: string;
@@ -19,8 +13,6 @@ export interface MigrationFile {
 }
 
 export const MIGRATIONS_TABLE = 'schema_migrations';
-
-/** Resolved from this file's location: src/db/ → repo-root/migrations. */
 export const MIGRATIONS_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../migrations',
@@ -82,7 +74,6 @@ export async function loadApplied(client: {
   return new Map(rows.map((row) => [row.version, row]));
 }
 
-/** Read-only status used by `/readyz` and the CLI. Never opens a transaction. */
 export async function getMigrationState(dir?: string): Promise<MigrationState> {
   const migrations = await listMigrations(dir);
   const client = await getPool().connect();

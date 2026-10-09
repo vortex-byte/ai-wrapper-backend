@@ -1,13 +1,7 @@
-// Flat ESLint config. Two jobs:
-//  1. General TS hygiene.
-//  2. The provider-import rule (PRD NFR-MAINT-1): provider SDKs may only be
-//     imported from `src/providers/`. The layer *dependency rule* (AGENTS §3.2)
-//     is enforced by dependency-cruiser, not ESLint.
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
-const PROVIDER_SDK_MESSAGE =
-  'Provider SDKs may only be imported from src/providers/ (PRD NFR-MAINT-1, AGENTS §5).';
+const PROVIDER_SDK_MESSAGE = 'Provider SDKs may only be imported from src/providers/.';
 
 export default tseslint.config(
   {
@@ -26,11 +20,41 @@ export default tseslint.config(
   {
     files: ['src/**/*.ts'],
     rules: {
+      // --- TypeScript hygiene ---
       '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
       '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-non-null-assertion': 'error',
+      '@typescript-eslint/ban-ts-comment': [
+        'error',
+        {
+          'ts-ignore': true,
+          'ts-expect-error': 'allow-with-description',
+          minimumDescriptionLength: 3,
+        },
+      ],
+      '@typescript-eslint/consistent-type-definitions': ['error', 'interface'],
+      '@typescript-eslint/explicit-module-boundary-types': 'error',
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
+
+      // --- Code shape ---
       'no-console': 'error',
       eqeqeq: ['error', 'always'],
       curly: ['error', 'multi-line'],
+      // No `enum` (use `as const` / literal unions); no default exports (named only).
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'TSEnumDeclaration',
+          message: 'Use `as const` object maps or string-literal unions instead of `enum`.',
+        },
+        {
+          selector: 'ExportDefaultDeclaration',
+          message: 'Use named exports only — no `export default`.',
+        },
+      ],
     },
   },
   {

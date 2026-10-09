@@ -1,13 +1,13 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createAuthService, type AuthService } from '../../src/auth/application/auth-service.ts';
-import { BunPasswordHasher } from '../../src/auth/infrastructure/bun-password-hasher.ts';
-import { DrizzleSessionRepository } from '../../src/auth/infrastructure/drizzle-session-repository.ts';
-import { DrizzleUserRepository } from '../../src/auth/infrastructure/drizzle-user-repository.ts';
-import { DrizzleAuditLogRepository } from '../../src/audit/infrastructure/drizzle-audit-log-repository.ts';
-import { systemClock } from '../../src/clock/index.ts';
-import { closePool, getPool } from '../../src/db/index.ts';
-import { hashSessionToken } from '../../src/crypto.ts';
-import type { UserRole } from '../../src/auth/domain/user.ts';
+import { createAuthService, type AuthService } from '@/auth/application/auth-service.ts';
+import { BunPasswordHasher } from '@/auth/infrastructure/bun-password-hasher.ts';
+import { DrizzleSessionRepository } from '@/auth/infrastructure/drizzle-session-repository.ts';
+import { DrizzleUserRepository } from '@/auth/infrastructure/drizzle-user-repository.ts';
+import { DrizzleAuditLogRepository } from '@/audit/infrastructure/drizzle-audit-log-repository.ts';
+import { systemClock } from '@/clock/index.ts';
+import { closePool, getPool } from '@/db/index.ts';
+import { hashSessionToken } from '@/crypto.ts';
+import type { UserRole } from '@/auth/domain/user.ts';
 import { resetDatabase } from './helpers/reset.ts';
 
 const users = new DrizzleUserRepository();
@@ -108,7 +108,7 @@ describe('auth (real PostgreSQL)', () => {
     expect(await auditActions()).toEqual(['failed_login']);
   });
 
-  it('locks the account after 8 consecutive failures (PRD §15.1)', async () => {
+  it('locks the account after 8 consecutive failures', async () => {
     await seedUser();
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await expect(

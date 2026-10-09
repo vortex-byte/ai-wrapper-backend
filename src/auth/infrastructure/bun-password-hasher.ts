@@ -1,9 +1,5 @@
 import type { PasswordHasher } from '../ports/password-hasher.ts';
 
-/**
- * argon2id via `Bun.password` (PRD §15.1). `memoryCost` is in KiB, so 65536 = 64 MiB —
- * the documented floor. `Bun.password.verify` is constant-time.
- */
 const ARGON2_OPTIONS = {
   algorithm: 'argon2id',
   memoryCost: 65_536,
@@ -20,7 +16,6 @@ export class BunPasswordHasher implements PasswordHasher {
     try {
       return await Bun.password.verify(password, hash);
     } catch {
-      // A malformed stored hash must not throw into the request path.
       return false;
     }
   }

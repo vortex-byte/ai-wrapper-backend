@@ -1,15 +1,18 @@
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
-import type { Config } from '../../../src/config/index.ts';
-import { loadConfig } from '../../../src/config/index.ts';
-import { issueCsrfToken } from '../../../src/csrf.ts';
-import { AppError, isAppError } from '../../../src/errors.ts';
-import { cors, isAllowedOrigin } from '../../../src/http/middleware/cors.ts';
-import { requireAuth } from '../../../src/http/middleware/require-auth.ts';
-import { requireCsrf, enforceOrigin } from '../../../src/http/middleware/require-csrf.ts';
-import { requirePasswordChanged } from '../../../src/http/middleware/require-password-changed.ts';
-import type { AppEnv } from '../../../src/http/types.ts';
-import type { AuthService } from '../../../src/auth/application/auth-service.ts';
+import type { Config } from '@/config/index.ts';
+import { loadConfig } from '@/config/index.ts';
+import { issueCsrfToken } from '@/csrf.ts';
+import { AppError, isAppError } from '@/errors.ts';
+import { cors, isAllowedOrigin } from '@/http/middleware/cors.ts';
+import { requireAuth } from '@/http/middleware/require-auth.ts';
+import { requireCsrf, enforceOrigin } from '@/http/middleware/require-csrf.ts';
+import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
+import { requireAdmin, requireRole } from '@/http/middleware/require-role.ts';
+import { rateLimitLogin } from '@/http/middleware/rate-limit-login.ts';
+import { MemoryRateLimiter } from '@/http/infrastructure/memory-rate-limiter.ts';
+import type { AppEnv } from '@/http/types.ts';
+import type { AuthService } from '@/auth/application/auth-service.ts';
 import { makeUser } from '../auth/fakes.ts';
 
 const ORIGIN = 'https://app.corp.example';
@@ -161,14 +164,14 @@ describe('requireCsrf', () => {
 });
 
 describe('enforceOrigin', () => {
-  it('allows a mutation with no Origin (same-origin fetch)', async () => {
+  it('rejects a mutation with no Origin (login is browser-only)', async () => {
     const config = testConfig();
     const app = buildApp(config, (a) => {
       a.use('/api/*', enforceOrigin(config));
       a.post('/api/thing', (c) => c.json({ ok: true }));
     });
     const res = await app.request('/api/thing', { method: 'POST' });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
   });
 
   it('allows a mutation from an allowed origin without a token', async () => {
@@ -235,5 +238,99 @@ describe('requireAuth + requirePasswordChanged', () => {
     const res = await app.request(withSession('/api/things'));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ code: 'password_change_required' });
+  });
+});
+
+describe('requireRole', () => {
+  function rbacApp(user: ReturnType<typeof makeUser>): Hono<AppEnv> {
+    const config = testConfig();
+    return buildApp(config, (a) => {
+      a.use('/api/*', requireAuth(fakeAuth({ user }), config));
+      a.use('/api/admin/*', requireAdmin());
+      a.get('/api/admin/dashboard', (c) => c.json({ ok: true }));
+    });
+  }
+
+  function withSession(path: string): Request {
+    return new Request(`http://localhost${path}`, {
+      headers: { Cookie: `__Host-session=some-opaque-token` },
+    });
+  }
+
+  it('allows access to users with matching role in multi-role requireRole', async () => {
+    const auditor = makeUser({ role: 'auditor' });
+    const app = buildApp(testConfig(), (a) => {
+      a.use('/api/*', requireAuth(fakeAuth({ user: auditor }), testConfig()));
+      a.use('/api/*', requireRole('admin', 'auditor'));
+      a.get('/api/audit', (c) => c.json({ ok: true }));
+    });
+    const res = await app.request(
+      new Request('http://localhost/api/audit', {
+        headers: { Cookie: '__Host-session=some-opaque-token' },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects non-admin users with 403 forbidden', async () => {
+    const standardUser = makeUser({ role: 'user' });
+    const res = await rbacApp(standardUser).request(withSession('/api/admin/dashboard'));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ code: 'forbidden' });
+  });
+});
+
+describe('rateLimitLogin', () => {
+  it('allows up to 10 attempts and rejects the 11th with 429 rate_limited', async () => {
+    const config = testConfig();
+    const rateLimiter = new MemoryRateLimiter();
+    const app = buildApp(config, (a) => {
+      a.use('/api/auth/login', rateLimitLogin(config, rateLimiter));
+      a.post('/api/auth/login', (c) => c.json({ ok: true }));
+    });
+
+    for (let i = 0; i < 10; i++) {
+      const res = await app.request('/api/auth/login', { method: 'POST' });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('RateLimit-Remaining')).toBe((9 - i).toString());
+    }
+
+    const blocked = await app.request('/api/auth/login', { method: 'POST' });
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBeDefined();
+    expect(blocked.headers.get('RateLimit-Remaining')).toBe('0');
+    const body = (await blocked.json()) as { code: string };
+    expect(body.code).toBe('rate_limited');
+  });
+
+  it('bounds memory by evicting when many distinct keys arrive', async () => {
+    const limiter = new MemoryRateLimiter(undefined, { maxKeys: 100 });
+    for (let i = 0; i < 1_000; i++) {
+      await limiter.check(`k:${i}`, 10, 60);
+    }
+    expect(limiter.size()).toBeLessThanOrEqual(100);
+  });
+
+  it('keys an unknown-IP client by user agent instead of collapsing all clients', async () => {
+    const config = testConfig();
+    const limiter = new MemoryRateLimiter();
+    const app = buildApp(config, (a) => {
+      a.use('/api/auth/login', rateLimitLogin(config, limiter));
+      a.post('/api/auth/login', (c) => c.json({ ok: true }));
+    });
+
+    // No connection info in the test runtime → clientIp is null.
+    const alice = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'User-Agent': 'alice-browser' },
+    });
+    const bob = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'User-Agent': 'bob-browser' },
+    });
+    expect(alice.status).toBe(200);
+    expect(bob.status).toBe(200);
+    // Separate UA buckets → each starts fresh (remaining 9, not 8).
+    expect(bob.headers.get('RateLimit-Remaining')).toBe('9');
   });
 });

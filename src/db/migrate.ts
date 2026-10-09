@@ -8,7 +8,6 @@ import {
 } from './migrations.ts';
 import { getPool } from './pool.ts';
 
-/** Advisory-lock key: exactly one migrator runs at a time (AGENTS §6.14). */
 const ADVISORY_LOCK_KEY = 'ai-chat:migrations';
 
 export interface MigrationRunResult {
@@ -30,7 +29,6 @@ async function ensureMigrationsTable(client: PoolClient): Promise<void> {
 async function applyOne(client: PoolClient, migration: MigrationFile): Promise<void> {
   await client.query('BEGIN');
   try {
-    // Simple query protocol: a migration file may contain many statements.
     await client.query(migration.sql);
     await client.query(
       `INSERT INTO ${MIGRATIONS_TABLE} (version, name, checksum) VALUES ($1, $2, $3)`,
@@ -45,7 +43,7 @@ async function applyOne(client: PoolClient, migration: MigrationFile): Promise<v
 
 /**
  * Apply every pending migration, newest last, under an advisory lock. Runs as a
- * pre-deploy job — never on application boot (AGENTS §6.14). Editing an already
+ * pre-deploy job — never on application boot. Editing an already
  * applied migration is rejected (checksum drift); add a new file instead.
  */
 export async function runMigrations(dir?: string): Promise<MigrationRunResult> {

@@ -1,9 +1,9 @@
 import type { MiddlewareHandler } from 'hono';
-import type { Config } from '../../config/index.ts';
+import type { Config } from '@/config/index.ts';
 import type { AppEnv } from '../types.ts';
 
 /**
- * Baseline security headers for every response (PRD §15.7). HSTS is only meaningful
+ * Baseline security headers for every response. HSTS is only meaningful
  * behind TLS, so it is added in production only. JSON API responses are never cached.
  */
 export function securityHeaders(config: Config): MiddlewareHandler<AppEnv> {

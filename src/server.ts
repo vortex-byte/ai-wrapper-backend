@@ -23,7 +23,6 @@ function boot(): void {
     hostname: config.HOST,
     port: config.PORT,
     fetch: app.fetch,
-    // Long-lived SSE streams need headroom; the proxy enforces the real read timeout.
     idleTimeout: 120,
   });
 

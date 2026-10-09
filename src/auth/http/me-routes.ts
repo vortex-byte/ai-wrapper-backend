@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
-import { AppError } from '../../errors.ts';
-import { ok } from '../../http/envelope.ts';
-import { requireAuth } from '../../http/middleware/require-auth.ts';
-import type { AppEnv } from '../../http/types.ts';
-import type { Config } from '../../config/index.ts';
+import { AppError } from '@/errors.ts';
+import { ok } from '@/http/envelope.ts';
+import { requireAuth } from '@/http/middleware/require-auth.ts';
+import type { AppEnv } from '@/http/types.ts';
+import type { Config } from '@/config/index.ts';
 import type { AuthService } from '../application/auth-service.ts';
 
 export interface MeRoutesDeps {
@@ -11,11 +11,6 @@ export interface MeRoutesDeps {
   readonly config: Config;
 }
 
-/**
- * `/api/me` — the caller's own profile. Requires a session, is exempt from the
- * password-change gate (the SPA needs `mustChangePassword` to decide what to show),
- * and can only ever return the caller's row (AGENTS §5).
- */
 export function meRoutes(deps: MeRoutesDeps): Hono<AppEnv> {
   const { auth, config } = deps;
   const routes = new Hono<AppEnv>();

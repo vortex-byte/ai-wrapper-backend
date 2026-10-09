@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { changePassword } from '../../../src/auth/application/change-password.ts';
-import { AppError } from '../../../src/errors.ts';
+import { changePassword } from '@/auth/application/change-password.ts';
+import { AppError } from '@/errors.ts';
 import { createHarness, makeUser, type TestHarness } from './fakes.ts';
 
 const meta = { ip: null, userAgentHash: null, requestId: 'req-2' };

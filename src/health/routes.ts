@@ -5,10 +5,6 @@ import { checkReadiness } from './readyz.ts';
 
 const startedAt = Date.now();
 
-/**
- * Operational endpoints. These are deliberately **not** enveloped (API_CONTRACTS §13):
- * they are consumed by systemd, the reverse proxy and Prometheus, not the SPA.
- */
 export function healthRoutes(config: Config): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
 
@@ -16,7 +12,7 @@ export function healthRoutes(config: Config): Hono<AppEnv> {
 
   routes.get('/readyz', async (c) => {
     const report = await checkReadiness(config);
-    // Ops endpoints are internal, but never leak raw DB errors outside dev.
+    
     const body =
       config.NODE_ENV === 'production'
         ? {

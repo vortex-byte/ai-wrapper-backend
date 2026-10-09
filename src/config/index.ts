@@ -7,6 +7,5 @@ export {
   isDevelopment,
   resetConfigForTests,
   setConfigForTests,
-  DEV_SESSION_SECRET,
   type Config,
 } from './env.ts';

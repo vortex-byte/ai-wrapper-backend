@@ -1,12 +1,5 @@
 import { z } from 'zod';
 
-/**
- * Environment contract (PRD §24.2 / Appendix A). Parsed once at boot; the process
- * fails fast on anything invalid. `getConfig()` is memoized so every module reads
- * the same validated object.
- */
-
-/** Parses the many spellings of a boolean env var ("1", "yes", "on", …). */
 const boolish = (defaultValue: boolean) =>
   z.preprocess((value) => {
     if (typeof value === 'boolean') return value;
@@ -18,7 +11,6 @@ const boolish = (defaultValue: boolean) =>
     return value;
   }, z.boolean().default(defaultValue));
 
-/** Comma-separated list → trimmed, non-empty string array. */
 const csv = z
   .string()
   .default('')
@@ -28,8 +20,6 @@ const csv = z
       .map((s) => s.trim())
       .filter((s) => s.length > 0),
   );
-
-export const DEV_SESSION_SECRET = 'dev-only-insecure-secret-change-me-32chars';
 
 export const EnvSchema = z
   .object({
@@ -50,7 +40,7 @@ export const EnvSchema = z
     SESSION_COOKIE_NAME: z.literal('__Host-session').default('__Host-session'),
     SESSION_IDLE_MINUTES: z.coerce.number().int().min(1).default(480),
     SESSION_ABSOLUTE_MINUTES: z.coerce.number().int().min(1).default(1440),
-    SESSION_SECRET: z.string().min(32).default(DEV_SESSION_SECRET),
+    SESSION_SECRET: z.string().min(32),
 
     // Storage
     STORAGE_LOCAL_ROOT: z.string().min(1).default('./.var/files'),
@@ -63,7 +53,7 @@ export const EnvSchema = z
     SERVICE_BUSY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.9),
 
     // Auth policy
-    PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).max(256).default(12),
+    PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).max(256).default(8),
     LOGIN_MAX_FAILURES: z.coerce.number().int().min(1).default(8),
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).default(15),
 
@@ -84,13 +74,6 @@ export const EnvSchema = z
     JOB_POLL_INTERVAL_IDLE_MS: z.coerce.number().int().min(100).default(5000),
   })
   .superRefine((env, ctx) => {
-    if (env.NODE_ENV === 'production' && env.SESSION_SECRET === DEV_SESSION_SECRET) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['SESSION_SECRET'],
-        message: 'SESSION_SECRET must be a unique random value in production (openssl rand -hex 32).',
-      });
-    }
     if (env.SESSION_ABSOLUTE_MINUTES < env.SESSION_IDLE_MINUTES) {
       ctx.addIssue({
         code: 'custom',
@@ -102,7 +85,7 @@ export const EnvSchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['LOG_CONTENT'],
-        message: 'LOG_CONTENT must be false in production (PRD §15.10).',
+        message: 'LOG_CONTENT must be false in production.',
       });
     }
   });
@@ -118,7 +101,6 @@ export class ConfigError extends Error {
   }
 }
 
-/** Parse a source object (defaults to `process.env`) into a validated config. */
 export function loadConfig(source: Record<string, unknown> = process.env): Config {
   const parsed = EnvSchema.safeParse(source);
   if (!parsed.success) {
@@ -132,7 +114,6 @@ export function loadConfig(source: Record<string, unknown> = process.env): Confi
 
 let cached: Config | undefined;
 
-/** Memoized config for the running process. */
 export function getConfig(): Config {
   if (!cached) cached = loadConfig();
   return cached;
@@ -146,7 +127,6 @@ export function isDevelopment(config: Config): boolean {
   return config.NODE_ENV === 'development';
 }
 
-/** Test hooks — never used by application code. */
 export function resetConfigForTests(): void {
   cached = undefined;
 }

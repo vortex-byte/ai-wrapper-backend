@@ -1,13 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
-/**
- * Cryptographic helpers used by more than one layer (platform module, AGENTS §3.7 —
- * importable by `http/`, `application/` and `infrastructure/`; never by `domain/`).
- *
- * Sessions: the cookie carries an opaque random value; the database stores only
- * `sha256(value)` (PRD §15.1), so a database leak does not yield usable sessions.
- */
-
 const TOKEN_BYTES = 32;
 
 export function generateSessionToken(): string {
@@ -19,7 +11,7 @@ export function hashSessionToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
-/** User-agent is stored hashed — forensics without storing the raw header (PRD §15.1). */
+/** User-agent is stored hashed — forensics without storing the raw header. */
 export function hashUserAgent(userAgent: string | undefined | null): string | null {
   if (userAgent === undefined || userAgent === null || userAgent === '') return null;
   return createHash('sha256').update(userAgent, 'utf8').digest('hex');

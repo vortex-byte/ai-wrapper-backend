@@ -1,25 +1,26 @@
-import type { AuthDeps } from '../../../src/auth/application/deps.ts';
-import type { SessionRecord } from '../../../src/auth/domain/session.ts';
-import type { User, UserRole, UserStatus } from '../../../src/auth/domain/user.ts';
-import type { PasswordHasher } from '../../../src/auth/ports/password-hasher.ts';
+import type { AuthDeps } from '@/auth/application/deps.ts';
+import type { SessionRecord } from '@/auth/domain/session.ts';
+import type { User } from '@/auth/domain/user.ts';
+import type { PasswordHasher } from '@/auth/ports/password-hasher.ts';
 import type {
   NewSession,
   RevokeAllOptions,
   SessionRepository,
   SessionWithUser,
-} from '../../../src/auth/ports/session-repository.ts';
+} from '@/auth/ports/session-repository.ts';
 import type {
   CreateUserInput,
+  ListUsersQuery,
   LoginFailureState,
   LoginSuccessInput,
   PasswordUpdate,
+  UpdateUserInput,
   UserRepository,
-} from '../../../src/auth/ports/user-repository.ts';
-import type { AuditEntry, AuditLogRepository } from '../../../src/audit/ports/audit-log-repository.ts';
-import type { Clock } from '../../../src/clock/index.ts';
+} from '@/auth/ports/user-repository.ts';
+import type { AuditEntry, AuditLogRepository } from '@/audit/ports/audit-log-repository.ts';
+import type { Clock } from '@/clock/index.ts';
 
-export class FixedClock implements Clock {
-  constructor(private current: Date) {}
+export class FixedClock implements Clock {  constructor(private current: Date) {}
   now(): Date {
     return new Date(this.current);
   }
@@ -52,14 +53,29 @@ export function makeUser(overrides: Partial<User> = {}): User {
     mustChangePassword: overrides.mustChangePassword ?? false,
     failedLoginAttempts: overrides.failedLoginAttempts ?? 0,
     lockedUntil: overrides.lockedUntil ?? null,
-    role: overrides.role ?? ('user' as UserRole),
-    status: overrides.status ?? ('active' as UserStatus),
+    role: overrides.role ?? 'user',
+    status: overrides.status ?? 'active',
     divisionId: overrides.divisionId ?? null,
     createdAt: overrides.createdAt ?? base,
     updatedAt: overrides.updatedAt ?? base,
     lastLoginAt: overrides.lastLoginAt ?? null,
     deletedAt: overrides.deletedAt ?? null,
   };
+}
+
+/** Mirrors the base64url keyset codec in `DrizzleUserRepository`. */
+function encodeCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`).toString('base64url');
+}
+
+function decodeCursor(cursor: string): { createdAt: Date; id: string } {
+  const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+  const [iso, id] = decoded.split('|');
+  const createdAt = iso ? new Date(iso) : new Date(Number.NaN);
+  if (!iso || !id || Number.isNaN(createdAt.getTime())) {
+    throw new Error('invalid keyset cursor');
+  }
+  return { createdAt, id };
 }
 
 export class InMemoryUserRepository implements UserRepository {
@@ -81,6 +97,53 @@ export class InMemoryUserRepository implements UserRepository {
     return null;
   }
 
+  async findMany(
+    options: ListUsersQuery,
+  ): Promise<{ items: User[]; nextCursor: string | null }> {
+    let list = Array.from(this.rows.values()).filter((u) => u.deletedAt === null);
+
+    if (options.status) {
+      list = list.filter((u) => u.status === options.status);
+    }
+    if (options.divisionId) {
+      list = list.filter((u) => u.divisionId === options.divisionId);
+    }
+    if (options.query) {
+      const q = options.query.toLowerCase();
+      list = list.filter(
+        (u) => u.email.toLowerCase().includes(q) || u.displayName.toLowerCase().includes(q),
+      );
+    }
+
+    // Ordering matches DrizzleUserRepository: created_at DESC, id DESC.
+    list.sort((a, b) => {
+      const byCreated = b.createdAt.getTime() - a.createdAt.getTime();
+      if (byCreated !== 0) return byCreated;
+      return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+    });
+
+    if (options.cursor) {
+      const { createdAt, id } = decodeCursor(options.cursor);
+      list = list.filter(
+        (u) =>
+          u.createdAt.getTime() < createdAt.getTime() ||
+          (u.createdAt.getTime() === createdAt.getTime() && u.id < id),
+      );
+    }
+
+    const limit = options.limit ?? 50;
+    const hasNext = list.length > limit;
+    const items = list.slice(0, limit);
+
+    let nextCursor: string | null = null;
+    const last = items[items.length - 1];
+    if (hasNext && last !== undefined) {
+      nextCursor = encodeCursor(last.createdAt, last.id);
+    }
+
+    return { items, nextCursor };
+  }
+
   async create(input: CreateUserInput): Promise<User> {
     const user = makeUser({
       id: input.id,
@@ -94,6 +157,36 @@ export class InMemoryUserRepository implements UserRepository {
     });
     this.rows.set(user.id, user);
     return user;
+  }
+
+  async update(input: UpdateUserInput): Promise<User> {
+    const user = this.rows.get(input.id);
+    if (!user) throw new Error(`user not found: ${input.id}`);
+    const updated: User = {
+      ...user,
+      ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
+      ...(input.role !== undefined ? { role: input.role } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.divisionId !== undefined ? { divisionId: input.divisionId } : {}),
+      updatedAt: input.at ?? new Date(),
+    };
+    this.rows.set(input.id, updated);
+    return updated;
+  }
+
+  async countActiveAdmins(): Promise<number> {
+    let count = 0;
+    for (const u of this.rows.values()) {
+      if (u.role === 'admin' && u.status === 'active' && u.deletedAt === null) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  async lockActiveAdmins(): Promise<number> {
+    // The in-memory fake is single-threaded; locking is a no-op.
+    return this.countActiveAdmins();
   }
 
   async recordLoginSuccess(input: LoginSuccessInput): Promise<void> {

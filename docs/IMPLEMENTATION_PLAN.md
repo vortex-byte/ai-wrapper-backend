@@ -98,13 +98,13 @@ Copied from `AGENTS.md` — these are not revisited during the build.
 - [x] Lint gates: ESLint (provider-import ban) + `dependency-cruiser` (AGENTS.md §3.2 inward rule) + Prettier. ✅ M0.1
 - [x] Hono app: request-id middleware, JSON logging (pino) with redaction, `/healthz`, `/readyz`, `/metrics` (**raw, not enveloped**). ✅ M0.1
 - [x] **Wire contract (v1.3):** unversioned `/api` prefix + shared envelope helpers (`{status,message,data}` / `{status,code,message,retryable,details,trace?}`, `trace` only when `NODE_ENV=development`), per `docs/API_CONTRACTS.md` §1. No route hand-rolls JSON; 2xx never returns `204`. ✅ M0.1/M0.0
-- [x] DB layer: pool, Drizzle client, migration runner (forward-only, `pg_advisory_lock`), `db/seed` for the example registry (**never auto-applied in prod**). ✅ M0.2 (seed pending)
+- [x] DB layer: pool, Drizzle client, migration runner (forward-only, `pg_advisory_lock`), `db/seed` for the example registry (**never auto-applied in prod**). ✅ M0.2/M0.6 (`seed-example` guarded; populates once Phase 1 registry tables exist)
 - [x] **Migrations baseline:** `users`, `sessions`, `divisions`, `audit_logs`, `system_settings`, `jobs` (+ `citext` extension). Apply the AGENTS.md §6 grammar from day one (UUIDv7, `text`+`CHECK`, partial indexes). ✅ M0.2
-- [ ] **Auth (FR-AUTH-1…9):** argon2id (`Bun.password`), `POST /auth/login`, opaque `__Host-session` cookie, sessions in PostgreSQL (idle 8 h / absolute 24 h), rotation on login, lockout (8 / 15 min), per-IP login limit, generic errors. — *domain/session/HTTP done (M0.3/M0.4); per-IP rate limit pending (M0.5)*
-- [x] **RBAC** middleware (`user | admin | auditor`); `must_change_password` gate (403 `password_change_required`) allowing only `GET /me`, `POST /me/password`, `DELETE /auth/session`. ✅ M0.4 (role middleware pending M0.5)
-- [ ] Admin user provisioning + password reset; `bootstrap-admin` CLI; last-admin protection.
+- [x] **Auth (FR-AUTH-1…9):** argon2id (`Bun.password`), `POST /auth/login`, opaque `__Host-session` cookie, sessions in PostgreSQL (idle 8 h / absolute 24 h), rotation on login, lockout (8 / 15 min), per-IP login limit, generic errors. ✅ M0.3/M0.4/M0.5 (per-IP limit via `rateLimitLogin`)
+- [x] **RBAC** middleware (`user | admin | auditor`); `must_change_password` gate (403 `password_change_required`) allowing only `GET /me`, `POST /me/password`, `DELETE /auth/session`. ✅ M0.4/M0.5
+- [x] Admin user provisioning + password reset; `bootstrap-admin` CLI; last-admin protection. ✅ M0.5
 - [x] **Audit writer** (same transaction as the mutation); append-only grants prepared. ✅ M0.3 (grants in migrations)
-- [ ] `FakeProvider` + provider registry interfaces (no adapter yet).
+- [x] `FakeProvider` + provider registry interfaces (no adapter yet). ✅ M0.6
 - [ ] CI: lint (incl. provider-import rule), typecheck, unit + integration (Testcontainers), dependency audit, migration dry-run. — *deferred by decision (no workflow files yet)*
 - [ ] Staging deploy using **Part B** (first pass — can be `ROLE=all`, single instance).
 
@@ -117,6 +117,7 @@ Copied from `AGENTS.md` — these are not revisited during the build.
 bun install
 bun run db:migrate
 bun run cli bootstrap-admin --email you@corp.example
+bun run cli seed-example   # optional dev examples; refuses in production
 bun run typecheck && bun run lint && bun run test
 bun run dev
 ```

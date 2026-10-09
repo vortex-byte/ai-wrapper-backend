@@ -3,7 +3,7 @@ import {
   CSRF_TOKEN_MAX_AGE_MS,
   issueCsrfToken,
   verifyCsrfToken,
-} from '../../../src/csrf.ts';
+} from '@/csrf.ts';
 
 const SECRET = 'a'.repeat(48);
 const NOW = new Date('2026-05-01T10:00:00Z');

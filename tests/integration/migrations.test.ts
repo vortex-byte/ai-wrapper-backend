@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { closePool, getPool } from '../../src/db/index.ts';
-import { runMigrations } from '../../src/db/migrate.ts';
-import { getMigrationState } from '../../src/db/migrations.ts';
+import { closePool, getPool } from '@/db/index.ts';
+import { runMigrations } from '@/db/migrate.ts';
+import { getMigrationState } from '@/db/migrations.ts';
 
 /**
  * Requires a real PostgreSQL (TEST_DATABASE_URL). The DB is never mocked for schema
- * and transaction behaviour (AGENTS §7).
+ * and transaction behaviour.
  */
 describe('migration baseline', () => {
   beforeAll(async () => {

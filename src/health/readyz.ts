@@ -55,7 +55,6 @@ async function checkStorage(config: Config): Promise<CheckResult> {
     }
     return { ok: true, detail: `${Math.round(freeMib)} MiB free` };
   } catch {
-    // statfs may be unavailable on some platforms; writability already proved.
     return { ok: true, detail: 'writable' };
   }
 }

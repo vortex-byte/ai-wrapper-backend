@@ -1,15 +1,15 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
-import { createApp } from '../../src/app.ts';
-import { createServices } from '../../src/services.ts';
-import { loadConfig, type Config } from '../../src/config/index.ts';
-import { closePool, getPool } from '../../src/db/index.ts';
-import { onError } from '../../src/http/error-handler.ts';
-import { requireAuth } from '../../src/http/middleware/require-auth.ts';
-import { requirePasswordChanged } from '../../src/http/middleware/require-password-changed.ts';
-import type { AppEnv } from '../../src/http/types.ts';
-import { BunPasswordHasher } from '../../src/auth/infrastructure/bun-password-hasher.ts';
-import { DrizzleUserRepository } from '../../src/auth/infrastructure/drizzle-user-repository.ts';
+import { createApp } from '@/app.ts';
+import { createServices } from '@/services.ts';
+import { loadConfig, type Config } from '@/config/index.ts';
+import { closePool, getPool } from '@/db/index.ts';
+import { onError } from '@/http/error-handler.ts';
+import { requireAuth } from '@/http/middleware/require-auth.ts';
+import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
+import type { AppEnv } from '@/http/types.ts';
+import { BunPasswordHasher } from '@/auth/infrastructure/bun-password-hasher.ts';
+import { DrizzleUserRepository } from '@/auth/infrastructure/drizzle-user-repository.ts';
 import { resetDatabase } from './helpers/reset.ts';
 
 const SECRET = 'integration-session-secret-0123456789abcdef';
@@ -23,8 +23,8 @@ const config: Config = loadConfig({
   LOG_LEVEL: 'silent',
 });
 
-const app = createApp(config);
 const services = createServices(config);
+const app = createApp(config, services);
 const users = new DrizzleUserRepository();
 const hasher = new BunPasswordHasher();
 const PASSWORD = 'correct horse battery staple';
@@ -74,6 +74,7 @@ async function login(mustChangePassword = false): Promise<{ cookie: string; csrf
 describe('auth HTTP surface (real PostgreSQL)', () => {
   beforeEach(async () => {
     await resetDatabase();
+    (services.rateLimiter as import('@/http/infrastructure/memory-rate-limiter.ts').MemoryRateLimiter).clear();
   });
 
   afterAll(async () => {

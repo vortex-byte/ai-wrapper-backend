@@ -1,5 +1,3 @@
-/** Password policy (PRD §15.1). Length is the MVP rule; keep it pure and testable. */
-
 export interface PasswordPolicy {
   readonly minLength: number;
 }

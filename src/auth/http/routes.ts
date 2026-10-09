@@ -1,32 +1,26 @@
 import { Hono } from 'hono';
-import type { Context } from 'hono';
-import { getConnInfo } from 'hono/bun';
-import type { Config } from '../../config/index.ts';
-import { issueCsrfToken } from '../../csrf.ts';
-import { AppError } from '../../errors.ts';
-import { ok, okEmpty } from '../../http/envelope.ts';
-import { requireAuth } from '../../http/middleware/require-auth.ts';
-import { enforceOrigin, requireCsrf } from '../../http/middleware/require-csrf.ts';
+import type { Config } from '@/config/index.ts';
+import { issueCsrfToken } from '@/csrf.ts';
+import { AppError } from '@/errors.ts';
+import { ok, okEmpty } from '@/http/envelope.ts';
+import { requireAuth } from '@/http/middleware/require-auth.ts';
+import { enforceOrigin, requireCsrf } from '@/http/middleware/require-csrf.ts';
 import {
   clearSessionCookie,
   setSessionCookie,
-} from '../../http/middleware/session-cookie.ts';
-import { requestMeta } from '../../http/request-meta.ts';
-import type { AppEnv } from '../../http/types.ts';
-import { parseJsonBody } from '../../http/validate.ts';
+} from '@/http/middleware/session-cookie.ts';
+import { clientIp, requestMeta } from '@/http/request-meta.ts';
+import type { AppEnv } from '@/http/types.ts';
+import { parseJsonBody } from '@/http/validate.ts';
 import type { AuthService } from '../application/auth-service.ts';
 import type { User } from '../domain/user.ts';
 import { ChangePasswordBodySchema, LoginBodySchema } from './schemas.ts';
 
-/** Public shape of a user on the wire (API_CONTRACTS §2.1, §3.1). Never the hash. */
-function toWireUser(user: User): {
-  id: string;
-  email: string;
-  displayName: string;
-  role: string;
-  divisionId: string | null;
-  mustChangePassword: boolean;
-} {
+import type { RateLimiter } from '@/http/ports/rate-limiter.ts';
+import type { AuditLogRepository } from '@/audit/ports/audit-log-repository.ts';
+import { rateLimitLogin } from '@/http/middleware/rate-limit-login.ts';
+
+function toWireUser(user: User) {
   return {
     id: user.id,
     email: user.email,
@@ -40,15 +34,17 @@ function toWireUser(user: User): {
 export interface AuthRoutesDeps {
   readonly auth: AuthService;
   readonly config: Config;
+  readonly rateLimiter?: RateLimiter;
+  readonly audit?: AuditLogRepository;
 }
 
-/**
- * `/api/auth/*` and the password endpoint. Thin by design: parse → call the use case →
- * shape the response (AGENTS §3.3). All business rules live in the application layer.
- */
 export function authRoutes(deps: AuthRoutesDeps): Hono<AppEnv> {
-  const { auth, config } = deps;
+  const { auth, config, rateLimiter, audit } = deps;
   const routes = new Hono<AppEnv>();
+
+  if (rateLimiter) {
+    routes.post('/auth/login', rateLimitLogin(config, rateLimiter, audit));
+  }
 
   routes.post('/auth/login', enforceOrigin(config), async (c) => {
     const body = await parseJsonBody(c, LoginBodySchema);
@@ -79,7 +75,6 @@ export function authRoutes(deps: AuthRoutesDeps): Hono<AppEnv> {
     return c.json(okEmpty('Signed out.'));
   });
 
-  // Exempt from the password-change gate: this is how the user clears it.
   routes.post('/me/password', requireCsrf(config), requireAuth(auth, config), async (c) => {
     const current = c.get('auth');
     if (current === undefined) throw new AppError('unauthenticated');
@@ -100,27 +95,4 @@ export function authRoutes(deps: AuthRoutesDeps): Hono<AppEnv> {
   });
 
   return routes;
-}
-
-/**
- * Client IP for auditing. `X-Forwarded-For` is honored **only** when the deployment
- * declares how many proxies sit in front (`TRUST_PROXY > 0`); otherwise it is a
- * spoofable header and we fall back to the socket address. Never trusted for
- * authorization — only for the audit trail and rate limiting.
- */
-export function clientIp(c: Context<AppEnv>, config: Config): string | null {
-  if (config.TRUST_PROXY > 0) {
-    const forwarded = c.req.header('x-forwarded-for');
-    if (forwarded !== undefined && forwarded !== '') {
-      const hops = forwarded.split(',').map((part) => part.trim()).filter((p) => p !== '');
-      const index = Math.max(0, hops.length - config.TRUST_PROXY);
-      const candidate = hops[index];
-      if (candidate !== undefined) return candidate;
-    }
-  }
-  try {
-    return getConnInfo(c).remote.address ?? null;
-  } catch {
-    return null;
-  }
 }

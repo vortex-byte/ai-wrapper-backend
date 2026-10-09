@@ -1,11 +1,11 @@
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { CookieOptions } from 'hono/utils/cookie';
 import type { Context } from 'hono';
-import type { Config } from '../../config/index.ts';
+import type { Config } from '@/config/index.ts';
 import type { AppEnv } from '../types.ts';
 
 /**
- * The session cookie (PRD §15.1). `__Host-` requires `Secure`, `Path=/` and **no**
+ * The session cookie. `__Host-` requires `Secure`, `Path=/` and **no**
  * `Domain`; because the SPA and API are same-*site* subdomains, `SameSite=Lax` is
  * enough to have the browser send it on API calls.
  */
@@ -16,7 +16,6 @@ function baseOptions(config: Config): CookieOptions {
     httpOnly: true,
     secure: true,
     sameSite: 'Lax',
-    // A finite max-age keeps the cookie from outliving the session row.
     maxAge: config.SESSION_ABSOLUTE_MINUTES * 60,
   };
 }
@@ -29,7 +28,6 @@ export function setSessionCookie(c: Context<AppEnv>, config: Config, token: stri
   setCookie(c, config.SESSION_COOKIE_NAME, token, baseOptions(config));
 }
 
-/** Clear the cookie on logout: same attributes, immediate expiry. */
 export function clearSessionCookie(c: Context<AppEnv>, config: Config): void {
   deleteCookie(c, config.SESSION_COOKIE_NAME, {
     path: '/',

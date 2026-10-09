@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AppError, HTTP_ERRORS, isAppError } from '../../../src/errors.ts';
+import { AppError, HTTP_ERRORS, isAppError } from '@/errors.ts';
 
 describe('AppError', () => {
   it('uses the catalog status, retryable and default message', () => {

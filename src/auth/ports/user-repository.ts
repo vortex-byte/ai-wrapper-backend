@@ -1,4 +1,4 @@
-import type { TransactionContext } from '../../db/tx.ts';
+import type { TransactionContext } from '@/db/tx.ts';
 import type { User, UserRole, UserStatus } from '../domain/user.ts';
 
 export interface CreateUserInput {
@@ -7,9 +7,9 @@ export interface CreateUserInput {
   readonly displayName: string;
   readonly passwordHash: string;
   readonly role: UserRole;
-  readonly status?: UserStatus;
-  readonly divisionId?: string | null;
-  readonly mustChangePassword?: boolean;
+  readonly status?: UserStatus | undefined;
+  readonly divisionId?: string | null | undefined;
+  readonly mustChangePassword?: boolean | undefined;
 }
 
 export interface LoginSuccessInput {
@@ -31,15 +31,44 @@ export interface PasswordUpdate {
   readonly at: Date;
 }
 
+export interface ListUsersQuery {
+  readonly query?: string | undefined;
+  readonly divisionId?: string | undefined;
+  readonly status?: UserStatus | undefined;
+  readonly limit?: number | undefined;
+  readonly cursor?: string | undefined;
+}
+
+export interface UpdateUserInput {
+  readonly id: string;
+  readonly displayName?: string | undefined;
+  readonly role?: UserRole | undefined;
+  readonly status?: UserStatus | undefined;
+  readonly divisionId?: string | null | undefined;
+  readonly at?: Date | undefined;
+}
+
 /**
  * Persistence port for users. Every method returns plain domain objects; the domain
- * never sees a table (AGENTS §3.3). `tx` carries the Unit of Work handle when the
+ * never sees a table. `tx` carries the Unit of Work handle when the
  * caller needs it; the repository never opens a transaction itself.
  */
 export interface UserRepository {
   findById(id: string, tx?: TransactionContext): Promise<User | null>;
   findByEmail(email: string, tx?: TransactionContext): Promise<User | null>;
+  findMany(
+    options: ListUsersQuery,
+    tx?: TransactionContext,
+  ): Promise<{ items: User[]; nextCursor: string | null }>;
   create(input: CreateUserInput, tx?: TransactionContext): Promise<User>;
+  update(input: UpdateUserInput, tx?: TransactionContext): Promise<User>;
+  countActiveAdmins(tx?: TransactionContext): Promise<number>;
+  /**
+   * Lock the active-admin row set (`SELECT ... FOR UPDATE`) and return its size. Must be
+   * called inside a transaction. Serializes concurrent role/status mutations so the
+   * last-admin invariant cannot be violated by two racing demotions.
+   */
+  lockActiveAdmins(tx: TransactionContext): Promise<number>;
   recordLoginSuccess(input: LoginSuccessInput, tx?: TransactionContext): Promise<void>;
   recordLoginFailure(
     id: string,

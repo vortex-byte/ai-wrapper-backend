@@ -1,4 +1,4 @@
-import type { TransactionContext } from '../../db/tx.ts';
+import type { TransactionContext } from '@/db/tx.ts';
 import type { SessionRecord } from '../domain/session.ts';
 import type { User } from '../domain/user.ts';
 

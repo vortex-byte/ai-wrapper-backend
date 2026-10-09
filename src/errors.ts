@@ -1,13 +1,3 @@
-/**
- * The error vocabulary of `docs/API_CONTRACTS.md` §14. `code` values are stable and
- * machine-readable; `message` is display text. `AppError` is the only error type the
- * HTTP layer turns into an error envelope — anything else becomes `internal_error`
- * with a generic message.
- *
- * This lives at the platform root (not under `http/`) so the application layer can
- * throw typed errors without importing HTTP (AGENTS §3.2 dependency rule).
- */
-
 export interface ErrorDescriptor {
   readonly status: number;
   readonly retryable: boolean;
@@ -100,11 +90,8 @@ export type StreamErrorCode =
 export type ErrorCode = HttpErrorCode | StreamErrorCode;
 
 export interface AppErrorOptions {
-  /** Override the HTTP status (e.g. `invalid_request` at 422). */
   readonly status?: number;
-  /** Override the catalog's retryable hint. */
   readonly retryable?: boolean;
-  /** Code-specific machine-readable payload (see API_CONTRACTS §14). */
   readonly details?: unknown;
   readonly cause?: unknown;
 }
@@ -128,4 +115,18 @@ export class AppError extends Error {
 
 export function isAppError(value: unknown): value is AppError {
   return value instanceof AppError;
+}
+
+/**
+ * True when a database error is a unique-constraint violation (PostgreSQL SQLSTATE
+ * 23505). Used to turn a raced duplicate insert into `409 conflict` instead of a 500.
+ * Never inspects the message text (it may embed the offending value).
+ */
+export function isUniqueViolation(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'code' in value &&
+    (value as { code?: unknown }).code === '23505'
+  );
 }

@@ -1,7 +1,7 @@
-import { AUDIT_ACTIONS } from '../../audit/actions.ts';
-import { generateSessionToken, hashSessionToken } from '../../crypto.ts';
-import { AppError } from '../../errors.ts';
-import type { RequestMeta } from '../../request-context.ts';
+import { AUDIT_ACTIONS } from '@/audit/actions.ts';
+import { generateSessionToken, hashSessionToken } from '@/crypto.ts';
+import { AppError } from '@/errors.ts';
+import type { RequestMeta } from '@/request-context.ts';
 import { passwordProblemMessage, validatePassword } from '../domain/password-policy.ts';
 import { computeExpiry } from '../domain/session.ts';
 import { isActive } from '../domain/user.ts';
@@ -21,11 +21,6 @@ export interface ChangePasswordSuccess {
   readonly expiresAt: Date;
 }
 
-/**
- * Verifies the current password, applies the policy, stores the new hash, clears the
- * `must_change_password` gate, revokes every *other* session, and rotates the caller's
- * session (PRD §15.1, API_CONTRACTS §2.4).
- */
 export async function changePassword(
   deps: AuthDeps,
   input: ChangePasswordInput,
@@ -61,11 +56,8 @@ export async function changePassword(
 
   const passwordHash = await deps.hasher.hash(input.newPassword);
   await deps.users.setPassword({ id: user.id, passwordHash, mustChangePassword: false, at: now });
-
-  // Revoke every other session (defence against a stolen cookie), keep the caller's.
   await deps.sessions.revokeAllForUser(user.id, now, { exceptId: input.sessionId });
 
-  // Rotate the caller's own session id.
   const token = generateSessionToken();
   const sessionId = hashSessionToken(token);
   const expiresAt = computeExpiry(now, now, deps.sessionPolicy);

@@ -1,8 +1,3 @@
-/**
- * Pure session rules: the effective expiry is the earlier of the sliding idle window
- * and the hard absolute window (PRD §15.1). No I/O.
- */
-
 export interface SessionPolicy {
   readonly idleMinutes: number;
   readonly absoluteMinutes: number;
@@ -18,7 +13,6 @@ export interface SessionRecord {
   readonly rotatedFrom: string | null;
 }
 
-/** `last_seen_at` writes are throttled to at most once per minute (PRD §15.1). */
 export const TOUCH_THROTTLE_MS = 60_000;
 
 export function computeExpiry(createdAt: Date, lastSeenAt: Date, policy: SessionPolicy): Date {

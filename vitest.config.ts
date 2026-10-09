@@ -1,8 +1,12 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-// Unit tests: no database, no network. Integration tests live behind
-// `vitest.integration.config.ts` and require a real PostgreSQL (TEST_DATABASE_URL).
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   test: {
     environment: 'node',
     include: ['tests/unit/**/*.test.ts', 'src/**/*.test.ts'],

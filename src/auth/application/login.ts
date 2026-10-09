@@ -1,12 +1,11 @@
-import { AUDIT_ACTIONS } from '../../audit/actions.ts';
-import { generateSessionToken, hashSessionToken } from '../../crypto.ts';
-import { AppError } from '../../errors.ts';
-import type { RequestMeta } from '../../request-context.ts';
+import { AUDIT_ACTIONS } from '@/audit/actions.ts';
+import { generateSessionToken, hashSessionToken } from '@/crypto.ts';
+import { AppError } from '@/errors.ts';
+import type { RequestMeta } from '@/request-context.ts';
 import { computeExpiry } from '../domain/session.ts';
 import { authenticationBlock, nextFailureState, type User } from '../domain/user.ts';
 import type { AuthDeps } from './deps.ts';
 
-/** One generic message for every credential failure — no user enumeration (PRD §15.1). */
 const GENERIC_CREDENTIALS_ERROR = 'Invalid email or password.';
 
 export interface LoginInput {
@@ -22,10 +21,6 @@ export interface LoginSuccess {
   readonly expiresAt: Date;
 }
 
-/**
- * A pre-computed hash to verify against when the email is unknown, so the response
- * time does not reveal whether an account exists (constant-time-ish).
- */
 let dummyHash: string | undefined;
 
 async function ensureDummyHash(deps: AuthDeps): Promise<string> {

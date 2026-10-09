@@ -7,7 +7,7 @@ import { AppError, isAppError } from '../errors.ts';
 import type { AppEnv } from './types.ts';
 
 /**
- * The single place errors become responses (API_CONTRACTS §1.2). `trace` is emitted
+ * The single place errors become responses. `trace` is emitted
  * only when `NODE_ENV=development`; anything that is not an `AppError` is logged and
  * reported as a generic `internal_error` so internals never leak.
  */

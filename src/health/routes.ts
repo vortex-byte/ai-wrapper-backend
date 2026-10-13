@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import type { Config } from '../config/index.ts';
 import type { AppEnv } from '../http/types.ts';
+import type { MetricsRegistry } from '../observability/metrics.ts';
 import { checkReadiness } from './readyz.ts';
 
 const startedAt = Date.now();
 
-export function healthRoutes(config: Config): Hono<AppEnv> {
+export function healthRoutes(config: Config, metrics?: MetricsRegistry): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
 
   routes.get('/healthz', (c) => c.text('ok'));
@@ -43,7 +44,8 @@ export function healthRoutes(config: Config): Hono<AppEnv> {
       '# HELP aichat_uptime_seconds Seconds since process start.',
       '# TYPE aichat_uptime_seconds gauge',
       `aichat_uptime_seconds ${uptimeSeconds.toFixed(3)}`,
-      '',
+      // The generation-core registry (PRD §21.3 subset) renders after the process metrics.
+      metrics?.render() ?? '',
     ].join('\n');
     return c.text(body, 200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   });

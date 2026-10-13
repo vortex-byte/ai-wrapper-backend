@@ -10,6 +10,12 @@ export const AUDIT_ACTIONS = {
   loginRateLimited: 'user.login_rate_limited',
   divisionCreate: 'division.create',
   divisionUpdate: 'division.update',
+  providerCreate: 'provider.create',
+  providerUpdate: 'provider.update',
+  modelCreate: 'model.create',
+  modelUpdate: 'model.update',
+  modelPriceSet: 'model.price_set',
+  settingsUpdate: 'settings.update',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

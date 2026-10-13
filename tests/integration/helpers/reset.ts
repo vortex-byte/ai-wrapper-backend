@@ -12,6 +12,15 @@ export async function resetDatabase(): Promise<void> {
   const pool = getPool();
   await pool.query('DELETE FROM audit_logs');
   await pool.query('DELETE FROM sessions');
+  await pool.query('DELETE FROM jobs');
+  await pool.query('DELETE FROM generation_jobs');
+  await pool.query('DELETE FROM idempotency_keys');
+  await pool.query('DELETE FROM message_parts');
+  await pool.query('DELETE FROM messages');
+  await pool.query('DELETE FROM conversations');
+  await pool.query('DELETE FROM ai_model_prices');
+  await pool.query('DELETE FROM ai_models');
+  await pool.query('DELETE FROM ai_providers');
   await pool.query('UPDATE system_settings SET updated_by = NULL WHERE updated_by IS NOT NULL');
   await pool.query('DELETE FROM users');
 }

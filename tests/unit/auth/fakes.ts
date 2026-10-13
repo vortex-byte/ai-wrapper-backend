@@ -115,7 +115,6 @@ export class InMemoryUserRepository implements UserRepository {
       );
     }
 
-    // Ordering matches DrizzleUserRepository: created_at DESC, id DESC.
     list.sort((a, b) => {
       const byCreated = b.createdAt.getTime() - a.createdAt.getTime();
       if (byCreated !== 0) return byCreated;
@@ -185,7 +184,6 @@ export class InMemoryUserRepository implements UserRepository {
   }
 
   async lockActiveAdmins(): Promise<number> {
-    // The in-memory fake is single-threaded; locking is a no-op.
     return this.countActiveAdmins();
   }
 

@@ -1,0 +1,105 @@
+/**
+ * SSE Event types and wire shapes for generation streaming.
+ * Source of truth: docs/API_CONTRACTS.md §7.2
+ */
+
+export type SSEEventType =
+  | 'generation.state'
+  | 'message.created'
+  | 'context.truncated'
+  | 'part.started'
+  | 'text.delta'
+  | 'part.completed'
+  | 'progress'
+  | 'usage.updated'
+  | 'generation.completed'
+  | 'generation.cancelled'
+  | 'generation.failed';
+
+export interface GenerationStatePayload {
+  readonly state: 'pending' | 'generating' | 'completed' | 'cancelled' | 'failed';
+}
+
+export interface MessageCreatedPayload {
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+}
+
+export interface ContextTruncatedPayload {
+  readonly droppedMessages: number;
+  readonly droppedAttachments?: number;
+}
+
+export interface PartStartedPayload {
+  readonly partId: string;
+  readonly position: number;
+  readonly type: 'text' | 'image' | 'file';
+  readonly mimeType?: string;
+  readonly name?: string;
+}
+
+export interface TextDeltaPayload {
+  readonly partId: string;
+  readonly delta: string;
+}
+
+export interface PartCompletedPayload {
+  readonly partId: string;
+  readonly status: 'complete' | 'incomplete' | 'failed';
+  readonly fileId?: string;
+  readonly downloadUrl?: string;
+}
+
+export interface ProgressPayload {
+  readonly stage: string;
+  readonly percent?: number;
+}
+
+export interface UsageUpdatedPayload {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface GenerationCompletedPayload {
+  readonly finishReason: 'stop' | 'length' | 'content_filter' | 'cancelled' | 'error' | 'timeout' | 'interrupted';
+  readonly usage: {
+    readonly input: number;
+    readonly output: number;
+    readonly quotaTokens: number;
+  };
+  readonly remainingQuota: number | null;
+}
+
+export interface GenerationCancelledPayload {
+  readonly reason: 'user_cancel' | 'detached' | 'shutdown' | string;
+}
+
+export interface GenerationFailedPayload {
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly retryable: boolean;
+  };
+}
+
+export interface SSEFrame {
+  readonly id: number;
+  readonly event: SSEEventType;
+  readonly data: string;
+  readonly byteLength: number;
+  /**
+   * When true this is an SSE *comment* (`:heartbeat`), not a named event: it carries no `id:`,
+   * no `event:` and no `data:` line and must never advance the client's `Last-Event-ID`
+   * (PRD §14.3, API_CONTRACTS §7.2). Consumers must write it via {@link formatHeartbeat}.
+   */
+  readonly comment?: boolean | undefined;
+}
+
+export function formatSSE(frame: SSEFrame): string {
+  if (frame.comment === true) return formatHeartbeat();
+  return `id: ${frame.id}\nevent: ${frame.event}\ndata: ${frame.data}\n\n`;
+}
+
+export function formatHeartbeat(): string {
+  return ':heartbeat\n\n';
+}

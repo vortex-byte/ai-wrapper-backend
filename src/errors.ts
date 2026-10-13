@@ -130,3 +130,25 @@ export function isUniqueViolation(value: unknown): boolean {
     (value as { code?: unknown }).code === '23505'
   );
 }
+
+/**
+ * True when a PostgreSQL unique-constraint violation (23505) names a specific constraint.
+ *
+ * Used where several unique constraints can fire on one insert and the caller must react
+ * differently to each (e.g. T1: the one-active-generation partial index → 409, a duplicate
+ * `request_id` → a genuine bug). `constraint` is the constraint/index name PostgreSQL reports;
+ * it is never user data, so comparing it is safe.
+ *
+ * Walks the `cause` chain because ORMs (Drizzle) wrap the driver error: the SQLSTATE and
+ * `constraint` fields live on the inner `pg` error, not the thrown wrapper.
+ */
+export function isUniqueViolationOf(value: unknown, constraint: string): boolean {
+  let current: unknown = value;
+  for (let depth = 0; depth < 10 && current !== null && current !== undefined; depth++) {
+    if (isUniqueViolation(current) && (current as { constraint?: unknown }).constraint === constraint) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}

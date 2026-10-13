@@ -101,7 +101,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     await seedAdminUser('admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
 
-    // List users
     const listRes = await app.request(
       new Request('http://localhost/api/admin/users', {
         headers: { Cookie: cookie },
@@ -111,7 +110,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     const listBody = (await listRes.json()) as { data: { items: Array<{ id: string }> } };
     expect(listBody.data.items).toHaveLength(1);
 
-    // Create a new user
     const createRes = await app.request(
       new Request('http://localhost/api/admin/users', {
         method: 'POST',
@@ -137,7 +135,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     expect(createBody.data.email).toBe('newhire@corp.example');
     expect(createBody.data.temporaryPassword).toBeDefined();
 
-    // Audit log recorded
     const pool = getPool();
     const auditRows = await pool.query('SELECT action, target_id FROM audit_logs WHERE target_id = $1', [
       createBody.data.id,
@@ -183,7 +180,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
     const pool = getPool();
 
-    // Insert then soft-delete a user with the target email.
     const dead = await users.create({
       id: Bun.randomUUIDv7(),
       email: 'reuse@corp.example',

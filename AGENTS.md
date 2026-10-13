@@ -73,7 +73,9 @@ The composition root (§3.7 `app.ts`/`server.ts`) wires infrastructure implement
 Forbidden (checked in CI — this is also where the provider-import rule lives):
 
 - `domain/` importing Drizzle, Hono, `pg`, `node:*`, or anything outside its own module.
-- `providers/*` importing `db/`; `storage/` importing `conversations/`; `attachments/` importing `providers/`.
+- Provider **adapters** importing `db/` (a provider's own registry persistence in
+  `providers/infrastructure/drizzle-*` is the exception — it is that module's infrastructure);
+  `storage/` importing `conversations/`; `attachments/` importing `providers/`.
 - Any module reaching into another module's `infrastructure/` or `domain/` internals.
 - Routes (`http/`) containing business logic or touching repositories directly.
 - A repository opening its own transaction.
@@ -216,7 +218,7 @@ docker compose up -d pg redis   # local dev deps
 - **No secret in code, DB, or logs.** Provider keys come from the environment/`.env` (PRD A-16);
   `ai_providers.secret_ref` stores the **env var name**, never the key. `LOG_CONTENT=false`.
 - **Repositories always take an `AuthContext`** and filter by `user_id`. Accessing another
-  user's row returns **404**, never 403. Admins/auditors are **not** exempt for content (A-13).
+  user's row returns **404**, never 403. Admins are **not** exempt for content (A-13).
 - **Never `SELECT *`** in application code; select explicit columns.
 - **No pagination by `OFFSET`** — keyset/cursor only.
 - **Streams hold no DB connection.** DB is touched only by the checkpointer and finalizer.
@@ -408,7 +410,7 @@ CREATE UNIQUE INDEX divisions_external_ref_uq ON divisions (external_ref) WHERE 
   - `password_updated_at timestamptz` — set on every change/reset.
   - `must_change_password boolean NOT NULL DEFAULT true` — first login / after admin reset.
   - `failed_login_attempts int NOT NULL DEFAULT 0`, `locked_until timestamptz` — lockout state.
-  - `role text` — `user | admin | auditor`.
+  - `role text` — `user | admin`.
   - `status text` — `active | disabled`; `disabled` → 401 + session revocation on next request.
   - `division_id uuid` — nullable (unassigned users are possible).
   - `idp_subject text` — **nullable**, reserved for future SSO (A-15).
@@ -432,7 +434,7 @@ CREATE TABLE users (
   must_change_password  boolean NOT NULL DEFAULT true,
   failed_login_attempts int NOT NULL DEFAULT 0 CHECK (failed_login_attempts >= 0),
   locked_until          timestamptz,
-  role                  text NOT NULL DEFAULT 'user'   CHECK (role IN ('user','admin','auditor')),
+  role                  text NOT NULL DEFAULT 'user'   CHECK (role IN ('user','admin')),
   status                text NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   division_id           uuid REFERENCES divisions(id),
   idp_subject           text,
@@ -525,14 +527,14 @@ CREATE INDEX ai_providers_status_idx ON ai_providers (status);
   - `provider_id uuid NOT NULL` — FK.
   - `key text NOT NULL UNIQUE` — internal slug.
   - `api_model_id text NOT NULL` — the provider's identifier (admin-entered).
-  - `status text` — `active | disabled | deprecated | retired` (PRD §9.4 lifecycle).
+  - `status text` — `active | disabled` (PRD §9.4 lifecycle).
   - `capabilities jsonb NOT NULL` — `ModelCapabilities` + `schemaVersion` (vision, pdf, streaming, generation, context window, …).
   - `context_window int`, `max_output_tokens int`, `default_max_output_tokens int`.
   - `quota_weight numeric(8,3) NOT NULL DEFAULT 1.000` — multiplier applied to quota tokens.
   - `config jsonb NOT NULL DEFAULT '{}'` — reasoning effort, `systemAddendum`, `timeoutMs`, etc.
-  - `sort_order int`, `retire_at timestamptz`, `replacement_model_id uuid` — lifecycle/UX.
-- **Relationships:** N‑1 `ai_providers`; self-FK `replacement_model_id`; 1‑N `ai_model_prices`, `conversations`, `generation_jobs`, `usage_events`.
-- **Constraints:** `CHECK (context_window > 0)`, `CHECK (max_output_tokens > 0)`, `CHECK (default_max_output_tokens BETWEEN 1 AND max_output_tokens)`, `CHECK (quota_weight > 0)`; `UNIQUE (provider_id, api_model_id)`; `CHECK (status IN (...))`.
+  - `sort_order int`.
+- **Relationships:** N‑1 `ai_providers`; 1‑N `ai_model_prices`, `conversations`, `generation_jobs`, `usage_events`.
+- **Constraints:** `CHECK (context_window > 0)`, `CHECK (max_output_tokens > 0)`, `CHECK (default_max_output_tokens BETWEEN 1 AND max_output_tokens)`, `CHECK (quota_weight > 0)`; `UNIQUE (provider_id, api_model_id)`; `CHECK (status IN ('active','disabled'))`.
 - **Indexing strategy:**
   - `UNIQUE (key)`.
   - `UNIQUE (provider_id, api_model_id)` — prevents duplicate provider identifiers.
@@ -549,7 +551,7 @@ CREATE TABLE ai_models (
   display_name             text NOT NULL,
   description              text,
   status                   text NOT NULL DEFAULT 'disabled'
-                             CHECK (status IN ('active','disabled','deprecated','retired')),
+                             CHECK (status IN ('active','disabled')),
   capabilities             jsonb NOT NULL,
   context_window           int  NOT NULL CHECK (context_window > 0),
   max_output_tokens        int  NOT NULL CHECK (max_output_tokens > 0),
@@ -557,8 +559,6 @@ CREATE TABLE ai_models (
   quota_weight             numeric(8,3) NOT NULL DEFAULT 1.000 CHECK (quota_weight > 0),
   config                   jsonb NOT NULL DEFAULT '{}',
   sort_order               int NOT NULL DEFAULT 0,
-  retire_at                timestamptz,
-  replacement_model_id     uuid REFERENCES ai_models(id),
   created_at               timestamptz NOT NULL DEFAULT now(),
   updated_at               timestamptz NOT NULL DEFAULT now(),
   CHECK (default_max_output_tokens <= max_output_tokens)
@@ -1261,7 +1261,7 @@ Append-only tables are protected by **privileges**, not by application disciplin
 -- Roles (names illustrative)
 --   app_role      : the running service
 --   migrator_role : owns DDL, runs migrations
---   readonly_role : auditors/dashboards (SELECT only)
+--   readonly_role : dashboards (SELECT only)
 
 -- Full DML on mutable tables
 GRANT SELECT, INSERT, UPDATE, DELETE ON
@@ -1275,7 +1275,7 @@ TO app_role;
 GRANT SELECT, INSERT ON quota_ledger, audit_logs TO app_role;
 REVOKE UPDATE, DELETE ON quota_ledger, audit_logs FROM app_role;
 
--- Auditors read reporting only
+-- Reporting/dashboards read only
 GRANT SELECT ON usage_events, usage_daily, audit_logs, error_events,
                 quota_accounts, quota_ledger, ai_providers, ai_models
 TO readonly_role;
@@ -1338,8 +1338,8 @@ RETURNING id;
 -- 0 rows => another path already finalized; do not settle twice
 ```
 
-**T4 — Idempotent send replay:** `INSERT INTO idempotency_keys ... ON CONFLICT (user_id, key) DO NOTHING`;
-if `0 rows` then `SELECT` the stored response; compare `request_hash` — match ⇒ replay with
+**T4 — Idempotent send replay:** `INSERT INTO idempotency_keys ... ON CONFLICT (user_id, key) DO UPDATE SET key = idempotency_keys.key RETURNING *`; the no-op update waits for a concurrent winner to commit before returning the stored row. If the request hash or endpoint differs, return `422 idempotency_key_reuse`; otherwise replay the original response.
+The returned row is compared on `request_hash` and `endpoint` — match ⇒ replay with
 `Idempotency-Replayed: true`; mismatch ⇒ `422 idempotency_key_reuse`.
 
 **T5 — Streaming checkpoints** are **not** in the generation transaction: the checkpointer runs

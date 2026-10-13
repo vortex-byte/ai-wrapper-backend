@@ -22,7 +22,7 @@ export function createApp(config: Config, customServices?: Services): Hono<AppEn
   app.use('/api/*', cors(config));
   app.onError(onError(config));
   app.notFound(notFound);
-  app.route('/', healthRoutes(config));
+  app.route('/', healthRoutes(config, services.metrics.registry));
   app.route('/api', apiRouter(config, services));
 
   return app;

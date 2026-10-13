@@ -258,10 +258,10 @@ describe('requireRole', () => {
   }
 
   it('allows access to users with matching role in multi-role requireRole', async () => {
-    const auditor = makeUser({ role: 'auditor' });
+    const admin = makeUser({ role: 'admin' });
     const app = buildApp(testConfig(), (a) => {
-      a.use('/api/*', requireAuth(fakeAuth({ user: auditor }), testConfig()));
-      a.use('/api/*', requireRole('admin', 'auditor'));
+      a.use('/api/*', requireAuth(fakeAuth({ user: admin }), testConfig()));
+      a.use('/api/*', requireRole('admin', 'user'));
       a.get('/api/audit', (c) => c.json({ ok: true }));
     });
     const res = await app.request(
@@ -330,7 +330,6 @@ describe('rateLimitLogin', () => {
     });
     expect(alice.status).toBe(200);
     expect(bob.status).toBe(200);
-    // Separate UA buckets → each starts fresh (remaining 9, not 8).
     expect(bob.headers.get('RateLimit-Remaining')).toBe('9');
   });
 });

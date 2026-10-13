@@ -95,7 +95,6 @@ describe('resolveSession', () => {
     expect(stored?.expiresAt.getTime()).toBe(
       computeExpiry(createdAt, now, harness.deps.sessionPolicy).getTime(),
     );
-    // idle (8h) is earlier than the absolute (24h) window → 18:00Z
     expect(stored?.expiresAt.toISOString()).toBe('2026-05-01T18:00:00.000Z');
   });
 });

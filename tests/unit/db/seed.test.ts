@@ -16,6 +16,21 @@ describe('example registry seed data', () => {
     }
   });
 
+  it('includes a keyless FakeProvider model for local end-to-end streaming', () => {
+    expect(EXAMPLE_PROVIDERS).toContainEqual({
+      key: 'fake',
+      displayName: 'Fake Provider',
+      adapter: 'fake',
+      secretRef: 'FAKE_API_KEY',
+    });
+    expect(EXAMPLE_MODELS).toContainEqual({
+      providerKey: 'fake',
+      key: 'fake-model',
+      apiModelId: 'fake-model',
+      displayName: 'Fake Model (development)',
+    });
+  });
+
   it('has unique provider and model keys', () => {
     const providerKeys = EXAMPLE_PROVIDERS.map((p) => p.key);
     const modelKeys = EXAMPLE_MODELS.map((m) => m.key);

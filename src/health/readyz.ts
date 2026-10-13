@@ -59,7 +59,26 @@ async function checkStorage(config: Config): Promise<CheckResult> {
   }
 }
 
+let shuttingDownState = false;
+
+export function setShuttingDown(value: boolean): void {
+  shuttingDownState = value;
+}
+
+export function isShuttingDown(): boolean {
+  return shuttingDownState;
+}
+
 export async function checkReadiness(config: Config): Promise<ReadinessReport> {
+  if (shuttingDownState) {
+    return {
+      ready: false,
+      checks: {
+        shutdown: { ok: false, detail: 'server is shutting down' },
+      },
+    };
+  }
+
   const [database, migrations, storage] = await Promise.all([
     checkDatabase(),
     checkMigrations(),

@@ -101,6 +101,5 @@ export type GenerationEvent =
     }
   | { readonly type: 'error'; readonly error: ProviderError };
 
-// Re-exported here so a single import reaches the whole PAL vocabulary.
 export type { ProviderError, AppErrorCategory } from './errors.ts';
 import type { ProviderError } from './errors.ts';

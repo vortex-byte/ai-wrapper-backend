@@ -34,7 +34,7 @@
 | A-10 | A separate SPA is the only client and talks only to this API. | §16 |
 | A-11 | Admins enter model IDs, capabilities, limits, and prices through the admin API/UI. Nothing is seeded in code except a documented example seed file. | §6, §17 |
 | A-12 | **Client-disconnect policy:** generation continues server-side after the SSE connection drops; if no subscriber re-attaches within a 60 s grace period, it is cancelled and partial output is persisted. Explicit user "Stop" cancels immediately. | §14, §19 |
-| A-13 | Admins and auditors **cannot read conversation content or file contents** by default. Break-glass access is a post-MVP, separately approved capability. | §15, §20 |
+| A-13 | Admins **cannot read conversation content or file contents** by default. Break-glass access is a post-MVP, separately approved capability. | §15, §20 |
 | A-14 | Extracted document text is retained with the conversation after the binary expires, so long conversations keep working (flag `RETAIN_EXTRACTIONS=true`). Confirmed by Q-4 (closed, v1.2). | §12 |
 | A-15 | Authentication is **email + password with a server-backed, stateful session stored in PostgreSQL** (no OIDC/SSO in MVP; MFA is out of scope). Accounts are created by admins; there is no self-registration. `users.idp_subject` is kept (nullable) so OIDC can be re-attached later without a migration. | §6, §15, §17, §28 |
 | A-16 | Provider API keys are supplied through the **process environment / `.env` secret file** (never stored in the database, never in code or images). `providers.secret_ref` holds the **environment variable name**, not the key. Rotation is an operator action — update the env/secret file and restart the process (rolling restart; no code deploy). No secret manager in MVP. | §9, §15, §20, §24 |
@@ -127,9 +127,8 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 | Persona | Needs | Notes |
 |---|---|---|
 | **Employee (user)** | Chat with a chosen model, attach documents/images, see history, see own remaining quota | ~95 % of users; mostly non-technical |
-| **Division manager** *(P2 — view only via admin)* | See division consumption | In MVP handled by admins/auditors |
-| **Administrator** | Provision users, set quotas, enable/disable models, investigate errors/usage | 2–5 people; cannot read chat content (A-13) |
-| **Auditor / Security** | Review audit logs and usage, no content access | Read-only role |
+| **Division manager** *(P2 — view only via admin)* | See division consumption | In MVP handled by admins |
+| **Administrator** | Provision users, set quotas, enable/disable models, investigate errors/usage, review audit logs | 2–5 people; cannot read chat content (A-13) |
 | **Platform engineer** | Deploy, monitor, back up, rotate keys | Needs health checks, metrics, runbooks |
 
 ## 5. User Stories
@@ -150,7 +149,7 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 | US-12 | Admin | to disable a model or user instantly | I can respond to incidents/cost spikes | P0 |
 | US-13 | Admin | to see usage by user/model/provider/day | I can report and forecast | P0 |
 | US-14 | Admin | to see provider health and recent errors | I can diagnose problems quickly | P1 |
-| US-15 | Auditor | to review who changed what | I can satisfy compliance | P0 |
+| US-15 | Admin | to review who changed what | I can satisfy compliance | P0 |
 | US-16 | Platform engineer | traceable request IDs and metrics | I can debug production | P0 |
 
 ## 6. Functional Requirements
@@ -159,7 +158,7 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 - **FR-AUTH-1 (P0)** Email + password authentication (locally managed credentials) with a **server-backed, stateful session stored in PostgreSQL**, delivered as an opaque `__Host-session` cookie. Passwords are hashed with **argon2id**.
 - **FR-AUTH-2 (P0)** Accounts are **provisioned by admins** (single create P0; CSV bulk import P1); the division is assigned by an admin. There is **no just-in-time provisioning and no self-registration**. The initial password is set by the admin and must be changed on first login.
 - **FR-AUTH-3 (P0)** Admin can disable a user; disabled users lose access on the next request and active sessions are revoked immediately.
-- **FR-AUTH-4 (P0)** Roles: `user`, `admin`, `auditor`.
+- **FR-AUTH-4 (P0)** Roles: `user`, `admin`.
 - **FR-AUTH-5 (P0)** Password policy and protection: minimum length 12, argon2id hashing, per-account lockout after 8 consecutive failures (15 min) plus a per-IP limit on the login route (§15.4); failures return a generic error (no user enumeration) and are audited.
 - **FR-AUTH-6 (P0)** A signed-in user can change their own password; the change revokes all **other** sessions.
 - **FR-AUTH-7 (P0)** An admin can reset a user's password (reason required); the reset revokes **all** of the user's sessions, forces a change at next login, and is audited.
@@ -169,7 +168,7 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 ### 6.2 Model & provider registry
 - **FR-MODEL-1 (P0)** Providers and models are rows, editable at runtime by admins (no deploy).
 - **FR-MODEL-2 (P0)** Each model declares capabilities: streaming, vision, document types, image generation, document generation, system prompt support, tools (reserved), context window, max output tokens.
-- **FR-MODEL-3 (P0)** Model states: `active`, `disabled`, `deprecated` (visible, warns, no new conversations), `retired` (hidden for new; history readable; no new messages).
+- **FR-MODEL-3 (P0)** Model states: `active`, `disabled`.
 - **FR-MODEL-4 (P1)** Model visibility per division (allow-list rules).
 - **FR-MODEL-5 (P0)** `GET /models` returns only models the caller may use, with capabilities in normalized form — no provider names required by the UI beyond a display label.
 
@@ -204,6 +203,7 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 - **FR-QUOTA-4 (P0)** Append-only usage ledger; admin adjustments are ledger entries.
 - **FR-QUOTA-5 (P0)** Users can view their quota and usage; admins can view everyone's.
 - **FR-QUOTA-6 (P2)** Provider- and model-specific token caps (schema-ready, §11.9).
+- **FR-QUOTA-7 (P0)** Token estimation uses the tokenizer designated for each provider: `tiktoken` for OpenAI-compatible adapters, a local port of `dhamaniasad/claude-tokenizer` for Anthropic, and the adapter's own local tokenizer/BPE heuristic (with safety margin) elsewhere. Estimation is offline by default and never blocks request intake on network I/O.
 
 ### 6.7 Admin
 See §20. Users, quotas, models, providers, usage analytics, provider health, errors, audit log.
@@ -412,7 +412,8 @@ export interface ProviderAdapter {
   /** Pure transform used by tests and by token estimation. No network. */
   toProviderRequest(req: NormalizedChatRequest): unknown;
 
-  /** Estimate input tokens. May use local tokenizer or provider count endpoint. */
+  /** Estimate input tokens. MUST use the adapter's designated tokenizer (see §11.2);
+   *  may use a provider count endpoint only when latency allows. No network by default. */
   estimateInputTokens(req: NormalizedChatRequest): Promise<{ tokens: number; confidence: 'exact' | 'approx' }>;
 
   /** Execute and stream normalized events. MUST honor signal; MUST emit exactly one terminal event
@@ -432,11 +433,12 @@ Rules:
 - Non-streaming models (or job-style image/doc generation) still return `AsyncIterable` — they emit `started → part_* → usage → finished` in one burst. The orchestrator has one code path.
 - Adapters never persist anything and never touch storage; binary output arrives as `artifact_chunk` events and is stored by the **ArtifactSink**.
 - Provider-specific knobs (e.g., safety settings, reasoning effort, beta headers) live in `providers.config` / `models.config` JSON, validated by a Zod schema owned by the adapter.
+- **Tokenizer library per provider.** Adapter `openai` memakai `tiktoken` (WASM, offline); adapter `anthropic` memakai port lokal dari `dhamaniasad/claude-tokenizer`; adapter lain memakai tokenizer lokal/heuristik BPE miliknya. Setiap dependency tokenizer berada di dalam folder adapter (`src/providers/adapters/<name>/`) dan **wajib lazy-init** (lihat R19) karena inisialisasi encoding memakan puluhan MB dan puluhan milidetik pada cold start.
 
 ### 9.4 Provider registry & model registry (runtime, DB-driven)
 
 - `providers`: key, display name, `adapter` key, base URL override, `secret_ref` (**the name of the environment variable holding the API key — never the key itself** — A-16), status, timeouts, `config` JSON.
-- `models`: FK provider, `api_model_id` (provider's identifier), display name, status, capabilities JSON, `context_window`, `max_output_tokens`, `default_max_output_tokens`, `quota_weight`, `config` JSON, `retire_at`, `replacement_model_id`.
+- `models`: FK provider, `api_model_id` (provider's identifier), display name, status (`active` | `disabled`), capabilities JSON, `context_window`, `max_output_tokens`, `default_max_output_tokens`, `quota_weight`, `config` JSON.
 - `model_pricing`: effective-dated input/output/cached prices (for cost *estimates*).
 - Registry is cached in-process (TTL 30 s + invalidation on admin write) so a disabled model stops accepting new generations within seconds. In-flight generations keep the runtime config they started with; `usage_records` captures `model_id` so later registry edits don't rewrite history.
 
@@ -446,8 +448,6 @@ Rules:
 |---|---|---|---|---|
 | `active` | ✅ | ✅ | ✅ | — |
 | `disabled` (admin kill-switch) | ❌ | ✅ | ❌ `model_unavailable` | "Model temporarily unavailable" |
-| `deprecated` | ❌ | ✅ | ✅ | "Model will be retired on {retire_at}" |
-| `retired` | ❌ | ✅ | ❌ `model_unavailable` + `replacementModelId` | Offer **Continue in another model** (FR-CONV-6) |
 
 > **Decision D-4 — Capability flags, not provider checks**
 > - *Why:* Orchestrator/ContextBuilder must ask "can this model take images?" not "is this OpenAI?".
@@ -573,13 +573,21 @@ with a system instruction that content inside is data, not instructions (§15.8)
 
 ```
 est_input     = adapter.estimateInputTokens(request).tokens × margin
-margin        = 1.00 (exact count endpoint) | 1.10 text approx | 1.25 when images/PDF present   // calibrate with real data
+margin        = 1.00 (tokenizer lokal provider / exact count endpoint) | 1.10 (tokenizer pendekatan / teks approx) | 1.25 (bila ada images/PDF)   // calibrate with real data
 worst_output  = effective_max_output_tokens
 reserve_raw   = est_input + worst_output
 reserve       = ceil(reserve_raw × model.quota_weight)
 ```
 
-- Local tokenizers/heuristics are used by default (no network); adapters may call a provider count endpoint when exact counts matter and latency allows.
+- **Tokenizer per provider (dipilih oleh adapter; tidak ada network call):**
+
+  | Provider | Tokenizer | Margin default |
+  |---|---|---|
+  | `openai` (ChatGPT) | **`tiktoken`** (`@dqbd/tiktoken` / `js-tiktoken`, WASM, offline) | `1.00` — encoding lokal identik dengan provider; deviasi hanya dari overhead pesan (`<im_start>`/`<im_end>`, ~3–4 token/pesan) yang ditambahkan eksplisit oleh adapter |
+  | `anthropic` (Claude) | **Port dari [`dhamaniasad/claude-tokenizer`](https://github.com/dhamaniasad/claude-tokenizer)** ke TypeScript (BPE package di `src/providers/adapters/anthropic/tokenizer/`) | `1.10` — Claude tidak mempublikasikan encoding resmi; referensi ini adalah pendekatan terbaik yang tersedia |
+  | lainnya (mis. `gemini`) | **Tokenizer lokal / heuristik BPE** yang sudah dimiliki adapter, tanpa network | `1.10` teks murni; `1.25` bila ada gambar/PDF |
+
+- Adapter boleh memakai endpoint count resmi provider **hanya bila `latency` diizinkan**; bila dipakai, `confidence: 'exact'` dan margin di tabel di atas dapat diturunkan ke `1.00`. Bila tidak dipakai, `confidence: 'approx'`.
 - Image/PDF token costs are estimated from dimensions/pages using per-provider formulas inside the adapter (**calibrate against real usage reports during Phase 3; track `estimation_error_ratio` metric**).
 - `effective_max_output_tokens = min(request.max_output, policy.max_output_per_request, model.max_output_tokens)`, further clamped so `est_input + output ≤ remaining_quota` when remaining quota is lower than a full reserve and at least `MIN_USEFUL_OUTPUT` (default 256) remains; otherwise reject with `quota_exceeded`. This lets users spend their last tokens without overshoot.
 - Rejections before reservation: `est_input > policy.max_input_tokens_per_request` → `context_too_large`.
@@ -810,7 +818,7 @@ A crash between steps is repaired by the next run (step 2 is idempotent). A **we
 
 ### 12.9 Secure exposure
 - Clients never receive paths. API returns `downloadUrl: /api/files/{id}/content`.
-- `GET /files/:id/content` authenticates the session, checks `owner_user_id = caller` (admins/auditors **not** exempt, A-13), `status = ready`, not expired; streams with `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment` for everything except validated images (`inline`), and `Content-Security-Policy: sandbox; default-src 'none'`. Supports `Range` for large files.
+- `GET /files/:id/content` authenticates the session, checks `owner_user_id = caller` (admins **not** exempt, A-13), `status = ready`, not expired; streams with `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment` for everything except validated images (`inline`), and `Content-Security-Policy: sandbox; default-src 'none'`. Supports `Range` for large files.
 - Access to files in a soft-deleted conversation → `404`.
 - `FileAccessService.getDownloadTarget()` returns `{kind:'stream'}` (local) or `{kind:'redirect', url}` (S3 signed URL, 60 s). Route code handles both, so the S3 migration doesn't alter the API contract.
 
@@ -905,8 +913,8 @@ Response headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache, n
 
 ```
 pending ──start──► generating ──► completed
-   │                  ├──────────► cancelled   (user cancel | detach timeout | shutdown-drain-expiry*)
-   │                  └──────────► failed      (provider error | timeout | interrupted | file processing)
+   │                  ├──────────► cancelled   (user cancel | detach timeout)
+   │                  └──────────► failed      (shutdown-drain-expiry*: interrupted; provider error | timeout | interrupted | file processing)
    └──────────cancel/fail before start──────► cancelled | failed
 ```
 \*Shutdown: drain first (§24.6); anything still running at drain expiry becomes `failed(interrupted)`.
@@ -987,13 +995,13 @@ No second job system is needed: the generation record **is** the job record.
 
 ### 15.2 Authorization & RBAC
 
-| Capability | user | auditor | admin |
-|---|---|---|---|
-| Own conversations/files/usage | ✅ | ✅ (own) | ✅ (own) |
-| Other users' conversation content / files | ❌ | ❌ | ❌ (A-13) |
-| View all usage, quotas, models, provider health | ❌ | ✅ | ✅ |
-| View audit logs, system errors | ❌ | ✅ | ✅ |
-| Manage users, quotas, models, providers | ❌ | ❌ | ✅ |
+| Capability | user | admin |
+|---|---|---|
+| Own conversations/files/usage | ✅ | ✅ (own) |
+| Other users' conversation content / files | ❌ | ❌ (A-13) |
+| View all usage, quotas, models, provider health | ❌ | ✅ |
+| View audit logs, system errors | ❌ | ✅ |
+| Manage users, quotas, models, providers | ❌ | ✅ |
 
 **Object-level authorization is structural:** repositories require an `AuthContext` and always filter on `user_id`; accessing another user's resource returns **404** (not 403) to avoid existence leaks. A lint/test asserts no repository method for user-owned entities is callable without an `AuthContext`.
 
@@ -1106,14 +1114,14 @@ Zod schemas on every route (params, query, body, headers); reject unknown fields
 | | `GET/PUT /admin/divisions…` | Divisions | admin |
 | **Admin – quota** | `GET/PUT /admin/quota-policies/:scope/:id?` | Policy by `global`/`division`/`user` | admin |
 | | `POST /admin/users/:id/quota/adjustments` | Grant/claw back with reason | admin |
-| | `GET /admin/users/:id/quota` | Period state + ledger | admin/auditor |
+| | `GET /admin/users/:id/quota` | Period state + ledger | admin |
 | **Admin – models** | `GET/POST /admin/providers`, `PATCH /admin/providers/:id` | Provider config including `secretRef` (the env var name; the key itself is never accepted or returned — A-16) | admin |
 | | `GET/POST /admin/models`, `PATCH /admin/models/:id` | Registry, capabilities, status, pricing | admin |
-| | `GET /admin/providers/health` | Latest health + circuit state | admin/auditor |
+| | `GET /admin/providers/health` | Latest health + circuit state | admin |
 | | `POST /admin/providers/:id/test` | Run health check now | admin |
-| **Admin – reporting** | `GET /admin/usage?from&to&groupBy=user\|model\|provider\|day\|month\|division` | Aggregated usage | admin/auditor |
-| | `GET /admin/errors?from&to&category` | Sanitized system errors | admin/auditor |
-| | `GET /admin/audit-logs?…` | Audit log search | admin/auditor |
+| **Admin – reporting** | `GET /admin/usage?from&to&groupBy=user\|model\|provider\|day\|month\|division` | Aggregated usage | admin |
+| | `GET /admin/errors?from&to&category` | Sanitized system errors | admin |
+| | `GET /admin/audit-logs?…` | Audit log search | admin |
 | **Ops** | `GET /healthz`, `GET /readyz`, `GET /metrics` | Liveness, readiness, Prometheus (network-restricted) | internal |
 
 ### 16.3 Models
@@ -1306,7 +1314,7 @@ CREATE TABLE users (
   must_change_password boolean NOT NULL DEFAULT true,
   failed_login_attempts int NOT NULL DEFAULT 0,
   locked_until timestamptz,
-  role text NOT NULL DEFAULT 'user' CHECK (role IN ('user','admin','auditor')),
+  role text NOT NULL DEFAULT 'user' CHECK (role IN ('user','admin')),
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   division_id uuid REFERENCES divisions(id),
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -1340,7 +1348,7 @@ CREATE TABLE models (
   key text NOT NULL UNIQUE,                    -- internal slug
   api_model_id text NOT NULL,                  -- provider identifier (admin-entered)
   display_name text NOT NULL, description text,
-  status text NOT NULL DEFAULT 'disabled' CHECK (status IN ('active','disabled','deprecated','retired')),
+  status text NOT NULL DEFAULT 'disabled' CHECK (status IN ('active','disabled')),
   capabilities jsonb NOT NULL,                 -- see §9.2 ModelCapabilities (+schemaVersion)
   context_window int NOT NULL CHECK (context_window > 0),
   max_output_tokens int NOT NULL CHECK (max_output_tokens > 0),
@@ -1348,7 +1356,6 @@ CREATE TABLE models (
   quota_weight numeric(8,3) NOT NULL DEFAULT 1.000 CHECK (quota_weight > 0),
   config jsonb NOT NULL DEFAULT '{}',
   sort_order int NOT NULL DEFAULT 0,
-  retire_at timestamptz, replacement_model_id uuid REFERENCES models(id),
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -1618,7 +1625,7 @@ All errors surface as the envelope in §16.1. `AppErrorCategory` is the single v
 | `not_found` | 404 | no | Also used for other users' resources |
 | `conflict` / `generation_in_progress` | 409 | after finish | Another generation is active in this conversation |
 | `idempotency_key_reuse` | 422 | no | Same key, different payload |
-| `model_unavailable` | 409 | later | Model disabled/retired/not permitted; may include `replacementModelId` |
+| `model_unavailable` | 409 | later | Model disabled or not permitted |
 | `unsupported_for_model` | 422 | no | e.g., image sent to a non-vision model |
 | `provider_unavailable` | 503 | yes | Provider down/overloaded/misconfigured (details hidden) |
 | `provider_rate_limited` | 503 | yes (`Retry-After`) | Upstream throttling (distinct from user's own `rate_limited`) |
@@ -1667,6 +1674,7 @@ Errors after the stream starts cannot change the HTTP status; they are delivered
 | API request (non-streaming routes) | 30 s | `503/504`, logged |
 | Upload request | 120 s | abort, cleanup temp |
 | Provider connect | 10 s | retryable `provider_unavailable` |
+| Tokenizer cold init + estimation (first request in a process) | 250 ms (setelah warm: 20 ms untuk 200 KB teks) | local failure, non-retryable `internal_error` (tidak dikirim ke client sebagai provider error) |
 | Time to first provider event | 45 s (120 s for reasoning-heavy/doc generation) | retryable (pre-output) |
 | Idle gap between provider events | 60 s | `generation_timeout`, partial kept |
 | Max generation duration | 300 s (180 s typical text; up to 900 s for job-style models) | `generation_timeout` |
@@ -1712,13 +1720,13 @@ Subscriber removed → detach timer (60 s) → continue or cancel. Reconnect wit
 |---|---|---|
 | Users | List/search; view role, division, status, last login; create/pre-provision; change role/division; **reset password** (revokes all sessions, forces change); **enable/disable** (revokes sessions) | P0 |
 | Divisions | Create/rename; assign users to a division (no IdP group mapping in MVP) | P0 |
-| Quotas | Set global/division/user policies; grant/claw back with reason; view current period & ledger | P0 |
-| Models | Create/edit registry rows; enable/disable/deprecate/retire; edit capabilities, context window, max output, quota weight, pricing, provider-specific config | P0 |
+| Quotas | Set global/division/user policies; grant/claw back with reason; view current period & ledger; set reset date (on specific day/date) | P0 |
+| Models | Create/edit registry rows; enable/disable (global/divisions); edit capabilities, context window, max output, quota weight, pricing, provider-specific config | P0 |
 | Providers | Create/edit; set `secretRef` (the env var name; the key itself is configured in the deployment environment — A-16); enable/disable; set concurrency/timeouts; run health check | P0 |
 | Provider health | See last health-check result, latency, error rate (5/60 min), circuit state; run test | P1 |
 | Usage | Dashboards/queries below | P0 |
 | Errors | List sanitized `error_events` by category/provider/model/time | P1 |
-| Audit | Search `audit_logs` (admin + auditor) | P0 |
+| Audit | Search `audit_logs` (admin) | P0 |
 | Settings | Edit platform system prompt, file limits, retention values (versioned, audited) | P1 |
 
 Safeguards: cannot disable/demote the last active admin; admins cannot access others' conversation/file content (A-13); every mutation is audited with before/after; destructive actions require a `reason`.
@@ -1731,7 +1739,7 @@ Safeguards: cannot disable/demote the last active admin; admins cannot access ot
 ## 21. Observability
 
 ### 21.1 Request identity
-Each inbound request gets `requestId` (ULID). Each generation inherits it and also has `generationId`. IDs propagate through logs, spans, SSE events, `error_events`, and (where the provider supports metadata) as an opaque tag. Provider request IDs are stored on `generations.provider_request_id` for support tickets.
+Each inbound request gets `requestId` (UUID). Each generation inherits it and also has `generationId`. IDs propagate through logs, spans, SSE events, `error_events`, and (where the provider supports metadata) as an opaque tag. Provider request IDs are stored on `generations.provider_request_id` for support tickets.
 
 ### 21.2 Structured logs (JSON via pino)
 Required fields on generation lifecycle logs: `ts, level, requestId, userId, conversationId, messageId, generationId, provider, model, status, startedAt, durationMs, ttftMs, inputTokens, outputTokens, quotaTokens, usageSource, errorCategory, attempt`.
@@ -1823,7 +1831,7 @@ Vitest (unit/integration), Testcontainers for real PostgreSQL (and Redis if used
 
 | Level | Scope | Examples | Gate |
 |---|---|---|---|
-| Unit | Pure logic | Context truncation, token estimation margins, error mapping, filename sanitizer, state-machine transitions, idempotency hashing | PR |
+| Unit | Pure logic | Context truncation, token estimation margins, per-provider tokenizer estimation (tiktoken fixtures, Claude tokenizer fixtures), error mapping, filename sanitizer, state-machine transitions, idempotency hashing | PR |
 | Integration | Services + real DB | Reserve/settle/release, ledger invariants, migrations, repositories' isolation filters, file pipeline with real storage dir | PR |
 | **Provider adapter contract** | Each adapter vs shared suite | See §23.3 | PR (fixtures) + nightly (live, capped) |
 | API | Hono `app.request()` | AuthN/Z matrix, validation, error envelope, pagination | PR |
@@ -2002,7 +2010,7 @@ Model visibility per division · circuit breaker · provider health page · erro
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| R1 | Token estimation inaccurate (esp. images/PDFs) → over-reservation (user frustration) or overshoot | High | Medium | Calibrated margins; output clamping; actual-usage settlement; `estimation_error_ratio` metric; revisit margins monthly |
+| R1 | Token estimation inaccurate (esp. images/PDFs) → over-reservation (user frustration) or overshoot | High | Medium | Tokenizer per provider (`tiktoken` untuk OpenAI, port `claude-tokenizer` untuk Anthropic — §11.2); local tokenizer/BPE + margin untuk provider lain; calibrated margins; output clamping; actual-usage settlement; `estimation_error_ratio` metric; revisit margins monthly |
 | R2 | Provider outage/rate limits | High | High | Timeouts, bounded retries, circuit breaker, concurrency caps, clear UX, status page; no silent fallback (by requirement) |
 | R3 | Provider usage not reported on abort/failure | Medium | Medium | Estimated settlement policy; document as known inaccuracy; measure delta |
 | R4 | Single-node in-process generation ownership limits scale/HA | Medium | Medium | A-4 explicit; fast recovery via reaper; Redis relay path designed; load tested |
@@ -2020,6 +2028,8 @@ Model visibility per division · circuit breaker · provider health page · erro
 | R16 | Provider API key leak (`.env`/secret file, logs, repo, or a compromised host) | Medium | High | Keys only in env/secret files (`0600`, not in VCS/images/DB backups), Pino redaction + CI secret scanning, egress allow-list, provider-console spend caps, documented rotate-and-restart runbook, separate keys per environment |
 | R17 | Password attacks (credential stuffing, spraying) and account takeover; no MFA | Medium | High | argon2id hashing, per-account lockout + per-IP login limit, generic errors (no enumeration), full audit of login failures, admin reset revokes sessions; MFA out of MVP (Q-14, closed v1.2) |
 | R18 | Provider-key rotation requires a process restart (A-16) | Low | Medium | Rolling restart with the standby node (§24.6) so rotation causes no downtime; spend caps limit exposure during the window |
+| R19 | Tokenizer initialization cost: `tiktoken` (WASM) memuat encoding puluhan MB dan puluhan ms saat cold start; port Claude tokenizer memuat tabel BPE miliknya; risiko memori/RSS naik dan latency request pertama pada satu node | Medium | Low | **Lazy `init()` per adapter** (memoized `Promise`, bukan di-import saat boot); satu instance encoding di-cache per proses (encoding berbeda di-key by nama encoding); WASM dijalankan di worker thread bila terbukti memblokir event loop saat load ~200 KB konteks; diukur sebagai bagian dari load test Phase 5 |
+| R20 | Akurasi tokenizer Claude bersifat pendekatan (tidak ada encoding resmi dari Anthropic) → salah estimasi input bisa menaikkan overshoot atau over-reservation | Medium | Medium | Margin `1.10` sebagai buffer; verifikasi terhadap **usage aktual provider** (perbandingan `estimation_error_ratio`) per model, dengan override margin per model via `models.config` bila deviasi konsisten; settlement selalu memakai usage aktual sehingga risiko hanya pada penguncian kuota sementara |
 
 ## 28. Open Questions
 
@@ -2036,7 +2046,7 @@ Model visibility per division · circuit breaker · provider health page · erro
 | Q-7 | ~~Break-glass local admin if IdP is down?~~ **Closed (v1.1)** — no IdP; the first admin is created by the `bootstrap-admin` CLI/migration (FR-AUTH-8). | Closed | Security |
 | Q-8 | ~~Secret manager available (Vault/cloud)? If not, accept envelope-encrypted provider keys in DB?~~ **Closed (v1.1)** — provider keys come from the process environment/`.env` (A-16); no secret manager and no DB storage; rotation = update env + restart. | Closed | Platform |
 | Q-9 | ~~Quota period timezone?~~ **Closed (v1.1)** — configurable, default **UTC+7 (`Asia/Jakarta`)**. | Closed | Product |
-| Q-10 | ~~Do admins/auditors ever need content access (investigations)? Approval process?~~ **Closed (v1.2)** — no; admins/auditors never receive content access, including for investigations (A-13). | Closed | Security |
+| Q-10 | ~~Do admins ever need content access (investigations)? Approval process?~~ **Closed (v1.2)** — no; admins never receive content access, including for investigations (A-13). | Closed | Security |
 | Q-11 | ~~Initial model list and per-model prices for cost estimates?~~ **Closed (v1.2)** — first adapters OpenAI + Anthropic, Gemini third (Phase 4); the model list/prices are entered by an admin at launch. | Closed | Product |
 | Q-12 | ~~Is single-region, single-node acceptable for the availability target (99.5 %)?~~ **Closed (v1.2)** — yes; one active node plus a standby for rolling deploys (A-4). | Closed | Platform |
 | Q-13 | ~~Language/localization of server-side error messages?~~ **Closed (v1.2)** — English human-readable messages plus stable machine-readable error codes. | Closed | Product |
@@ -2049,10 +2059,10 @@ Model visibility per division · circuit breaker · provider health page · erro
 | **0 — Foundations** | 1–1.5 wks | Repo, CI, config validation, DB migrations baseline, Hono skeleton, request IDs, error envelope, logging/metrics, **email/password auth (argon2id, lockout, PostgreSQL sessions), bootstrap-admin CLI, admin user provisioning + password reset**, RBAC, audit writer, FakeProvider | Auth + RBAC tests green; deploy to staging |
 | **1 — Registry & conversations** | 1.5 wks | Providers/models registry + admin APIs, conversations/messages/parts schema, model-lock trigger, list/load APIs, context builder (text), system settings | Create conversation with model; history loads; model immutability enforced |
 | **2 — Generation core** | 2 wks | Orchestrator/runner, adapter interface, **2 adapters** (OpenAI + Anthropic), SSE stream, checkpointing, finalizer, cancel, reaper, idempotent send, retry/timeouts, error translation, contract suite | Streaming works E2E; kill -9 recovery; contract tests green |
-| **3 — Quota & usage** | 2 wks | Policies, periods, reservation/settlement/release, ledger, reaper, estimation + margins, usage records/rollups, `/me/quota`, admin quota APIs, reconciliation | Concurrency/property tests green; 14-day staging reconciliation clean (starts here, finishes in Phase 5) |
+| **3 — Quota & usage** | 2 wks | Policies, periods, reservation/settlement/release, ledger, reaper, estimation + per-provider tokenizer (`tiktoken` / `claude-tokenizer` port) + margins, usage records/rollups, `/me/quota`, admin quota APIs, reconciliation | Concurrency/property tests green; 14-day staging reconciliation clean (starts here, finishes in Phase 5) |
 | **4 — Files & multimodal** | 2 wks | StorageProvider + Local impl, upload pipeline + hardening, extraction jobs, multimodal context/adapters, download endpoint, cleanup jobs, generated-artifact path (ArtifactSink tested with FakeProvider), **third adapter (Gemini)** | Upload/attach/answer flows work for MVP types; hardening tests green; third adapter needed zero core changes |
 | **5 — Admin, observability, hardening** | 1.5–2 wks | Admin usage/health/errors/audit APIs, dashboards + alerts, rate limiting, security headers/CORS, pen-test fixes, load/soak tests, runbooks, backup/restore drill | Production readiness checklist (§25) fully checked |
-| **6 — Pilot & launch** | 2 wks | Pilot with one division, calibrate estimation margins, tune limits, fix issues, go-live | SLOs met 2 weeks; no P1 defects |
+| **6 — Pilot & launch** | 2 wks | Pilot with one division, calibrate estimation margins & tokenizer per provider, tune limits, fix issues, go-live | SLOs met 2 weeks; no P1 defects |
 | **Post-MVP** | — | P1 items, S3 migration, multi-node streaming, then P2 features (§26.3) | — |
 
 **Total to production-ready MVP: ~11–13 weeks** (estimate; depends on team size and legal/security review lead times; no external IdP integration is required — v1.1).

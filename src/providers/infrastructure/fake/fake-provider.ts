@@ -8,6 +8,7 @@ import type { GenerationEvent, TokenUsage } from '@/providers/domain/pal.ts';
 import type {
   EstimateResult,
   ExecuteContext,
+  HealthCheckContext,
   HealthCheckResult,
   ProviderAdapter,
 } from '@/providers/ports/provider-adapter.ts';
@@ -25,7 +26,10 @@ export type FakeScenario =
   | 'provider_rate_limited'
   | 'provider_unavailable'
   | 'content_filtered'
-  | 'timeout';
+  | 'timeout'
+  | 'malformed_event'
+  | 'no_usage'
+  | 'huge_burst';
 
 export interface FakeProviderOptions {
   readonly adapterKey?: string;
@@ -34,23 +38,31 @@ export interface FakeProviderOptions {
   readonly chunkDelayMs?: number;
   readonly usage?: Partial<TokenUsage>;
   readonly providerRequestId?: string;
+  /** Fail after this many emitted deltas for the error_after_output scenario. */
+  readonly errorAfterChunks?: number;
+  /** Number of deltas for huge_burst; defaults to the Phase 2 stress size. */
+  readonly hugeBurstSize?: number;
+  /** When true, execute generator hangs and ignores abort signal to test runner race semantics. */
+  readonly ignoreAbort?: boolean;
 }
 
 const DEFAULT_CHUNKS: readonly string[] = ['Hello', ' from', ' the', ' fake', ' provider.'];
 
-function delay(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(new Error('aborted'));
+function delay(ms: number, signal: AbortSignal, ignoreAbort = false): Promise<void> {
+  if (!ignoreAbort && signal.aborted) return Promise.reject(new Error('aborted'));
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
+      if (!ignoreAbort) signal.removeEventListener('abort', onAbort);
       resolve();
     }, ms);
     const onAbort = (): void => {
       clearTimeout(timer);
       reject(new Error('aborted'));
     };
-    signal.addEventListener('abort', onAbort, { once: true });
+    if (!ignoreAbort) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 
@@ -62,6 +74,9 @@ export class FakeProvider implements ProviderAdapter {
   private readonly chunkDelayMs: number;
   private readonly usageOverride: Partial<TokenUsage>;
   private readonly providerRequestId: string;
+  private readonly errorAfterChunks: number | undefined;
+  private readonly hugeBurstSize: number;
+  private readonly ignoreAbort: boolean;
 
   constructor(options: FakeProviderOptions = {}) {
     this.adapterKey = options.adapterKey ?? 'fake';
@@ -70,6 +85,9 @@ export class FakeProvider implements ProviderAdapter {
     this.chunkDelayMs = options.chunkDelayMs ?? 0;
     this.usageOverride = options.usage ?? {};
     this.providerRequestId = options.providerRequestId ?? 'fake-request-1';
+    this.errorAfterChunks = options.errorAfterChunks;
+    this.hugeBurstSize = options.hugeBurstSize ?? 10_000;
+    this.ignoreAbort = options.ignoreAbort ?? false;
   }
 
   toProviderRequest(req: NormalizedChatRequest): unknown {
@@ -99,21 +117,19 @@ export class FakeProvider implements ProviderAdapter {
     return { tokens: Math.ceil(textLength / 4) + 8, confidence: 'approx' };
   }
 
-  async *execute(
-    req: NormalizedChatRequest,
-    ctx: ExecuteContext,
-  ): AsyncIterable<GenerationEvent> {
-    if (ctx.signal.aborted) {
+  async *execute(req: NormalizedChatRequest, ctx: ExecuteContext): AsyncIterable<GenerationEvent> {
+    if (!this.ignoreAbort && ctx.signal.aborted) {
       yield { type: 'error', error: this.translateError(new Error('aborted')) };
       return;
     }
 
     if (this.scenario === 'timeout') {
       try {
-        await delay(60_000, ctx.signal);
+        await delay(60_000, ctx.signal, this.ignoreAbort);
       } catch {
+        // Ignored on abort
       }
-      
+
       yield { type: 'error', error: this.timeoutError() };
       return;
     }
@@ -127,22 +143,40 @@ export class FakeProvider implements ProviderAdapter {
       type: 'started',
       ...(this.providerRequestId !== '' ? { providerRequestId: this.providerRequestId } : {}),
     };
+
+    if (this.scenario === 'malformed_event') {
+      yield { type: 'unknown_corrupted_event' } as unknown as GenerationEvent;
+    }
+
     yield { type: 'part_started', index: 0, partType: 'text' };
 
     let outputChars = 0;
-    for (const chunk of this.chunks) {
+    const chunksToEmit =
+      this.scenario === 'huge_burst'
+        ? Array.from({ length: this.hugeBurstSize }, (_, i) => `burst-chunk-${i} `)
+        : this.chunks;
+
+    for (const [index, chunk] of chunksToEmit.entries()) {
       try {
-        await delay(this.chunkDelayMs, ctx.signal);
+        await delay(this.chunkDelayMs, ctx.signal, this.ignoreAbort);
       } catch {
         yield { type: 'error', error: this.translateError(new Error('aborted')) };
         return;
       }
-      if (ctx.signal.aborted) {
+      if (!this.ignoreAbort && ctx.signal.aborted) {
         yield { type: 'error', error: this.translateError(new Error('aborted')) };
         return;
       }
       outputChars += chunk.length;
       yield { type: 'text_delta', index: 0, text: chunk };
+      if (
+        this.scenario === 'error_after_output' &&
+        this.errorAfterChunks !== undefined &&
+        index + 1 >= this.errorAfterChunks
+      ) {
+        yield { type: 'error', error: this.errorForScenario() };
+        return;
+      }
     }
 
     if (this.scenario === 'error_after_output') {
@@ -151,7 +185,10 @@ export class FakeProvider implements ProviderAdapter {
     }
 
     yield { type: 'part_done', index: 0 };
-    yield { type: 'usage', usage: this.usageFor(req, outputChars), final: true };
+
+    if (this.scenario !== 'no_usage') {
+      yield { type: 'usage', usage: this.usageFor(req, outputChars), final: true };
+    }
 
     if (this.scenario === 'content_filtered') {
       yield { type: 'finished', reason: 'content_filter' };
@@ -173,7 +210,7 @@ export class FakeProvider implements ProviderAdapter {
     });
   }
 
-  async healthCheck(_ctx: { signal: AbortSignal }): Promise<HealthCheckResult> {
+  async healthCheck(_ctx: HealthCheckContext): Promise<HealthCheckResult> {
     return { ok: this.scenario !== 'provider_unavailable', latencyMs: 0, detail: this.scenario };
   }
 
@@ -185,11 +222,15 @@ export class FakeProvider implements ProviderAdapter {
   private errorForScenario(): ProviderError {
     switch (this.scenario) {
       case 'provider_rate_limited':
-        return providerError('provider_rate_limited', 'The model provider is throttling requests.', {
-          retryable: true,
-          retryAfterMs: 1_000,
-          providerStatus: 429,
-        });
+        return providerError(
+          'provider_rate_limited',
+          'The model provider is throttling requests.',
+          {
+            retryable: true,
+            retryAfterMs: 1_000,
+            providerStatus: 429,
+          },
+        );
       case 'content_filtered':
         return providerError('content_filtered', 'The response was blocked by a safety filter.', {
           retryable: false,
@@ -239,7 +280,9 @@ export class FakeProvider implements ProviderAdapter {
 }
 
 /** Convenience factory used by tests to build a request double. */
-export function makeChatRequest(overrides: Partial<NormalizedChatRequest> = {}): NormalizedChatRequest {
+export function makeChatRequest(
+  overrides: Partial<NormalizedChatRequest> = {},
+): NormalizedChatRequest {
   const model: ModelRuntimeConfig = {
     modelId: 'model-1',
     providerId: 'provider-1',

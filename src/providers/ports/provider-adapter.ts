@@ -1,4 +1,4 @@
-import type { NormalizedChatRequest } from '../domain/capabilities.ts';
+import type { NormalizedChatRequest, ProviderRuntimeConfig } from '../domain/capabilities.ts';
 import type { ProviderError } from '../domain/errors.ts';
 import type { GenerationEvent } from '../domain/pal.ts';
 
@@ -16,6 +16,12 @@ export interface HealthCheckResult {
   readonly ok: boolean;
   readonly latencyMs: number;
   readonly detail?: string;
+}
+
+/** Provider config + resolved secrets, passed to a health check (no PAL request context). */
+export interface HealthCheckContext {
+  readonly provider: ProviderRuntimeConfig;
+  readonly signal: AbortSignal;
 }
 
 /**
@@ -39,5 +45,5 @@ export interface ProviderAdapter {
 
   translateError(err: unknown): ProviderError;
 
-  healthCheck(ctx: { signal: AbortSignal }): Promise<HealthCheckResult>;
+  healthCheck(ctx: HealthCheckContext): Promise<HealthCheckResult>;
 }

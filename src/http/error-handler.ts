@@ -23,6 +23,14 @@ export function onError(config: Config) {
       } else {
         logger.warn({ code: error.code, status: error.status, requestId }, 'request rejected');
       }
+      if (error.details !== null && typeof error.details === 'object') {
+        const detailsObj = error.details as Record<string, unknown>;
+        if (typeof detailsObj['retryAfterSeconds'] === 'number') {
+          c.header('Retry-After', String(detailsObj['retryAfterSeconds']));
+        } else if (typeof detailsObj['retryAfterMs'] === 'number') {
+          c.header('Retry-After', String(Math.max(1, Math.ceil(detailsObj['retryAfterMs'] / 1000))));
+        }
+      }
       const trace = includeTrace ? error.stack : undefined;
       return c.json(
         envelopeFromError(error, { includeTrace, trace }),

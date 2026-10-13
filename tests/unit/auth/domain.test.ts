@@ -59,7 +59,7 @@ describe('user domain', () => {
   it('checks roles', () => {
     expect(hasRole({ role: 'admin' }, 'admin')).toBe(true);
     expect(hasRole({ role: 'user' }, 'admin')).toBe(false);
-    expect(hasRole({ role: 'auditor' }, 'auditor', 'admin')).toBe(true);
+    expect(hasRole({ role: 'admin' }, 'admin', 'user')).toBe(true);
   });
 });
 
@@ -67,11 +67,9 @@ describe('session domain', () => {
   it('takes the earlier of the idle and absolute windows', () => {
     const created = t('2026-05-01T00:00:00Z');
     const policy = { idleMinutes: 480, absoluteMinutes: 1440 };
-    // seen just now → idle wins (8h)
     expect(computeExpiry(created, t('2026-05-01T00:00:00Z'), policy).toISOString()).toBe(
       '2026-05-01T08:00:00.000Z',
     );
-    // seen 20h after creation → the 24h absolute window wins over the idle window
     expect(computeExpiry(created, t('2026-05-01T20:00:00Z'), policy).toISOString()).toBe(
       '2026-05-02T00:00:00.000Z',
     );

@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Document status** | v1.1 — execution companion to `docs/PRD.md` (Draft v1.3) |
-| **Date** | 2026-10-08 |
+| **Document status** | v1.2 — execution companion to `docs/PRD.md` (Draft v1.3) |
+| **Date** | 2026-10-12 |
 | **Scope** | Phased build plan (Phase 0 → launch) **and** a native VPS deployment/operations guide (**systemd + PostgreSQL + Bun, no Docker**) |
 | **Sources of truth** | `docs/PRD.md` (behaviour) · `docs/API_CONTRACTS.md` (wire) · `AGENTS.md` (conventions & schema) |
 
@@ -12,8 +12,11 @@
 > migrations-as-pre-deploy rule, the blue/green standby (A-4) and the reverse-proxy requirements
 > (§24.3) are all preserved. Nothing here changes the application contract.
 >
-> The repository is currently **docs-only**. Phase 0 creates the code. Treat every command below as
-> the target convention; add the `package.json` scripts as you scaffold.
+> The repository is no longer docs-only: **Phase 0 and Phase 1 are implemented** (auth/RBAC,
+> migrations baseline, provider/model registry, conversations/messages/parts, context builder,
+> settings). Every command below is the working convention. Remaining before Phase 2: CI
+> workflow files, the staging deploy, and executing the Phase 1 integration suite against a real
+> PostgreSQL (CI or local).
 
 ---
 
@@ -27,8 +30,8 @@
 
 | Phase | Name | Est. | Exit gate | Done |
 |---|---|---|---|---|
-| 0 | Foundations (scaffold) | 1–1.5 wk | Auth + RBAC tests green; deploy to staging | [ ] |
-| 1 | Registry & conversations | 1.5 wk | Create conversation, history loads, model lock enforced | [ ] |
+| 0 | Foundations (scaffold) | 1–1.5 wk | Auth + RBAC tests green; deploy to staging | [x] code · [ ] CI + staging |
+| 1 | Registry & conversations | 1.5 wk | Create conversation, history loads, model lock enforced | [x] code · [ ] integration suite run |
 | 2 | Generation core | 2 wk | Streaming E2E; kill -9 recovery; adapter contract tests green | [ ] |
 | 3 | Quota & usage | 2 wk | Concurrency/property tests green; reconciliation clean | [ ] |
 | 4 | Files & multimodal | 2 wk | Upload/attach/answer works; third adapter = zero core changes | [ ] |
@@ -45,9 +48,10 @@ Copied from `AGENTS.md` — these are not revisited during the build.
 - **Runtime:** Bun.js LTS. **HTTP:** Hono (`streamSSE`). **Language:** TypeScript strict. **DB:** PostgreSQL 15+. **Query layer:** Drizzle + Zod at every boundary. **Cache:** Redis optional (never required for correctness or sign-in). **Tests:** Vitest + Testcontainers + `FakeProvider`.
 - **No provider SDK import outside `src/providers/`** (lint-enforced).
 - **No secret in code, DB, or logs.** Provider keys come from the environment/`.env`; `ai_providers.secret_ref` holds the **env var name**. `LOG_CONTENT=false`.
-- **Repositories take an `AuthContext`**; cross-user access returns **404**. Admins/auditors are not exempt for content.
+- **Repositories take an `AuthContext`**; cross-user access returns **404**. Admins are not exempt for content.
 - **No `SELECT *`**; **no `OFFSET` pagination**; **streams hold no DB connection**.
 - **UUIDv7** app-generated IDs; money in **integer micros**; all timestamps **`timestamptz` UTC**; quota periods are calendar months in `QUOTA_TIMEZONE` (default `Asia/Jakarta`).
+- **Tokenizer per provider (FR-QUOTA-7):** `tiktoken` for OpenAI adapter, local port `dhamaniasad/claude-tokenizer` repo for Anthropic, local/BPE tokenizer + margin other providers. All tokenizer dependencies live inside adapters folder (provider-import rule) and must be *lazy-init*, do NOT start at boot.
 - **Migrations are forward-only**, expand/contract, run as a **pre-deploy job under an advisory lock** — never on app boot.
 - **Append-only** `quota_ledger` / `audit_logs` enforced by grants (`REVOKE UPDATE, DELETE`).
 
@@ -94,19 +98,19 @@ Copied from `AGENTS.md` — these are not revisited during the build.
 **Tasks**
 - [x] `package.json` (Bun), `tsconfig.json` (strict), ESLint + Prettier, Vitest config, `.env.example`, `.gitignore`, `.editorconfig`. ✅ M0.1
 - [x] Repo layout exactly as `AGENTS.md` §3.7 (`src/config/`, `src/db/`, `src/http/`, `src/observability/`, `src/clock/`, feature modules such as `src/auth/`, `src/providers/`, glue `src/orchestrator/`; `src/app.ts`, `src/server.ts`, `migrations/`). ✅ M0.1
-- [x] **Config:** Zod schema for the full env (§24.2 + Appendix A). **Fail fast** at boot on missing/invalid config. ✅ M0.1
+- [x] **Config:** Zod schema for the full env (§24.2 + Appendix A) — including `SHUTDOWN_DRAIN_SECONDS`, `TOKENIZER_CACHE_DIR`, `OTEL_EXPORTER_OTLP_ENDPOINT` and the CLI-only `MIGRATION_DATABASE_URL`. **Fail fast** at boot on missing/invalid config; SIGTERM respects the bounded drain window. ✅ M0.1
 - [x] Lint gates: ESLint (provider-import ban) + `dependency-cruiser` (AGENTS.md §3.2 inward rule) + Prettier. ✅ M0.1
 - [x] Hono app: request-id middleware, JSON logging (pino) with redaction, `/healthz`, `/readyz`, `/metrics` (**raw, not enveloped**). ✅ M0.1
 - [x] **Wire contract (v1.3):** unversioned `/api` prefix + shared envelope helpers (`{status,message,data}` / `{status,code,message,retryable,details,trace?}`, `trace` only when `NODE_ENV=development`), per `docs/API_CONTRACTS.md` §1. No route hand-rolls JSON; 2xx never returns `204`. ✅ M0.1/M0.0
 - [x] DB layer: pool, Drizzle client, migration runner (forward-only, `pg_advisory_lock`), `db/seed` for the example registry (**never auto-applied in prod**). ✅ M0.2/M0.6 (`seed-example` guarded; populates once Phase 1 registry tables exist)
 - [x] **Migrations baseline:** `users`, `sessions`, `divisions`, `audit_logs`, `system_settings`, `jobs` (+ `citext` extension). Apply the AGENTS.md §6 grammar from day one (UUIDv7, `text`+`CHECK`, partial indexes). ✅ M0.2
 - [x] **Auth (FR-AUTH-1…9):** argon2id (`Bun.password`), `POST /auth/login`, opaque `__Host-session` cookie, sessions in PostgreSQL (idle 8 h / absolute 24 h), rotation on login, lockout (8 / 15 min), per-IP login limit, generic errors. ✅ M0.3/M0.4/M0.5 (per-IP limit via `rateLimitLogin`)
-- [x] **RBAC** middleware (`user | admin | auditor`); `must_change_password` gate (403 `password_change_required`) allowing only `GET /me`, `POST /me/password`, `DELETE /auth/session`. ✅ M0.4/M0.5
+- [x] **RBAC** middleware (`user | admin`); `must_change_password` gate (403 `password_change_required`) allowing only `GET /me`, `POST /me/password`, `DELETE /auth/session`. ✅ M0.4/M0.5
 - [x] Admin user provisioning + password reset; `bootstrap-admin` CLI; last-admin protection. ✅ M0.5
 - [x] **Audit writer** (same transaction as the mutation); append-only grants prepared. ✅ M0.3 (grants in migrations)
 - [x] `FakeProvider` + provider registry interfaces (no adapter yet). ✅ M0.6
-- [ ] CI: lint (incl. provider-import rule), typecheck, unit + integration (Testcontainers), dependency audit, migration dry-run. — *deferred by decision (no workflow files yet)*
-- [ ] Staging deploy using **Part B** (first pass — can be `ROLE=all`, single instance).
+- [ ] CI: lint (incl. provider-import rule), typecheck, unit + integration (Testcontainers), dependency audit, migration dry-run. — *deferred by decision (no workflow files yet); needs a hosted git remote*
+- [ ] Staging deploy using **Part B** (first pass — can be `ROLE=all`, single instance). — *runbook + scripts ready (`db:migrate:check`, `build`); needs the VPS*
 
 **Deliverables.** Sign-in/out, forced password change, admin user CRUD, RBAC, audit rows, health endpoints, CI green, staging reachable over HTTPS.
 
@@ -127,33 +131,35 @@ bun run dev
 **Objective.** Admin-managed provider/model registry and the conversation/message/part persistence model.
 
 **Tasks**
-- [ ] Migrations: `ai_providers`, `ai_models`, `ai_model_prices`, `conversations`, `messages`, `message_parts`, `quota_policies`, `quota_accounts`, `quota_reservations`, `quota_ledger`, `usage_events`, `usage_daily`, `idempotency_keys` (schema may land here; quota **logic** is Phase 3).
-- [ ] `forbid_model_switch` trigger (model immutable once `message_count > 0`).
-- [ ] Registry cache (≤30 s invalidation via `config_version`) + capability-driven validation.
-- [ ] Admin APIs: providers (`secretRef` = env var name only), models, pricing, health/test stubs.
-- [ ] Conversations: create/list (keyset)/get/rename/soft-delete; `GET /models` filtered by status/permission.
-- [ ] Messages: `GET /conversations/:id/messages` (cursor by `seq`), part loading (`ORDER BY message_id, position`).
-- [ ] Context builder (text-only) with a truncation strategy hook.
-- [ ] `system_settings` reader/writer (system prompt, limits, `quota.timezone`).
+- [x] Migrations: `ai_providers`, `ai_models`, `ai_model_prices`, `conversations`, `messages`, `message_parts`, `quota_policies`, `quota_accounts`, `quota_reservations`, `quota_ledger`, `usage_events`, `usage_daily`, `idempotency_keys` (schema may land here; quota **logic** is Phase 3). ✅ M1.1 (`0008_registry`, `0009_conversations`, `0010_accounting` — accounting is schema-only; FKs to `generation_jobs` deferred to Phase 2)
+- [x] `forbid_model_switch` trigger (model immutable once `message_count > 0`). ✅ M1.2 (in `0009`; covered by `migrations.test.ts` + `conversations-http.test.ts`)
+- [x] Registry cache (≤30 s invalidation via `config_version`) + capability-driven validation. ✅ M1.3 (`CachedModelRegistry`: 30 s TTL + in-process `invalidate()` on admin writes; `config_version` is stored/bumped on writes and reserved for cross-node polling — PRD §9.4 "≤30 s" met)
+- [x] Admin APIs: providers (`secretRef` = env var name only), models, pricing, health/test stubs. ✅ M1.4 (`providers/http/admin-routes.ts`, incl. `GET/POST /models/:id/prices`, health snapshot + `POST /providers/:id/test`)
+- [x] Conversations: create/list (keyset)/get/rename/soft-delete; `GET /models` filtered by status/permission. ✅ M1.5 (division-scoped visibility is P1)
+- [x] Messages: `GET /conversations/:id/messages` (cursor by `seq`), part loading (`ORDER BY message_id, position`). ✅ M1.6
+- [x] Context builder (text-only) with a truncation strategy hook. ✅ M1.7 (`context-builder/`; unit-tested)
+- [x] `system_settings` reader/writer (system prompt, limits, `quota.timezone`). ✅ M1.8 (audited `set()`; `quota.timezone` seeded. The admin **HTTP** route for settings is P1 — PRD §20)
 
 **Deliverables.** Admin can register OpenAI + Anthropic + models; a user can create a conversation and load (empty) history; model lock enforced in the DB.
 
-**Exit criteria.** Integration tests: create conversation with model, model immutability, keyset pagination, IDOR on every ID route.
+**Exit criteria.** Integration tests: create conversation with model, model immutability, keyset pagination, IDOR on every ID route. — *Suite written (`tests/integration/conversations-http.test.ts`, `registry-http.test.ts`); must be executed against a real PostgreSQL (CI or local) to close the gate.*
 
 ## Phase 2 — Generation core
 
 **Objective.** Real streaming generation through the provider abstraction, crash-safe and replayable.
 
 **Tasks**
-- [ ] `generation_jobs` migration (state machine + partial unique "one active per conversation").
-- [ ] Orchestrator/runner + `idempotency_keys` transactional send (T1/T4 in `AGENTS.md` §6.12).
-- [ ] **Two adapters:** OpenAI + Anthropic (normalized events); `FakeProvider` fault injection.
-- [ ] SSE endpoint `GET /generations/:id/stream` with `Last-Event-ID` replay, heartbeats, `snapshot` fallback.
-- [ ] Checkpointer (1 s / 2 KB) appending to `message_parts.text_content`; `heartbeat_at` bump.
-- [ ] Finalizer (T2/T3): settle/release, `messages` terminal state, SSE terminal event; idempotent.
-- [ ] Cancel; reaper (stale heartbeat > 45 s → `failed(interrupted)`); provider error translation (no detail leaks).
-- [ ] Idempotent retry endpoint; graceful shutdown drain (SIGTERM, §24.6).
-- [ ] Adapter **contract suite** + streaming/failure tests; kill -9 recovery test.
+- [x] M2.1 — `generation_jobs` migration (state machine + partial unique "one active per conversation").
+- [x] M2.1 — Orchestrator/runner + `idempotency_keys` transactional send (T1/T4 in `AGENTS.md` §6.12).
+- [x] M2.3 — **Two adapters:** OpenAI + Anthropic (normalized events); `FakeProvider` fault injection.
+- [x] M2.3 — **Tokenizer adapters:** OpenAI `js-tiktoken` (locked version in `package.json`); Anthropic heuristic in Phase 2, tokenizer port deferred to Phase 3; FakeProvider deterministic estimator.
+- [x] M2.2 — SSE endpoint `GET /generations/:id/stream` with `Last-Event-ID` replay, heartbeats, `snapshot` fallback.
+- [x] M2.1 — Checkpointer (1 s / 2 KB) appending to `message_parts.text_content`; `heartbeat_at` bump.
+- [x] M2.1 — Finalizer (T2/T3): settlement seam, `messages` terminal state, SSE terminal event; idempotent.
+- [x] M2.2 — Cancel; reaper (stale heartbeat > 45 s → `failed(interrupted)`); provider error translation (no detail leaks).
+- [x] M2.2 — Idempotent retry endpoint; graceful shutdown drain (SIGTERM, §24.6).
+- [ ] M2.3 — Adapter contract suite + recorded fixture replay (in progress).
+- [x] M2.3 — FakeProvider example seed; manual live smoke command remains to be added (requires real provider credentials).
 
 **Deliverables.** End-to-end streamed chat with cancel, reconnect, retry, and crash recovery.
 
@@ -167,6 +173,9 @@ bun run dev
 - [ ] Policy resolution (`user → division → global`, per field) + lazy period creation.
 - [ ] Reservation via conditional `UPDATE` (T1); settle/release via `SELECT … FOR UPDATE` (T2); ledger rows (signed) for every movement.
 - [ ] Reservation reaper, quota reaper integration, estimation + margins, overshoot handling.
+- [ ] **Tokenizer per provider (FR-QUOTA-7):** `tiktoken` (WASM, lazy-init, cached per encoding) in OpenAI adapter; local port `dhamaniasad/claude-tokenizer` in Anthropic adapter; local/BPE tokenizer + margin for other adapter. Other adapter using heuristic.
+- [ ] Comapre between `est_tokens` vs usage actual provider → metrics `estimation_error_ratio`; override margin per model via `models.config.estimation.margin`.
+- [ ] Token estimation for message with image/PDF via formula per-provider in adapter; calibrate using real data.
 - [ ] `GET /me/quota`, `GET /me/usage`; admin quota APIs (`quota-policies`, `adjustments`, user quota + ledger).
 - [ ] `usage_events` written once per settled generation; `usage_daily` rollup handler + nightly rebuild.
 - [ ] Nightly reconciliation (counters vs ledger) + a `reconcile` job.
@@ -391,11 +400,11 @@ git archive --format=tar.gz <tag> | sudo -u aichat tar -xz -C "$RELEASE"
 cd "$RELEASE"
 sudo -u aichat bun install --frozen-lockfile --production
 # Optional bundle for a smaller/faster start (Bun target; see runtime fallback for Node):
-sudo -u aichat bun run build          # -> dist/server.js  (add this script)
+sudo -u aichat bun run build          # -> dist/server.js
 ```
 
-Add these scripts to `package.json` during Phase 0: `build`, `start` (`bun run src/server.ts`
-or `bun dist/server.js`), and keep `db:migrate`.
+Phase 0 ships these `package.json` scripts: `build`, `start` (`bun run src/server.ts`),
+`db:migrate`, and `db:migrate:check` (read-only schema probe used by `ExecStartPre` in B6).
 
 ## B6 — systemd services
 
@@ -644,6 +653,7 @@ blobs are marked `missing` and the UI shows "unavailable"). Back up the **databa
 - [ ] PRD §25 checklist fully checked.
 - [ ] `bootstrap-admin` executed on the production DB; first login forces a password change.
 - [ ] Provider registry populated; keys valid; health check green; spend caps set.
+- [ ] Verified tokenizers per provider: `tiktoken` for OpenAI and the ported `claude-tokenizer` for Anthropic produce estimates within a margin of error against actual `usage` (metric `estimation_error_ratio`); cold-start estimation was recorded in the load test.
 - [ ] Backups running + **restore drill passed**; offsite copy verified.
 - [ ] Alerts wired to on-call; runbooks available (B14).
 - [ ] Graceful shutdown verified under load; rollback rehearsed.
@@ -669,10 +679,11 @@ blobs are marked `missing` and the UI shows "unavailable"). Back up the **databa
 | `QUOTA_TIMEZONE` | yes | `Asia/Jakarta` | IANA name (A-5) |
 | `SESSION_SECRET` | recommended | — | ≥32 bytes; CSRF token signing (PRD marks it optional; set it in prod) |
 | `ALLOWED_ORIGINS` | yes | — | CSV of SPA origins |
-| `MAX_ACTIVE_GENERATIONS` | yes | `150` | per node capacity |
+| `MAX_ACTIVE_GENERATIONS` | yes | `2` dev / `150` prod | per node capacity; the dev/default is deliberately low — set `150` on the VPS (B4) |
 | `SHUTDOWN_DRAIN_SECONDS` | no | `120` | < `TimeoutStopSec` |
 | `LOG_LEVEL` | no | `info` | |
 | `LOG_CONTENT` | yes | `false` | **must stay false** in prod |
+| `TOKENIZER_CACHE_DIR` | no | `./.cache/tokenizer` | BPE/WASM file cache directory; must be writable by non-root processes |
 | `RETAIN_EXTRACTIONS` | no | `true` | A-14 |
 | `PASSWORD_MIN_LENGTH` | no | `12` | |
 | `LOGIN_MAX_FAILURES` | no | `8` | |

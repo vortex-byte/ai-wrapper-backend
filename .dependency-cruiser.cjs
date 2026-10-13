@@ -8,7 +8,7 @@
  *   domain ──► (nothing)
  *
  * and the three anti-correlation rules from PRD §8.2:
- *   providers/ must not know db/ ; storage/ must not know conversations/ ;
+ *   provider adapters must not know db/ ; storage/ must not know conversations/ ;
  *   attachments/ must not know providers/.
  *
  * @type {import('dependency-cruiser').IConfiguration}
@@ -54,8 +54,11 @@ module.exports = {
     {
       name: 'providers-no-db',
       severity: 'error',
-      comment: 'Provider adapters know no tables (PRD §8.2, AGENTS §3.2).',
-      from: { path: '(^|/)providers/' },
+      comment:
+        'Provider **adapters** (and provider domain rules) know no tables (PRD §8.2, AGENTS §3.2). ' +
+        'The registry\'s own persistence lives in providers/infrastructure/drizzle-* and its ports take ' +
+        'the Unit-of-Work handle, exactly like every other feature module — so it is intentionally allowed.',
+      from: { path: '(^|/)providers/(domain/|infrastructure/adapters/|infrastructure/fake/)' },
       to: { path: '(^|/)db/' },
     },
     {

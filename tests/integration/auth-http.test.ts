@@ -184,7 +184,6 @@ describe('auth HTTP surface (real PostgreSQL)', () => {
     expect(blockedBody.code).toBe('password_change_required');
     expect(blockedBody.retryable).toBe(false);
 
-    // After the password changes, the same route opens up.
     const changed = await app.request(
       new Request('http://localhost/api/me/password', {
         method: 'POST',
@@ -233,7 +232,6 @@ describe('auth HTTP surface (real PostgreSQL)', () => {
     expect(rotated).not.toBeNull();
     expect(rotated).not.toBe(cookie);
 
-    // The rotated cookie works and the gate is cleared.
     const me = await app.request(
       new Request('http://localhost/api/me', { headers: { Cookie: rotated as string } }),
     );
@@ -241,13 +239,11 @@ describe('auth HTTP surface (real PostgreSQL)', () => {
     const meBody = (await me.json()) as { data: { mustChangePassword: boolean } };
     expect(meBody.data.mustChangePassword).toBe(false);
 
-    // The old cookie is dead (rotation revokes the previous session).
     const stale = await app.request(
       new Request('http://localhost/api/me', { headers: { Cookie: cookie } }),
     );
     expect(stale.status).toBe(401);
 
-    // The new password authenticates; the old one no longer does.
     const relogin = await app.request(
       post('/api/auth/login', { email: 'ada@corp.example', password: 'a brand new passphrase' }),
     );

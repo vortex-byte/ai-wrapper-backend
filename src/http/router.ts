@@ -4,6 +4,10 @@ import type { Services } from '../services.ts';
 import { authRoutes } from '../auth/http/routes.ts';
 import { meRoutes } from '../auth/http/me-routes.ts';
 import { adminRoutes } from '../admin/http/routes.ts';
+import { registryAdminRoutes } from '../providers/http/admin-routes.ts';
+import { modelRoutes } from '../providers/http/model-routes.ts';
+import { conversationRoutes } from '../conversations/http/routes.ts';
+import { generationRoutes } from '../generations/http/routes.ts';
 import type { AppEnv } from './types.ts';
 
 export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
@@ -19,7 +23,37 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
     }),
   );
   api.route('/', meRoutes({ auth: services.auth, config }));
+  api.route('/', modelRoutes({ registry: services.registry, auth: services.auth, config }));
+  api.route(
+    '/',
+    conversationRoutes({
+      conversations: services.conversations,
+      send: services.send,
+      auth: services.auth,
+      config,
+    }),
+  );
+  api.route(
+    '/',
+    generationRoutes({
+      generations: services.generationRepository,
+      conversations: services.conversationRepository,
+      orchestrator: services.orchestrator,
+      finalizer: services.finalizer,
+      auth: services.auth,
+      config,
+      metrics: services.metrics,
+    }),
+  );
   api.route('/admin', adminRoutes({ admin: services.admin, auth: services.auth, config }));
+  api.route(
+    '/admin',
+    registryAdminRoutes({
+      registryAdmin: services.registryAdmin,
+      auth: services.auth,
+      config,
+    }),
+  );
 
   return api;
 }

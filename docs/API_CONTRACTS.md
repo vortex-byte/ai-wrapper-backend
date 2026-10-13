@@ -149,6 +149,14 @@ rotation); the SPA should store it in memory only (never `localStorage`).
 
 ### 2.1 `POST /api/auth/login` — public
 
+Authenticates a user with email and password, creates a server-backed session, and returns user info with a CSRF token.
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `email` | string (`citext`) | Yes | User's registered login email address. |
+| `password` | string | Yes | User's cleartext password. |
+
 Request:
 ```json
 { "email": "ada@corp.example", "password": "correct horse battery staple" }
@@ -178,7 +186,7 @@ Rules:
 
 ### 2.2 `DELETE /api/auth/session` — user
 
-Destroys the current session.
+Destroys the current session. Requires no request body or parameters.
 ```json
 { "status": "ok", "message": "Signed out." }
 ```
@@ -200,6 +208,14 @@ When `user.mustChangePassword == true`, **every** endpoint except these three re
 
 ### 2.4 `POST /api/me/password` — user
 
+Updates the authenticated user's password, clears the forced-change requirement, revokes other sessions, and rotates the current session.
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `currentPassword` | string | Yes | User's current active password. |
+| `newPassword` | string | Yes | Replacement password meeting security policy (min length 12). |
+
 Request:
 ```json
 { "currentPassword": "old…", "newPassword": "new…" }
@@ -218,6 +234,8 @@ new password fails policy (min length 12).
 
 ### 3.1 `GET /api/me`
 
+Returns the profile and account status of the currently authenticated user. Requires no request parameters.
+
 ```json
 { "status": "ok", "message": "", "data": {
     "id": "0192…", "email": "ada@corp.example", "displayName": "Ada L.",
@@ -226,6 +244,8 @@ new password fails policy (min length 12).
 ```
 
 ### 3.2 `GET /api/me/quota`
+
+Returns the current billing period's quota allocation, token consumption, reservations, and request limits for the authenticated user. Requires no request parameters.
 
 ```json
 { "status": "ok", "message": "", "data": {
@@ -237,7 +257,16 @@ new password fails policy (min length 12).
 The period is the calendar month in the configured quota timezone (default `Asia/Jakarta`); instants
 are serialized as UTC or with an explicit offset. Use `period.start` for a localized "resets on" label.
 
-### 3.3 `GET /api/me/usage?from&to&groupBy=day|model`
+### 3.3 `GET /api/me/usage`
+
+Returns aggregated token usage metrics and estimated cost breakdown for the authenticated user across a specified date range.
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `from` | string (ISO-8601 date / timestamp) | No | Start of usage date range (inclusive). |
+| `to` | string (ISO-8601 date / timestamp) | No | End of usage date range (inclusive). |
+| `groupBy` | string (`day` \| `model`) | No | Grouping dimension for aggregate usage data (default `day`). |
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
@@ -252,26 +281,33 @@ are serialized as UTC or with an explicit offset. Use `period.start` for a local
 
 ### 4.1 `GET /api/models`
 
-Returns only models the caller may use (archived/retired hidden for new conversations; see statuses).
+Returns only active models the caller may use on enabled providers. Requires no request parameters.
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
     { "id": "0192…", "displayName": "Claude (Sonnet class)", "providerLabel": "Anthropic",
-      "status": "active", "deprecation": null,
+      "status": "active",
       "capabilities": { "streaming": true, "vision": true, "documents": { "pdf": true },
                         "imageGeneration": false, "documentGeneration": false,
                         "contextWindow": 200000, "maxOutputTokens": 8192 },
       "limits": { "maxFilesPerMessage": 5, "maxImagesPerMessage": 10 } } ] } }
 ```
 
-`status`: `active | disabled | deprecated | retired`. `deprecation` is `null` or
-`{ "retireAt": "…", "replacementModelId": "…" }`.
+`status`: `active | disabled`.
 
 ---
 
 ## 5. Conversations
 
 ### 5.1 `POST /api/conversations`
+
+Creates a new conversation thread bound to a specific model.
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `modelId` | string (UUIDv7) | Yes | Target AI model identifier. |
+| `title` | string \| null | No | Optional conversation title (defaults to `"New conversation"` if null/omitted). |
 
 ```json
 { "modelId": "0192…", "title": null }
@@ -284,7 +320,15 @@ Returns only models the caller may use (archived/retired hidden for new conversa
 ```
 `modelLocked` becomes `true` after the first message (`422 model_unavailable` if the model is not usable).
 
-### 5.2 `GET /api/conversations?limit&cursor`
+### 5.2 `GET /api/conversations`
+
+Lists conversation threads owned by the authenticated user with cursor-based pagination.
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `limit` | integer | No | Maximum number of conversations to return per page (default `50`, max `100`). |
+| `cursor` | string | No | Opaque pagination cursor string (`nextCursor` value from previous page). |
 
 ```json
 { "status": "ok", "message": "", "data": {
@@ -295,10 +339,29 @@ Returns only models the caller may use (archived/retired hidden for new conversa
 
 ### 5.3 `GET /api/conversations/:id`
 
+Retrieves details and status of a specific conversation thread by ID.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Unique ID of the target conversation. |
+
 Conversation detail (same shape as 5.1 plus `messageCount`, `lastMessageAt`) inside `data`.
 `404` for another user's conversation (never `403`).
 
 ### 5.4 `PATCH /api/conversations/:id`
+
+Updates the title of an existing conversation thread.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Conversation ID. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `title` | string | Yes | Updated title for the conversation. |
 
 ```json
 { "title": "Contract review" }
@@ -306,6 +369,11 @@ Conversation detail (same shape as 5.1 plus `messageCount`, `lastMessageAt`) ins
 `200` with the updated conversation inside `data`. Only the title is mutable.
 
 ### 5.5 `DELETE /api/conversations/:id`
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Conversation ID to soft-delete. |
 
 ```json
 { "status": "ok", "message": "Conversation deleted." }
@@ -317,6 +385,16 @@ purged after the retention window.
 
 Creates a **new** conversation seeded with a copy of the history, on a different model.
 
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Original conversation ID to fork. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `modelId` | string (UUIDv7) | Yes | Target model ID for the new forked conversation. |
+
 ```json
 { "modelId": "0192…" }
 ```
@@ -326,7 +404,20 @@ Creates a **new** conversation seeded with a copy of the history, on a different
 
 ## 6. Messages & sending
 
-### 6.1 `GET /api/conversations/:id/messages?limit=50&before=<seq>`
+### 6.1 `GET /api/conversations/:id/messages`
+
+Lists messages and message parts for a conversation thread with backward sequence pagination (`before`).
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Conversation ID. |
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `limit` | integer | No | Maximum number of messages to return per page (default `50`, max `100`). |
+| `before` | integer (bigint) | No | Monotonic sequence number (`seq`). Returns messages with sequence number strictly less than (`<`) `before`. |
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
@@ -359,7 +450,28 @@ File `status`: `available | processing | expired | missing` (`expired`/`missing`
 
 ### 6.2 `POST /api/conversations/:id/messages` — idempotent
 
-Headers: `Idempotency-Key: 3f2b…` (**required**), plus `X-CSRF-Token` (see §1).
+Submits a new user message turn, reserves quota tokens, and queues assistant generation (idempotent via `Idempotency-Key`).
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Conversation ID. |
+
+**Request headers:**
+| Header | Value type | Required | Description |
+|---|---|---|---|
+| `Idempotency-Key` | string (UUIDv7) | Yes | Unique idempotency key. |
+| `X-CSRF-Token` | string | Yes | Stateless CSRF verification token. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `parts` | array of objects | Yes | Ordered content blocks comprising the user turn. |
+| `parts[].type` | string (`text` \| `file`) | Yes | Part type. |
+| `parts[].text` | string | Conditional | User prompt text (required when `type="text"`). |
+| `parts[].fileId` | string (UUIDv7) | Conditional | Stored attachment ID (required when `type="file"`). |
+| `options` | object | No | Generation execution options. |
+| `options.maxOutputTokens` | integer | No | Maximum token ceiling requested for output generation. |
 
 ```json
 {
@@ -377,8 +489,10 @@ Headers: `Idempotency-Key: 3f2b…` (**required**), plus `X-CSRF-Token` (see §1
     "userMessage":      { "id": "…", "seq": 12, "role": "user", "status": "complete", "parts": [ … ] },
     "assistantMessage": { "id": "…", "seq": 13, "role": "assistant", "status": "streaming", "parts": [] },
     "generation":       { "id": "…", "status": "pending", "streamUrl": "/api/generations/…/stream" },
-    "quota":            { "reservedTokens": 24310, "remainingTokens": 475690 } } }
+    "quota":            { "reservedTokens": null, "remainingTokens": null } } }
 ```
+
+> Phase 2 note: quota values are `null` until Phase 3 implements reservation and settlement.
 
 **Idempotency semantics**
 
@@ -398,6 +512,24 @@ Headers: `Idempotency-Key: 3f2b…` (**required**), plus `X-CSRF-Token` (see §1
 
 Retries a `failed`/`cancelled` generation for the same user message. Creates a **new** generation and a
 **new** assistant message, and sets `supersededBy` on the old one.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Conversation ID. |
+| `mid` | string (UUIDv7) | Yes | Failed/cancelled user message ID to retry generation for. |
+
+**Request headers:**
+| Header | Value type | Required | Description |
+|---|---|---|---|
+| `Idempotency-Key` | string (UUIDv7) | Yes | Unique idempotency key. |
+| `X-CSRF-Token` | string | Yes | Stateless CSRF verification token. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `options` | object | No | Generation execution options (same structure as §6.2). |
+
 `202` with the same `data` shape as §6.2. Requires `Idempotency-Key`.
 
 ---
@@ -405,6 +537,13 @@ Retries a `failed`/`cancelled` generation for the same user message. Creates a *
 ## 7. Generations & streaming
 
 ### 7.1 `GET /api/generations/:id`
+
+Retrieves the current execution status, token usage, and outcome details of a generation job.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Generation job ID. |
 
 ```json
 { "status": "ok", "message": "", "data": {
@@ -414,11 +553,22 @@ Retries a `failed`/`cancelled` generation for the same user message. Creates a *
     "remainingQuota": 455920,
     "error": null } }
 ```
-On failure `data.error` is `{ "code": "provider_unavailable", "message": "…", "retryable": true }`.
+On failure `data.error` is `{ "code": "provider_unavailable", "message": "…", "retryable": true }`. `usage` and `remainingQuota` are nullable until Phase 3 quota accounting lands (both are `null` in Phase 2).
 
 ### 7.2 `GET /api/generations/:id/stream` (SSE) — **raw, not enveloped**
 
-Optional request header `Last-Event-ID` (the last `id:` the client saw) to replay missed events.
+Opens a Server-Sent Events (SSE) connection to stream generation lifecycle states, text deltas, and part events in real time.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Generation job ID. |
+
+**Request headers:**
+| Header | Value type | Required | Description |
+|---|---|---|---|
+| `Last-Event-ID` | string \| integer | No | Last received SSE event sequence ID to replay missed events after reconnect. |
+
 Response headers:
 ```
 Content-Type: text/event-stream
@@ -474,6 +624,13 @@ does not cancel the generation (PRD A-12).
 
 ### 7.3 `POST /api/generations/:id/cancel`
 
+Requests cancellation of an ongoing generation job and settles consumed quota.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Generation job ID to cancel. |
+
 Idempotent.
 ```json
 { "status": "ok", "message": "Cancellation requested." }
@@ -487,7 +644,19 @@ and settles/releases quota accordingly.
 
 ### 8.1 `POST /api/conversations/:id/attachments`
 
-`multipart/form-data`, field `files` (≤ 5 files, ≤ 30 MB total). Rate-limited (§16).
+Uploads and validates files (`multipart/form-data`) for use in conversation messages.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Conversation ID to associate attachments with. |
+
+**Request body (`multipart/form-data`):**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `files` | file (binary) \| file[] | Yes | Upload files (≤ 5 files per request, cumulative size ≤ 30 MB). |
+
+Rate-limited (§16).
 
 `201 | 202`:
 ```json
@@ -502,10 +671,22 @@ and settles/releases quota accordingly.
 
 ### 8.2 `GET /api/attachments/:id`
 
+Retrieves the processing and validation status of an uploaded attachment.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Attachment ID. |
+
 Status only (`uploading | validating | processing | ready | rejected | failed | expired | deleted`) in `data`.
 Poll until `ready` before sending it in a message.
 
 ### 8.3 `DELETE /api/attachments/:id`
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Attachment ID (unattached uploads only). |
 
 Deletes an **unattached** upload.
 ```json
@@ -515,7 +696,17 @@ Deletes an **unattached** upload.
 
 ### 8.4 `GET /api/files/:id/content` — **raw, not enveloped**
 
-Streams the blob (uploaded or generated). Owner-only — admins/auditors are **not** exempt.
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Attachment/File ID. |
+
+**Request headers:**
+| Header | Value type | Required | Description |
+|---|---|---|---|
+| `Range` | string | No | Standard HTTP Range header (e.g. `bytes=0-1023`) for partial content download. |
+
+Streams the blob (uploaded or generated). Owner-only — admins are **not** exempt.
 - Validated images: `Content-Disposition: inline`; everything else `attachment`.
 - Also: `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`,
   `Content-Security-Policy: sandbox; default-src 'none'`, supports `Range`.
@@ -536,7 +727,50 @@ All admin routes require `role=admin`. Every mutation writes an `audit_logs` row
 | `POST /api/admin/users/:id/password/reset` | Reset password |
 | `GET /api/admin/divisions` · `POST /api/admin/divisions` · `PATCH /api/admin/divisions/:id` | Divisions |
 
-`POST /api/admin/users` request:
+---
+
+### 9.1 `GET /api/admin/users`
+
+Lists and searches registered users with optional filtering by query, division, or status.
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `query` | string | No | Search query string matching against user email or display name. |
+| `divisionId` | string (UUIDv7) | No | Filter users assigned to a specific division ID. |
+| `status` | string (`active` \| `disabled`) | No | Filter users by account status. |
+| `limit` | integer | No | Maximum number of users to return per page (default `50`, max `100`). |
+| `cursor` | string | No | Opaque pagination cursor string (`nextCursor` value from previous page). |
+
+`200`:
+```json
+{ "status": "ok", "message": "", "data": {
+    "items": [
+      { "id": "0192…", "email": "ada@corp.example", "displayName": "Ada L.",
+        "role": "user", "status": "active", "divisionId": "0192…",
+        "mustChangePassword": false, "createdAt": "2026-01-02T10:00:00Z",
+        "lastLoginAt": "2026-10-08T08:15:00Z" }
+    ],
+    "nextCursor": "01J…" } }
+```
+
+---
+
+### 9.2 `POST /api/admin/users`
+
+Creates and provisions a new user account with specified role, division, and initial or temporary password.
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `email` | string (`citext`) | Yes | User's login email address. |
+| `displayName` | string | Yes | User's display name. |
+| `role` | string (`user` \| `admin`) | Yes | Role assigned to the user. |
+| `divisionId` | string \| null (UUIDv7) | No | Division ID to assign user to. |
+| `generatePassword` | boolean | No | If `true`, system auto-generates temporary password returned in `data.temporaryPassword`. |
+| `password` | string | Conditional | Initial password (required if `generatePassword` is `false` or omitted). |
+
+Request:
 ```json
 { "email": "new@corp.example", "displayName": "New Hire",
   "role": "user", "divisionId": "0192…", "generatePassword": true }
@@ -550,7 +784,79 @@ All admin routes require `role=admin`. Every mutation writes an `audit_logs` row
 `temporaryPassword` is returned **only** when `generatePassword: true` and only in this response; it is
 never stored in plaintext.
 
-`POST /api/admin/users/:id/password/reset`:
+---
+
+### 9.3 `GET /api/admin/users/:id`
+
+Retrieves account details and profile information for a specific user.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target user ID. |
+
+`200`:
+```json
+{ "status": "ok", "message": "", "data": {
+    "id": "0192…", "email": "ada@corp.example", "displayName": "Ada L.",
+    "role": "user", "status": "active", "divisionId": "0192…",
+    "mustChangePassword": false, "failedLoginAttempts": 0, "lockedUntil": null,
+    "createdAt": "2026-01-02T10:00:00Z", "updatedAt": "2026-10-08T09:00:00Z",
+    "lastLoginAt": "2026-10-08T08:15:00Z" } }
+```
+
+---
+
+### 9.4 `PATCH /api/admin/users/:id`
+
+Updates profile attributes, role, division assignment, or account status for a user.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target user ID. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `displayName` | string | No | Updated display name. |
+| `role` | string (`user` \| `admin`) | No | Updated user role. |
+| `divisionId` | string \| null (UUIDv7) | No | Updated division ID (`null` to unassign). |
+| `status` | string (`active` \| `disabled`) | No | Updated status (`disabled` revokes all active sessions immediately). |
+
+Request:
+```json
+{ "displayName": "Ada Lovelace", "role": "admin" }
+```
+`200`:
+```json
+{ "status": "ok", "message": "User updated.", "data": {
+    "id": "0192…", "email": "ada@corp.example", "displayName": "Ada Lovelace",
+    "role": "admin", "status": "active", "divisionId": "0192…",
+    "mustChangePassword": false, "updatedAt": "2026-10-08T09:30:00Z" } }
+```
+
+Safeguards: cannot disable/demote the last active admin.
+
+---
+
+### 9.5 `POST /api/admin/users/:id/password/reset`
+
+Resets a user's password, revokes all active sessions, and forces a password update upon next login.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target user ID. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `generatePassword` | boolean | No | If `true`, system generates a temporary password. |
+| `newPassword` | string | Conditional | Specified replacement password (required if `generatePassword` is `false` or omitted). |
+| `reason` | string | No | Operational justification string logged to audit trail. |
+
+Request:
 ```json
 { "generatePassword": true, "reason": "User forgot password (ticket #4821)" }
 ```
@@ -558,7 +864,69 @@ never stored in plaintext.
 (or `200` with **no `data`** if a `newPassword` was supplied).
 Side effects: revokes **all** the user's sessions, sets `mustChangePassword`.
 
-Safeguards: cannot disable/demote the last active admin.
+---
+
+### 9.6 `GET /api/admin/divisions`
+
+Lists all organizational divisions. Requires no request parameters.
+
+`200`:
+```json
+{ "status": "ok", "message": "", "data": {
+    "items": [
+      { "id": "0192…", "name": "Engineering", "externalRef": "grp_eng_01", "createdAt": "2026-01-01T00:00:00Z" },
+      { "id": "0192…", "name": "Legal", "externalRef": "grp_legal_02", "createdAt": "2026-01-01T00:00:00Z" }
+    ] } }
+```
+
+---
+
+### 9.7 `POST /api/admin/divisions`
+
+Creates a new organizational division for quota and model access management.
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Unique display name for the division. |
+| `externalRef` | string \| null | No | External reference identifier (e.g. HR/AD group reference). |
+
+Request:
+```json
+{ "name": "Finance", "externalRef": "grp_fin_03" }
+```
+`201`:
+```json
+{ "status": "ok", "message": "Division created.", "data": {
+    "id": "0192…", "name": "Finance", "externalRef": "grp_fin_03", "createdAt": "2026-10-08T10:00:00Z" } }
+```
+
+---
+
+### 9.8 `PATCH /api/admin/divisions/:id`
+
+Updates the display name or external reference of an existing division.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target division ID. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `name` | string | No | Updated division display name. |
+| `externalRef` | string \| null | No | Updated external reference ID. |
+
+Request:
+```json
+{ "name": "Finance & Accounting" }
+```
+`200`:
+```json
+{ "status": "ok", "message": "Division updated.", "data": {
+    "id": "0192…", "name": "Finance & Accounting", "externalRef": "grp_fin_03", "createdAt": "2026-10-08T10:00:00Z" } }
+```
 
 ---
 
@@ -566,9 +934,45 @@ Safeguards: cannot disable/demote the last active admin.
 
 ### 10.1 `GET /api/admin/quota-policies/:scope/:id?`
 
+Retrieves the quota policy definition for a specific scope (`global`, `division`, or `user`).
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `scope` | string (`global` \| `division` \| `user`) | Yes | Policy target scope. |
+| `id` | string (UUIDv7) | Conditional | Target Division ID (when `scope="division"`) or User ID (when `scope="user"`). Omitted when `scope="global"`. |
+
 `scope` ∈ `global | division | user`. Returns the raw policy row (nullable fields inherit) in `data`.
 
+`200`:
+```json
+{ "status": "ok", "message": "", "data": {
+    "id": "0192…", "scope": "division", "divisionId": "0192…", "userId": null,
+    "monthlyTokens": 1000000, "maxInputTokensPerRequest": 150000,
+    "maxOutputTokensPerRequest": 16000, "maxConcurrentGenerations": 3,
+    "allowedModelIds": null, "updatedBy": "0192…", "updatedAt": "2026-10-08T09:00:00Z" } }
+```
+
 ### 10.2 `PUT /api/admin/quota-policies/:scope/:id?`
+
+Creates or updates a quota policy at the specified scope (`global`, `division`, or `user`), with optional immediate adjustment to active accounts.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `scope` | string (`global` \| `division` \| `user`) | Yes | Policy target scope. |
+| `id` | string (UUIDv7) | Conditional | Target Division ID or User ID (omitted for `global`). |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `monthlyTokens` | integer \| null (bigint) | No | Monthly token limit (`null` inherits from higher scope). |
+| `maxInputTokensPerRequest` | integer \| null | No | Maximum input tokens per request (`null` inherits). |
+| `maxOutputTokensPerRequest` | integer \| null | No | Maximum output tokens per request (`null` inherits). |
+| `maxConcurrentGenerations` | integer \| null | No | Maximum concurrent generations per user (`null` inherits). |
+| `allowedModelIds` | array of string (UUIDv7) \| null | No | List of allowed model IDs (`null` inherits). |
+| `applyToCurrentPeriod` | boolean | No | If `true`, immediately recalculates and adjusts current period quota balances via ledger entry (default `false`). |
+| `reason` | string | No | Audit update justification string. |
 
 ```json
 { "monthlyTokens": 1000000, "maxInputTokensPerRequest": 150000,
@@ -578,7 +982,30 @@ Safeguards: cannot disable/demote the last active admin.
 `null` fields inherit from division/global. `applyToCurrentPeriod: true` re-resolves and adjusts the
 current `quota_accounts` row via a ledger `adjust` entry. Returns the updated policy in `data`.
 
+`200`:
+```json
+{ "status": "ok", "message": "Quota policy updated.", "data": {
+    "id": "0192…", "scope": "user", "divisionId": null, "userId": "0192…",
+    "monthlyTokens": 1000000, "maxInputTokensPerRequest": 150000,
+    "maxOutputTokensPerRequest": 16000, "maxConcurrentGenerations": 3,
+    "allowedModelIds": null, "updatedBy": "0192…", "updatedAt": "2026-10-08T09:30:00Z" } }
+```
+
 ### 10.3 `POST /api/admin/users/:id/quota/adjustments`
+
+Applies an immediate manual token quota adjustment (grant or deduction) to a user's current account balance with audit justification.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target user ID. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `tokens` | integer (bigint) | Yes | Token adjustment amount (positive to grant, negative to claw back). |
+| `reason` | string | Yes | Reason for adjustment logged to quota ledger and audit log. |
+| `expiresAtPeriodEnd` | boolean | No | Whether adjustment applies only to current period (default `true`). |
 
 ```json
 { "tokens": 200000, "reason": "Incident follow-up", "expiresAtPeriodEnd": true }
@@ -587,6 +1014,13 @@ Positive = grant, negative = claw back. Writes a ledger row (never edits history
 `200` → `{ "status": "ok", "message": "Adjustment applied.", "data": { "entryType": "adjust", "tokensDelta": 200000 } }`.
 
 ### 10.4 `GET /api/admin/users/:id/quota`
+
+Retrieves a user's current quota balance, active reservations, and recent ledger transaction history.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target user ID. |
 
 Current period counters plus the recent ledger:
 ```json
@@ -597,7 +1031,16 @@ Current period counters plus the recent ledger:
                   "createdAt": "…", "requestId": "…" } ] } }
 ```
 
-### 10.5 `GET /api/admin/usage?from&to&groupBy=user|model|provider|day|month|division`
+### 10.5 `GET /api/admin/usage`
+
+Retrieves system-wide usage metrics, token volumes, and estimated costs grouped by user, model, provider, division, or time period.
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `from` | string (ISO-8601 date / timestamp) | No | Start date/timestamp for usage report range. |
+| `to` | string (ISO-8601 date / timestamp) | No | End date/timestamp for usage report range. |
+| `groupBy` | string (`user` \| `model` \| `provider` \| `day` \| `month` \| `division`) | No | Dimension to aggregate usage metrics by. |
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
@@ -612,26 +1055,81 @@ Current period counters plus the recent ledger:
 
 ## 11. Admin — providers & models
 
-### 11.1 `GET /api/admin/providers` · `POST /api/admin/providers` · `PATCH /api/admin/providers/:id`
+### 11.1 Providers (`GET /api/admin/providers`, `POST /api/admin/providers`, `PATCH /api/admin/providers/:id`)
 
 Provider registry. **The API key is never accepted or returned** — `secretRef` is the **name of the
 environment variable** that holds it (PRD A-16).
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Conditional | Target provider ID (required for `PATCH`). |
+
+**Request body (`POST` / `PATCH`):**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `key` | string | Conditional | Unique internal provider key (e.g. `anthropic`, `openai`) (required on `POST`). |
+| `displayName` | string | Conditional | Human-readable provider label (required on `POST`, optional on `PATCH`). |
+| `adapter` | string | Conditional | Registered PAL adapter key (`anthropic`, `openai`, `gemini`) (required on `POST`). |
+| `baseUrl` | string \| null | No | Custom provider API base URL override. |
+| `secretRef` | string | Conditional | Environment variable name holding the provider API key (required on `POST`, optional on `PATCH`). |
+| `status` | string (`active` \| `disabled`) | No | Provider operational status (default `active`). |
+| `config` | object | No | Adapter-specific JSON configuration object (e.g. `maxConcurrency`, `connectTimeoutMs`). |
 
 `PATCH /api/admin/providers/:id`:
 ```json
 { "displayName": "Anthropic", "secretRef": "ANTHROPIC_API_KEY", "status": "active",
   "config": { "maxConcurrency": 8, "connectTimeoutMs": 10000 } }
 ```
-`GET` response (`data`):
+`POST /api/admin/providers` (`201`):
 ```json
-{ "id": "…", "key": "anthropic", "displayName": "Anthropic", "adapter": "anthropic",
-  "baseUrl": null, "secretRef": "ANTHROPIC_API_KEY", "status": "active",
-  "config": { "maxConcurrency": 8 }, "configVersion": 4, "updatedAt": "…" }
+{ "status": "ok", "message": "Provider created.", "data": {
+    "id": "0192…", "key": "anthropic", "displayName": "Anthropic", "adapter": "anthropic",
+    "baseUrl": null, "secretRef": "ANTHROPIC_API_KEY", "status": "active",
+    "config": { "maxConcurrency": 8, "connectTimeoutMs": 10000 }, "configVersion": 1,
+    "createdAt": "2026-10-08T10:00:00Z", "updatedAt": "2026-10-08T10:00:00Z" } }
+```
+`GET` list response (`200`):
+```json
+{ "status": "ok", "message": "", "data": { "items": [
+    { "id": "0192…", "key": "anthropic", "displayName": "Anthropic", "adapter": "anthropic",
+      "baseUrl": null, "secretRef": "ANTHROPIC_API_KEY", "status": "active",
+      "config": { "maxConcurrency": 8 }, "configVersion": 4, "updatedAt": "2026-10-08T09:00:00Z" }
+] } }
+```
+`GET /api/admin/providers/:id` or `PATCH /api/admin/providers/:id` response (`200`):
+```json
+{ "status": "ok", "message": "", "data": {
+    "id": "0192…", "key": "anthropic", "displayName": "Anthropic", "adapter": "anthropic",
+    "baseUrl": null, "secretRef": "ANTHROPIC_API_KEY", "status": "active",
+    "config": { "maxConcurrency": 8 }, "configVersion": 4, "updatedAt": "2026-10-08T09:00:00Z" } }
 ```
 > Rotating the actual key is an operator action: update the env/`.env` file and restart the process
 > (rolling restart). See PRD §15.6, §24.2.
 
-### 11.2 `GET /api/admin/models` · `POST /api/admin/models` · `PATCH /api/admin/models/:id`
+### 11.2 Models (`GET /api/admin/models`, `POST /api/admin/models`, `PATCH /api/admin/models/:id`)
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Conditional | Target model ID (required for `PATCH`). |
+
+**Request body (`POST` / `PATCH`):**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `providerId` | string (UUIDv7) | Conditional | Associated provider ID (required on `POST`). |
+| `key` | string | Conditional | Unique internal model slug (required on `POST`). |
+| `apiModelId` | string | Conditional | Upstream provider model API identifier (e.g. `claude-3-5-sonnet-20241022`) (required on `POST`). |
+| `displayName` | string | Conditional | Model display label (required on `POST`, optional on `PATCH`). |
+| `description` | string \| null | No | Human-readable model description. |
+| `status` | string (`active` \| `disabled`) | No | Model status (default `disabled`). |
+| `capabilities` | object | Conditional | Normalized capability flags object (required on `POST`, optional on `PATCH`). |
+| `contextWindow` | integer | Conditional | Context window token capacity (> 0) (required on `POST`, optional on `PATCH`). |
+| `maxOutputTokens` | integer | Conditional | Maximum supported output tokens (> 0) (required on `POST`, optional on `PATCH`). |
+| `defaultMaxOutputTokens` | integer | Conditional | Default max output tokens (required on `POST`, optional on `PATCH`). |
+| `quotaWeight` | number (float) | No | Quota token multiplier weight (default `1.0`). |
+| `config` | object | No | Execution configuration object (e.g. `timeoutMs`, reasoning effort). |
+| `sortOrder` | integer | No | Display sorting priority index (default `0`). |
 
 ```json
 { "status": "disabled",
@@ -641,7 +1139,42 @@ environment variable** that holds it (PRD A-16).
   "config": { "timeoutMs": 180000 } }
 ```
 
+`POST /api/admin/models` (`201`):
+```json
+{ "status": "ok", "message": "Model created.", "data": {
+    "id": "0192…", "providerId": "0192…", "key": "claude-sonnet-3-5",
+    "apiModelId": "claude-3-5-sonnet-20241022", "displayName": "Claude 3.5 Sonnet",
+    "description": "High intelligence, fast multimodal model", "status": "disabled",
+    "capabilities": { "streaming": true, "vision": true, "documents": { "pdf": true },
+                      "contextWindow": 200000, "maxOutputTokens": 8192, "schemaVersion": 1 },
+    "contextWindow": 200000, "maxOutputTokens": 8192, "defaultMaxOutputTokens": 4096,
+    "quotaWeight": 1.0, "config": { "timeoutMs": 180000 }, "sortOrder": 1,
+    "createdAt": "2026-10-08T10:00:00Z", "updatedAt": "2026-10-08T10:00:00Z" } }
+```
+
+`GET /api/admin/models` (`200`):
+```json
+{ "status": "ok", "message": "", "data": {
+    "items": [
+      { "id": "0192…", "providerId": "0192…", "key": "claude-sonnet-3-5",
+        "apiModelId": "claude-3-5-sonnet-20241022", "displayName": "Claude 3.5 Sonnet",
+        "status": "active", "capabilities": { "streaming": true, "vision": true, "documents": { "pdf": true },
+                                              "contextWindow": 200000, "maxOutputTokens": 8192, "schemaVersion": 1 },
+        "contextWindow": 200000, "maxOutputTokens": 8192, "defaultMaxOutputTokens": 4096,
+        "quotaWeight": 1.0, "sortOrder": 1 }
+    ] } }
+```
+
+`PATCH /api/admin/models/:id` (`200`):
+```json
+{ "status": "ok", "message": "Model updated.", "data": {
+    "id": "0192…", "providerId": "0192…", "key": "claude-sonnet-3-5",
+    "status": "disabled", "updatedAt": "2026-10-08T10:30:00Z" } }
+```
+
 ### 11.3 `GET /api/admin/providers/health`
+
+Retrieves real-time health status, error rates, and circuit breaker states across configured providers. Requires no request parameters.
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
@@ -652,6 +1185,11 @@ environment variable** that holds it (PRD A-16).
 
 ### 11.4 `POST /api/admin/providers/:id/test`
 
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Provider ID to run test check against. |
+
 Runs a cheap health check now (must not consume meaningful tokens). `200`:
 ```json
 { "status": "ok", "message": "", "data": { "ok": true, "latencyMs": 230, "detail": "models.list ok" } }
@@ -661,12 +1199,50 @@ Runs a cheap health check now (must not consume meaningful tokens). `200`:
 
 ## 12. Admin — errors & audit
 
-### 12.1 `GET /api/admin/errors?from&to&category&providerId&modelId&limit&cursor`
+### 12.1 `GET /api/admin/errors`
+
+Queries sanitized system error events with filtering by time range, category, provider, or model.
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `from` | string (ISO-8601 UTC timestamp) | No | Start timestamp of error search window. |
+| `to` | string (ISO-8601 UTC timestamp) | No | End timestamp of error search window. |
+| `category` | string | No | Error category filter. |
+| `providerId` | string (UUIDv7) | No | Filter by provider ID. |
+| `modelId` | string (UUIDv7) | No | Filter by model ID. |
+| `limit` | integer | No | Maximum number of records to return per page (default `50`, max `100`). |
+| `cursor` | string | No | Opaque pagination cursor string. |
 
 Sanitized `error_events` (no provider bodies, keys, or stack traces) in `data` as
 `{ "items": [...], "nextCursor": … }`.
 
-### 12.2 `GET /api/admin/audit-logs?from&to&actorUserId&action&targetType&targetId&limit&cursor`
+`200`:
+```json
+{ "status": "ok", "message": "", "data": {
+    "items": [
+      { "id": "1042", "occurredAt": "2026-10-08T09:12:00Z", "requestId": "req_0192…",
+        "component": "orchestrator", "category": "provider_timeout",
+        "providerId": "0192…", "modelId": "0192…", "generationId": "0192…",
+        "message": "Upstream provider timed out after 180s",
+        "context": { "timeoutMs": 180000, "streamState": "text.delta" } }
+    ],
+    "nextCursor": null } }
+```
+
+### 12.2 `GET /api/admin/audit-logs`
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `from` | string (ISO-8601 UTC timestamp) | No | Start timestamp of audit log search window. |
+| `to` | string (ISO-8601 UTC timestamp) | No | End timestamp of audit log search window. |
+| `actorUserId` | string (UUIDv7) | No | Filter by actor user ID. |
+| `action` | string | No | Filter by audit action key (e.g. `user.password_reset`). |
+| `targetType` | string | No | Filter by target entity type (e.g. `user`, `quota_policy`). |
+| `targetId` | string | No | Filter by target entity ID. |
+| `limit` | integer | No | Maximum number of records to return per page (default `50`, max `100`). |
+| `cursor` | string | No | Opaque pagination cursor string. |
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
@@ -706,7 +1282,7 @@ Provider health is **not** part of readiness.
 | `not_found` | 404 | no | also used for other users' resources |
 | `conflict` / `generation_in_progress` | 409 | after finish | an active generation already exists |
 | `idempotency_key_reuse` | 422 | no | same key, different payload |
-| `model_unavailable` | 409 | later | may include `details.replacementModelId` |
+| `model_unavailable` | 409 | later | model disabled or not permitted |
 | `unsupported_for_model` | 422 | no | e.g. image to a non-vision model |
 | `context_too_large` | 422 | no | message + attachments exceed limits |
 | `provider_unavailable` | 503 | yes | provider down/misconfigured (details hidden) |
@@ -734,9 +1310,9 @@ Errors after a stream has started cannot change the HTTP status: they arrive as 
 
 | Concept | Values |
 |---|---|
-| User role | `user`, `admin`, `auditor` |
+| User role | `user`, `admin` |
 | User status | `active`, `disabled` |
-| Model status | `active`, `disabled`, `deprecated`, `retired` |
+| Model status | `active`, `disabled` |
 | Conversation (derived) | `modelLocked` boolean |
 | Message role | `user`, `assistant` |
 | Message status | `streaming`, `complete`, `incomplete`, `failed` |

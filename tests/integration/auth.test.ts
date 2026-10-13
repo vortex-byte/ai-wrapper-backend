@@ -123,7 +123,6 @@ describe('auth (real PostgreSQL)', () => {
     expect(rows[0]?.failed_login_attempts).toBe(8);
     expect(rows[0]?.locked_until).not.toBeNull();
 
-    // Correct password is refused while locked, still generically.
     await expect(
       auth.login({ email: 'ada@corp.example', password: PASSWORD, meta }),
     ).rejects.toMatchObject({ code: 'unauthenticated' });
@@ -156,19 +155,16 @@ describe('auth (real PostgreSQL)', () => {
       meta,
     });
 
-    // Gate cleared, new hash stored.
     const refreshed = await users.findById(user.id);
     expect(refreshed?.mustChangePassword).toBe(false);
     expect(await hasher.verify('a brand new passphrase', refreshed?.passwordHash ?? '')).toBe(true);
 
-    // Old sessions revoked; the rotated one is live and linked to the caller.
     expect((await sessions.findById(first.sessionId))?.revokedAt).not.toBeNull();
     expect((await sessions.findById(second.sessionId))?.revokedAt).not.toBeNull();
     const rotated = await sessions.findById(result.sessionId);
     expect(rotated?.revokedAt).toBeNull();
     expect(rotated?.rotatedFrom).toBe(first.sessionId);
 
-    // The new password now authenticates; the old one does not.
     await expect(
       auth.login({ email: 'ada@corp.example', password: PASSWORD, meta }),
     ).rejects.toMatchObject({ code: 'unauthenticated' });

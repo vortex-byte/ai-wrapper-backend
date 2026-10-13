@@ -90,7 +90,6 @@ describe('login', () => {
     expect(harness.users.rows.get('user-1')?.failedLoginAttempts).toBe(0);
     expect(harness.users.rows.get('user-1')?.lastLoginAt?.getTime()).toBe(harness.clock.now().getTime());
     expect(harness.audit.actions()).toEqual(['login']);
-    // idle 480 min from now → 18:00Z
     expect(result.expiresAt.toISOString()).toBe('2026-05-01T18:00:00.000Z');
   });
 });

@@ -24,6 +24,8 @@ export interface ExampleModel {
 
 export const EXAMPLE_PROVIDERS: readonly ExampleProvider[] = [
   { key: 'openai', displayName: 'OpenAI', adapter: 'openai', secretRef: 'OPENAI_API_KEY' },
+  { key: 'fake', displayName: 'Fake Provider', adapter: 'fake', secretRef: 'FAKE_API_KEY' },
+
   {
     key: 'anthropic',
     displayName: 'Anthropic',
@@ -33,6 +35,12 @@ export const EXAMPLE_PROVIDERS: readonly ExampleProvider[] = [
 ];
 
 export const EXAMPLE_MODELS: readonly ExampleModel[] = [
+  {
+    providerKey: 'fake',
+    key: 'fake-model',
+    apiModelId: 'fake-model',
+    displayName: 'Fake Model (development)',
+  },
   {
     providerKey: 'openai',
     key: 'gpt-4o-mini',

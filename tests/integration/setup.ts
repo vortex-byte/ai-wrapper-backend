@@ -38,7 +38,6 @@ if (testUrl === undefined || testUrl === '') {
   );
 }
 
-// Safety rail: never truncate or migrate anything that is not obviously a test DB.
 const databaseName = new URL(testUrl).pathname.replace(/^\//, '');
 if (!/test/i.test(databaseName)) {
   throw new Error(

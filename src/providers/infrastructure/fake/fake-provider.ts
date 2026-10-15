@@ -40,7 +40,7 @@ export interface FakeProviderOptions {
   readonly providerRequestId?: string;
   /** Fail after this many emitted deltas for the error_after_output scenario. */
   readonly errorAfterChunks?: number;
-  /** Number of deltas for huge_burst; defaults to the Phase 2 stress size. */
+  /** Number of deltas for huge_burst scenario. */
   readonly hugeBurstSize?: number;
   /** When true, execute generator hangs and ignores abort signal to test runner race semantics. */
   readonly ignoreAbort?: boolean;

@@ -8,9 +8,8 @@ export interface TextCoalescerOptions {
 }
 
 /**
- * Coalesces streaming text deltas to avoid saturating clients with micro-frames (D7).
- * Flushes at most once every `flushIntervalMs` (default 50 ms = ≤ 20/s) or immediately
- * when `flush()` is called (e.g. at part boundary or stream completion).
+ * Coalesces streaming text deltas to avoid saturating clients with micro-frames.
+ * Flushes periodically or immediately when buffer fills or `flush()` is called.
  */
 export class TextCoalescer {
   private readonly flushIntervalMs: number;

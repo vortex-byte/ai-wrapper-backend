@@ -2,11 +2,10 @@ import type { TransactionContext } from '@/db/tx.ts';
 import type { GenerationStatus } from '../domain/generation.ts';
 
 /**
- * Persistence for `generation_jobs` — the generation record *and* the job record (PRD §14.6).
+ * Persistence for generation records.
  *
- * Every write takes the caller's `TransactionContext`: T1 (send) must write the generation row in
- * the same transaction as the messages it belongs to, and the finalizer's T2 must be atomic with
- * its own message/part writes. Repositories never open a transaction (AGENTS §3.6).
+ * Writes take the caller's transaction context so mutations stay atomic
+ * with associated messages and state updates.
  */
 
 export interface GenerationRecord {
@@ -91,6 +90,15 @@ export interface GenerationRepository {
    */
   insert(input: InsertGenerationInput, tx: TransactionContext): Promise<GenerationRecord>;
 
+  /**
+   * Updates `max_output_tokens` on a generation row when output clamping applies.
+   */
+  updateMaxOutputTokens(
+    id: string,
+    maxOutputTokens: number,
+    tx: TransactionContext,
+  ): Promise<void>;
+
   /** Scoped to the owner; another user's id returns `null` (mapped to 404). */
   findByIdForUser(
     id: string,
@@ -101,11 +109,11 @@ export interface GenerationRepository {
   /** System lookup by generation ID without user ownership predicate. */
   findById(id: string, tx?: TransactionContext): Promise<GenerationRecord | null>;
 
-  /** Checkpoints text to message part and touches heartbeat/lastEventSeq on generation (recipe T5). */
+  /** Checkpoints text to message part and touches heartbeat/lastEventSeq on generation. */
   checkpointText(input: CheckpointTextInput, tx?: TransactionContext): Promise<void>;
 
   /**
-   * Atomically transitions a generation from live ('pending' | 'generating') to terminal (recipe T3).
+   * Atomically transitions a generation from live ('pending' | 'generating') to terminal.
    * Returns true if this caller won the race and updated the row; false if already terminal.
    */
   transitionToTerminal(input: TransitionTerminalInput, tx?: TransactionContext): Promise<boolean>;
@@ -124,12 +132,8 @@ export interface GenerationRepository {
   ): Promise<readonly StaleGenerationRow[]>;
 
   /**
-   * Claim an idempotency key inside T1 (S4 recipe). Returns `{ claimed: true }` when this caller
+   * Claims an idempotency key. Returns `{ claimed: true }` when this caller
    * is the first to use the key, or the previously stored response when the key exists.
-   *
-   * Uses `ON CONFLICT ... DO UPDATE ... RETURNING` rather than `DO NOTHING` so a concurrent
-   * uncommitted insert is *waited on*: the loser re-reads the winner's committed row instead of
-   * racing past an invisible one (AGENTS §6.12 T4 correction, decision S4).
    */
   claimIdempotencyKey(
     input: {

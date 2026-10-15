@@ -1,12 +1,10 @@
 import type { TransactionContext } from '@/db/tx.ts';
 
 /**
- * Sanitized system-error records for the admin error explorer (AGENTS §6.10 / PRD §21).
+ * Sanitized system-error records for error telemetry and reporting.
  *
- * Providers/generation failures are the first producer. The writer must never receive provider
- * response bodies, prompts, message text, keys or stack traces — only the normalized category and
- * small, already-public identifiers. `context` is for scalar metadata (status codes, attempts),
- * never free text from an upstream response.
+ * The writer must never receive raw provider response bodies, prompts,
+ * message text, keys or stack traces — only normalized categories and scalar metadata.
  */
 export interface ErrorEventEntry {
   readonly component: string;

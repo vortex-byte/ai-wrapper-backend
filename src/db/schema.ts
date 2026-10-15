@@ -242,8 +242,8 @@ export const messageParts = pgTable('message_parts', {
 });
 
 /**
- * The generation record *is* the job record (PRD §14.6). One live generation per conversation
- * is enforced by the partial unique index in migration 0012, not here (Drizzle cannot express it).
+ * The generation execution and job record. One live generation per conversation
+ * is enforced by a database partial unique index.
  */
 export const generationJobs = pgTable('generation_jobs', {
   id: uuid('id').primaryKey(),
@@ -408,8 +408,6 @@ export const usageEvents = pgTable('usage_events', {
 export const usageDaily = pgTable(
   'usage_daily',
   {
-    // `date` (not `text`): migration 0010 declares `day date` and the daily rollup PK/upsert target
-    // depends on it. Drizzle `mode: 'string'` keeps the JS-side value an ISO `YYYY-MM-DD` string.
     day: date('day', { mode: 'string' }).notNull(),
     userId: uuid('user_id').notNull(),
     divisionId: uuid('division_id'),

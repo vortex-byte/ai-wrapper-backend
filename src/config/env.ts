@@ -46,9 +46,6 @@ export const EnvSchema = z
     // Consumed **only** by the migration CLI (src/cli/migration-env.ts) — never by the server.
     MIGRATION_DATABASE_URL: optionalString,
     REDIS_URL: optionalString,
-
-    // Drain window on SIGTERM: stop accepting, let in-flight requests finish, then force-exit.
-    // Keep it below the systemd unit's TimeoutStopSec (deploy guide B6 uses 150).
     SHUTDOWN_DRAIN_SECONDS: z.coerce.number().int().min(0).max(600).default(120),
 
     SESSION_COOKIE_NAME: z.literal('__Host-session').default('__Host-session'),
@@ -60,18 +57,23 @@ export const EnvSchema = z
     STORAGE_WRITE_PROVIDER: z.enum(['local']).default('local'),
     STORAGE_MIN_FREE_MIB: z.coerce.number().int().min(0).default(512),
 
-    // Tokenizers (Phase 3): where lazy-initialised BPE/WASM files are cached.
     TOKENIZER_CACHE_DIR: z.string().min(1).default('./.cache/tokenizer'),
 
-    QUOTA_TIMEZONE: z.string().min(1).default('Asia/Jakarta'),
+    QUOTA_TIMEZONE: z
+      .string()
+      .min(1)
+      .default('Asia/Jakarta')
+      .refine((tz) => {
+        try {
+          Intl.DateTimeFormat(undefined, { timeZone: tz });
+          return true;
+        } catch {
+          return false;
+        }
+      }, 'Invalid IANA time zone'),
     SERVICE_BUSY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.9),
 
-    // Generations (PRD §14)
-    // Per-node cap on concurrent live generations (§14.4). The VPS deploy guide sizes this to
-    // ~150; development stays low so the 503 service_busy path is easy to exercise.
     MAX_ACTIVE_GENERATIONS: z.coerce.number().int().min(1).default(200),
-    // Grace before a generation with no SSE subscriber is cancelled as `detached` (PRD A-12).
-    // Covers both "subscriber left" and "client never attached".
     GENERATION_DETACH_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(900).default(60),
 
     PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).max(256).default(8),
@@ -85,7 +87,7 @@ export const EnvSchema = z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
       .default('info'),
     LOG_CONTENT: boolish(false),
-    // Optional OTLP collector endpoint (traces; enabled when set — Phase 5).
+    // Optional OTLP collector endpoint (traces; enabled when set).
     OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
 
     ALLOWED_ORIGINS: csv,

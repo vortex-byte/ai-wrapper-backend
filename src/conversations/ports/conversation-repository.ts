@@ -11,8 +11,8 @@ import type {
 
 /**
  * Persistence port for conversations, messages and parts. Writes take the transaction handle
- * so T1 (create) and the read paths share one connection. Every read is scoped to `user_id`
- * in the caller or the repository — cross-user access must surface as "not found".
+ * so create operations and read paths share one connection. Every read is scoped to `user_id`
+ * in the caller or the repository — cross-user access surfaces as "not found".
  */
 
 export interface ListConversationsQuery {
@@ -64,7 +64,7 @@ export interface ConversationRepository {
 
   /**
    * Allocates `message_count + 2` and returns both sequence numbers (user then assistant).
-   * The `UPDATE ... RETURNING` row lock serializes concurrent sends per conversation (T1).
+   * The `UPDATE ... RETURNING` row lock serializes concurrent sends per conversation.
    */
   allocateSeqPair(
     conversationId: string,

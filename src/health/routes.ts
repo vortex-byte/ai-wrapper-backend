@@ -44,7 +44,7 @@ export function healthRoutes(config: Config, metrics?: MetricsRegistry): Hono<Ap
       '# HELP aichat_uptime_seconds Seconds since process start.',
       '# TYPE aichat_uptime_seconds gauge',
       `aichat_uptime_seconds ${uptimeSeconds.toFixed(3)}`,
-      // The generation-core registry (PRD §21.3 subset) renders after the process metrics.
+      
       metrics?.render() ?? '',
     ].join('\n');
     return c.text(body, 200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });

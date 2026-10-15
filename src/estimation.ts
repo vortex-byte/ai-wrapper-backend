@@ -1,10 +1,6 @@
 /**
- * Cheap, deterministic token estimation shared by the context builder (Phase 1) and the
- * quota pre-check (Phase 3). The heuristic is intentionally crude — `chars / 4` with a small
- * per-message overhead — because its only jobs are truncation budgeting and a pre-flight
- * sanity check; authoritative counts always come from the provider's usage report.
- *
- * Pure: no I/O, no provider awareness.
+ * Deterministic token estimation heuristic based on character count.
+ * Used for context budgeting and pre-flight checks.
  */
 
 const CHARS_PER_TOKEN = 4;

@@ -26,7 +26,6 @@ export interface GenerationRoutesDeps {
 
 /**
  * Generation status, cancel, and SSE stream API.
- * PRD §7.1, §7.2, §7.3 & API_CONTRACTS §7.
  */
 export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
   const { generations, conversations, orchestrator, finalizer, auth, config, metrics } = deps;
@@ -86,9 +85,7 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
     }
 
     // Attempt in-memory cancellation if a local run exists. When it does, the run's own lifecycle
-    // finalizes the generation with the full accumulated text and captured provider usage — the
-    // route must NOT finalize concurrently, or it would win the T3 race and persist an incomplete
-    // text and estimated usage instead of the real ones.
+    // finalizes the generation with accumulated text and captured provider usage.
     const cancelledLiveRun = orchestrator.cancel(id, 'user_cancel');
 
     if (!cancelledLiveRun && (record.status === 'pending' || record.status === 'generating')) {
@@ -158,7 +155,6 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
           for await (const frame of subscriber) {
             if (isClosed) break;
             if (frame.comment === true) {
-              // Bare SSE comment keep-alive: never carries an id/event/data (PRD §14.3).
               await stream.write(':heartbeat\n\n');
               continue;
             }
@@ -182,7 +178,6 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
         return;
       }
 
-      // Buffer miss or run already finished: emit snapshot from DB.
       try {
         let lastEmittedText: string = '';
         let lastEmittedStatus: string | null = null;
@@ -229,8 +224,6 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
         }
 
         while (!isClosed && (currentRecord.status === 'pending' || currentRecord.status === 'generating')) {
-          // Poll every 2 s per D4, emitting a comment heartbeat each tick so intermediaries do not
-          // time the idle connection out, and a fresh snapshot once new text has landed.
           await new Promise((resolve) => setTimeout(resolve, 2000));
           if (isClosed) break;
           await stream.write(':heartbeat\n\n');
@@ -241,8 +234,6 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
         }
 
         if (!isClosed) {
-          // Final snapshot before the terminal frame, so a late subscriber that fell off the
-          // in-memory buffer still receives the completed text rather than only "completed".
           await writeSnapshot();
 
           if (currentRecord.status === 'completed') {

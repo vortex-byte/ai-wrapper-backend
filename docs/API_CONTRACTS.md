@@ -381,25 +381,6 @@ Updates the title of an existing conversation thread.
 `200` (no `data`). Soft-delete. Messages/parts/files become inaccessible (`404` on later reads) and are
 purged after the retention window.
 
-### 5.6 `POST /api/conversations/:id/fork` — P1
-
-Creates a **new** conversation seeded with a copy of the history, on a different model.
-
-**Path parameters:**
-| Parameter | Value type | Required | Description |
-|---|---|---|---|
-| `id` | string (UUIDv7) | Yes | Original conversation ID to fork. |
-
-**Request body:**
-| Field | Value type | Required | Description |
-|---|---|---|---|
-| `modelId` | string (UUIDv7) | Yes | Target model ID for the new forked conversation. |
-
-```json
-{ "modelId": "0192…" }
-```
-`201` with the new conversation inside `data`. This is **not** a model switch — the original is untouched.
-
 ---
 
 ## 6. Messages & sending
@@ -472,14 +453,26 @@ Submits a new user message turn, reserves quota tokens, and queues assistant gen
 | `parts[].fileId` | string (UUIDv7) | Conditional | Stored attachment ID (required when `type="file"`). |
 | `options` | object | No | Generation execution options. |
 | `options.maxOutputTokens` | integer | No | Maximum token ceiling requested for output generation. |
+| `options.tools` | object | No | Built-in provider tool toggles. |
+| `options.tools.webSearch` | boolean | No | Enable built-in web search grounding (default `false`). |
+| `options.tools.webFetch` | boolean | No | Enable built-in web fetch tool (default `false`). |
+| `options.tools.codeExecution` | boolean | No | Enable cloud code execution sandbox (default `false`). |
+| `options.tools.skills` | array of strings | No | Specific built-in skills to activate (e.g. `["xlsx", "docx", "pptx", "pdf"]`). |
+| `options.tools.imageGeneration` | boolean | No | Enable prompt-to-image creation tool (default `false`). |
 
 ```json
 {
   "parts": [
-    { "type": "text", "text": "Summarize the attached contract and list risks." },
+    { "type": "text", "text": "Analyze the attached CSV and generate an Excel forecast." },
     { "type": "file", "fileId": "0192…" }
   ],
-  "options": { "maxOutputTokens": 4000 }
+  "options": {
+    "maxOutputTokens": 4000,
+    "tools": {
+      "codeExecution": true,
+      "skills": ["xlsx"]
+    }
+  }
 }
 ```
 
@@ -606,9 +599,12 @@ data: {"finishReason":"stop","usage":{"inputTokens":18250,"outputTokens":1190,"q
 | `generation.state` | `{state}` | `pending \| generating \| …` |
 | `message.created` | `{userMessageId, assistantMessageId}` | first frame |
 | `context.truncated` | `{droppedMessages, droppedAttachments}` | UI notice |
-| `part.started` | `{partId, position, type, mimeType?, name?}` | new part |
+| `part.started` | `{partId, position, type, mimeType?, name?}` | new part (`text \| tool_call \| tool_result \| generated_file \| reasoning`) |
 | `text.delta` | `{partId, delta}` | text chunk (coalesced ≤ 20/s) |
-| `part.completed` | `{partId, status, fileId?, downloadUrl?}` | binary frames only after the file is stored |
+| `tool.started` | `{partId, position, tool, id?}` | tool execution starting (e.g. `bash_code_execution`, `web_search`) |
+| `tool.delta` | `{partId, delta}` | streaming tool input/command payload |
+| `tool.completed` | `{partId, status, output?, returnCode?}` | tool result / command completion |
+| `part.completed` | `{partId, status, fileId?, downloadUrl?}` | binary frames (images, generated files) only after ArtifactSink stores the file |
 | `progress` | `{stage, percent?}` | job-style generations |
 | `usage.updated` | `{inputTokens, outputTokens}` | optional live meter |
 | `generation.completed` | `{finishReason, usage:{input,output,quotaTokens}, remainingQuota}` | terminal ✅ |

@@ -277,7 +277,7 @@ describe('migration baseline', () => {
       ).rejects.toMatchObject({ code: '23514' });
     });
 
-    it('rejects a duplicate request_id (T4 idempotency lever)', async () => {
+    it('rejects a duplicate request_id', async () => {
       const fixture = await seedGenerationFixture();
       await insertGeneration(fixture, { requestId: 'req-duplicate' });
       await expect(insertGeneration(fixture, { requestId: 'req-duplicate' })).rejects.toMatchObject(

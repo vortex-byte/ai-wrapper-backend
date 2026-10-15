@@ -105,15 +105,16 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 | G2 | Multiple providers behind one interface | New provider added with only a new adapter + registry rows, zero changes to orchestrator/API/DB schema |
 | G3 | Configurable token quotas | Zero cases of settled usage exceeding limit by more than the defined overshoot bound (§11.7) |
 | G4 | Image and document input | MVP file types (§12.3) accepted, validated, and delivered to capable models |
-| G5 | Non-text responses supported | A response with text + image + file parts persists and reloads correctly |
+| G5 | Non-text responses & artifacts supported | A response with text + image + file parts persists, streams, and downloads correctly |
 | G6 | Reliable persistence | Interrupted/failed generations never corrupt history; 100 % of generations end in a terminal state |
 | G7 | Provider isolation | No provider SDK types outside `providers/<name>/` |
 | G8 | Local storage now, S3 later | Migration needs a new StorageProvider + config only |
 | G9 | Operational simplicity | MVP runs on: 1 app image, PostgreSQL, a volume (Redis optional) |
+| G10 | Built-in provider tool execution | Toggleable built-in web search, web fetch, cloud code execution, skills, and image/doc generation mediated via PAL & ArtifactSink |
 
 ### Non-Goals (MVP)
 
-- Autonomous agents, tool calling, MCP, web search, RAG, long-term memory (extension points only — §26).
+- Autonomous multi-agent loops, custom user-defined tool plugins/MCP servers, custom RAG vector databases, local server-side code execution sandboxes, long-term memory (extension points only — §26). Native built-in provider cloud tools (search, fetch, code execution, skills) are supported directly.
 - Permanent file library, file reuse across conversations, shared/collaborative conversations.
 - Switching a conversation's model after messages exist, or **automatic fallback to another model** on failure.
 - Conversation branching/editing of past messages (conversations are linear in MVP).
@@ -144,13 +145,15 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 | US-7 | Employee | to see my remaining monthly tokens and a clear message when exhausted | I can plan usage | P0 |
 | US-8 | Employee | to click Send twice or have my network drop without duplicate answers or double charges | I'm not penalized for flaky connections | P0 |
 | US-9 | Employee | to retry a failed generation | one provider hiccup doesn't ruin my conversation | P0 |
-| US-10 | Employee | to download files the AI generated | I can use the output | P1 (backend ready in MVP) |
+| US-10 | Employee | to download files and images the AI generated | I can use the output directly | P0 |
 | US-11 | Admin | to set quotas per user or per division | I can control spend | P0 |
 | US-12 | Admin | to disable a model or user instantly | I can respond to incidents/cost spikes | P0 |
 | US-13 | Admin | to see usage by user/model/provider/day | I can report and forecast | P0 |
 | US-14 | Admin | to see provider health and recent errors | I can diagnose problems quickly | P1 |
 | US-15 | Admin | to review who changed what | I can satisfy compliance | P0 |
 | US-16 | Platform engineer | traceable request IDs and metrics | I can debug production | P0 |
+| US-17 | Employee | to toggle web search, web fetch, and cloud code/skills execution | I can access up-to-date facts and perform data calculations | P0 |
+| US-18 | Employee | to prompt the model to generate images and office documents (XLSX, DOCX, charts) | I can produce visual and tabular artifacts directly in chat | P0 |
 
 ## 6. Functional Requirements
 
@@ -178,8 +181,7 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 - **FR-CONV-3 (P0)** Messages consist of ordered **parts** (text, image, document, generated_file; reserved: tool_call, tool_result, reasoning).
 - **FR-CONV-4 (P0)** At most one active generation per conversation.
 - **FR-CONV-5 (P0)** Retry a failed/cancelled generation for the same user message.
-- **FR-CONV-6 (P1)** "Continue in another model": create a *new* conversation seeded with a copy of the history (explicitly not a switch).
-- **FR-CONV-7 (P0)** Auto-generated conversation title (from first user message, truncated; LLM-generated titles are P2 because they consume quota).
+- **FR-CONV-6 (P0)** Auto-generated conversation title (from first user message, truncated; LLM-generated titles are P2 because they consume quota).
 
 ### 6.4 Generation & streaming
 - **FR-GEN-1 (P0)** `POST /conversations/:id/messages` creates user message + generation atomically (idempotent) and returns immediately.
@@ -1098,7 +1100,6 @@ Zod schemas on every route (params, query, body, headers); reject unknown fields
 | | `GET /conversations/:id` | Detail | user |
 | | `PATCH /conversations/:id` | Rename | user |
 | | `DELETE /conversations/:id` | Soft-delete | user |
-| | `POST /conversations/:id/fork` | New conversation from history with another model (P1) | user |
 | **Messages** | `GET /conversations/:id/messages` | Messages + parts (cursor by `seq`) | user |
 | | `POST /conversations/:id/messages` | Send message → generation (idempotent) | user |
 | | `POST /conversations/:id/messages/:mid/retry` | Retry failed/cancelled generation | user |
@@ -1694,7 +1695,7 @@ Errors after the stream starts cannot change the HTTP status; they are delivered
 - **User retry** (explicit) is a *new* generation (new reservation), not an automatic retry.
 
 ### 19.3 No cross-model fallback
-On provider failure the conversation stays on its model. The UI receives `provider_unavailable`/`model_unavailable` and may offer **Retry** or **Continue in another model** (a new conversation, FR-CONV-6). The orchestrator has no code path that selects a different model.
+On provider failure the conversation stays on its model. The UI receives `provider_unavailable`/`model_unavailable` and may offer **Retry**. The orchestrator has no code path that selects a different model.
 
 ### 19.4 AbortController behavior
 
@@ -1981,19 +1982,18 @@ dev/staging/prod; CI: lint (incl. provider-import rule), typecheck, unit/integra
 ## 26. MVP vs Future Scope
 
 ### 26.1 Must Have for MVP (P0)
-Authentication (email/password + PostgreSQL sessions, lockout, admin provisioning & password reset) · user management (roles, divisions, enable/disable) · model registry + selection · **one model per conversation** (DB-enforced) · multi-provider abstraction (≥ 2 adapters live, third proves the abstraction) · text chat · SSE streaming with cancel/reconnect · conversation persistence · token quota (reserve/settle/release, ledger, monthly periods) · usage tracking & admin usage views · image upload · document upload (PDF, DOCX, XLSX, CSV, TXT, MD) · multimodal message-part model · multimodal **response persistence** (text now, binary-capable) · temporary local storage with TTL cleanup · idempotent send · retry of failed generations · basic security (RBAC, rate limiting, validation, headers, audit) · basic observability (logs, metrics, health) · production runbook basics.
+Authentication (email/password + PostgreSQL sessions, lockout, admin provisioning & password reset) · user management (roles, divisions, enable/disable) · model registry + selection · **one model per conversation** (DB-enforced) · multi-provider abstraction (≥ 2 adapters live, third proves the abstraction) · text chat · SSE streaming with cancel/reconnect · conversation persistence · token quota (reserve/settle/release, ledger, monthly periods) · usage tracking & admin usage views · image upload · document upload (PDF, DOCX, XLSX, CSV, TXT, MD) · multimodal message-part model · multimodal **response persistence** (text, images, and binary generated files) · **toggleable built-in provider tools** (web search, web fetch, provider cloud code execution, built-in skills) · **image and document generation** (ArtifactSink download and persistence) · temporary local storage with TTL cleanup · idempotent send · retry of failed generations · basic security (RBAC, rate limiting, validation, headers, audit) · basic observability (logs, metrics, health) · production runbook basics.
 
 ### 26.2 Should have (P1, cut first)
-Model visibility per division · circuit breaker · provider health page · error explorer · CSV exports · RLS hardening · AV scanning · fork conversation to another model · editable settings UI · provider-specific token caps.
+Model visibility per division · circuit breaker · provider health page · error explorer · CSV exports · RLS hardening · AV scanning · editable settings UI · provider-specific token caps.
 
 ### 26.3 Future (P2) and the extension point that keeps MVP simple
 
 | Future feature | MVP extension point (already present, nothing built) |
 |---|---|
 | S3 migration | `StorageProvider` interface, per-row `storage_provider`, opaque keys |
-| Image generation / advanced document generation | Capability flags, `responseModalities`, `artifact_chunk` events, ArtifactSink, `generated_file` parts |
-| Web search, RAG, tool calling, MCP, agents | `tool_call`/`tool_result` part types, `tools` capability (false), SSE `tool.*` events reserved, `NormalizedPart` union |
-| OCR | Extractor interface + `file_extractions` |
+| Custom MCP servers & external agent frameworks | `tool_call`/`tool_result` part types, PAL provider hooks |
+| OCR (offline/scanned documents) | Extractor interface + `file_extractions` |
 | Rolling summaries / long-term memory | Context builder strategy hook, `conversation_summaries` (not created) |
 | Voice | New modalities + part types; adapters |
 | Shared conversations / team collaboration | `conversations.user_id` ownership + new `conversation_members` (not created); RLS policy extension |

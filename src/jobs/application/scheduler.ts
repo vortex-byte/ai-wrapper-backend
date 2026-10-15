@@ -13,6 +13,11 @@ const DEFAULT_TASKS: readonly SchedulerTask[] = [
   { name: 'reaper', jobType: 'generation.reaper', intervalMs: 30_000 },
   { name: 'idempotency-purge', jobType: 'idempotency.purge', intervalMs: 3_600_000 },
   { name: 'sessions-purge', jobType: 'sessions.purge', intervalMs: 3_600_000 },
+  { name: 'quota-reaper', jobType: 'quota.reservations.reaper', intervalMs: 60_000 },
+  { name: 'usage-rollup-incremental', jobType: 'usage.rollup.incremental', intervalMs: 300_000 },
+  { name: 'usage-rollup-nightly', jobType: 'usage.rollup.nightly', intervalMs: 86_400_000 },
+  { name: 'quota-reconcile', jobType: 'quota.reconcile', intervalMs: 86_400_000 },
+  { name: 'quota-precreate-periods', jobType: 'quota.precreate_periods', intervalMs: 86_400_000 },
 ];
 
 export class Scheduler {
@@ -30,9 +35,7 @@ export class Scheduler {
     const lockKey = `scheduler:${task.name}`;
 
     try {
-      // A *transaction-scoped* advisory lock (AGENTS §6.13): exactly one node schedules each
-      // recurring job per interval, and the lock is released by COMMIT/ROLLBACK — it can never
-      // leak onto a pooled session the way a session-level lock would if the unlock failed.
+      // Transaction-scoped advisory lock: exactly one node schedules each recurring job per interval.
       return await withTransaction(async (tx: TransactionContext) => {
         const lockRes = await tx.client.query<{ acquired: boolean }>(
           'SELECT pg_try_advisory_xact_lock(hashtext($1)) as acquired',

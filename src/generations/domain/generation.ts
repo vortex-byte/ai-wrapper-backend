@@ -1,11 +1,6 @@
 /**
- * The generation state machine (PRD §14.2) and the terminal-outcome → row-status mapping
- * (PRD §13.4). Pure: no I/O, no Drizzle, nothing from outside `domain/`.
- *
- * `generation_jobs` is the generation *and* the job record (PRD §14.6): its status drives the
- * assistant message's status, its parts, and the SSE terminal event. Every terminal state is
- * final and set exactly once with a conditional update (`WHERE status IN ('pending','generating')`),
- * so cancel/complete/fail races resolve deterministically.
+ * Generation state machine and terminal outcome to status mappings.
+ * Terminal states are set conditionally so concurrent events resolve deterministically.
  */
 
 import type { FinishReason, MessageStatus, PartStatus } from '@/conversations/domain/conversation.ts';
@@ -32,7 +27,7 @@ export function isActive(status: GenerationStatus): boolean {
   return status === 'pending' || status === 'generating';
 }
 
-/** Why a generation stopped while still live (PRD §14.2/§14.5, §24.6). */
+/** Why a generation stopped while still live. */
 export type CancelReason = 'user_cancel' | 'detached' | 'shutdown';
 
 /**
@@ -67,20 +62,12 @@ export interface OutcomeMapping {
   readonly finishReason: FinishReason;
   /** Terminal status for parts that were still `streaming` when the run ended. */
   readonly streamingPartStatus: PartStatus;
-  /** Whether the provider accepted the request (drives settle-vs-release in §11.5). */
+  /** Whether the provider accepted the request. */
   readonly providerAccepted: boolean;
 }
 
 /**
- * PRD §13.4 — "Failed / interrupted generations" — as a total function. Keeping it a table means
- * the finalizer and the reaper cannot disagree about what a terminal state looks like.
- *
- * | outcome                     | message status                        | finish_reason  |
- * |-----------------------------|---------------------------------------|----------------|
- * | completed                   | complete                              | stop|length|content_filter |
- * | cancelled                   | incomplete                            | cancelled      |
- * | failed                      | failed if no content, else incomplete | error|timeout   |
- * | interrupted                 | incomplete                            | interrupted    |
+ * Maps a generation outcome to terminal message and generation states.
  */
 export function mapOutcome(
   outcome: GenerationOutcome,
@@ -104,8 +91,7 @@ export function mapOutcome(
         providerAccepted: true,
       };
     case 'failed':
-      // A failure with no content is a hard failure; with partial content it is "incomplete so
-      // the user can still read what arrived" (§13.4).
+      // A failure with partial content is marked incomplete so partial text remains visible.
       return {
         generationStatus: 'failed',
         messageStatus: options.hasContent ? 'incomplete' : 'failed',
@@ -119,8 +105,6 @@ export function mapOutcome(
         messageStatus: 'incomplete',
         finishReason: 'interrupted',
         streamingPartStatus: 'incomplete',
-        // The reaper cannot know whether the provider accepted; §11.5 decides settle-vs-release
-        // from `started_at`, not from this flag.
         providerAccepted: true,
       };
   }
@@ -143,10 +127,7 @@ export function canTransition(from: GenerationStatus, to: GenerationStatus): boo
 }
 
 /**
- * Map a PAL `finished` reason onto a completed outcome. `tool_use`/`other` are treated as
- * completed with `stop`: the adapter already translated provider-specific reasons, and a
- * successful stream that ends for an unmodelled reason is still a success (never a silent
- * model fallback, FR-GEN-6).
+ * Map a PAL `finished` reason onto a completed outcome.
  */
 export function completedFromFinishReason(
   reason: 'stop' | 'length' | 'content_filter' | 'tool_use' | 'other',

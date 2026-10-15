@@ -27,12 +27,9 @@ export interface FinalizeInput {
    * (`cancelled`, `stop`, `error`). Defaults to `user_cancel` for a cancelled generation.
    */
   readonly cancelReason?: string | undefined;
-  /**
-   * Deterministic id for the text part inserted when the message has no text part at all.
-   * Provided by the caller (the orchestrator knows the part it streamed into); a stable id keeps
-   * the insert idempotent if the finalizer is retried.
-   */
   readonly fallbackPartId?: string | undefined;
+  readonly durationMs?: number | null | undefined;
+  readonly timeToFirstTokenMs?: number | null | undefined;
 }
 
 export interface FinalizerDeps {
@@ -44,9 +41,9 @@ export interface FinalizerDeps {
 }
 
 /**
- * Handles terminal settlement for a generation (recipes T2 & T3, AGENTS §6.12, PRD §14.2).
+ * Handles terminal settlement for a generation.
  * Atomically transitions generation_jobs to its terminal state. If already terminalized, returns false (no-op).
- * Updates message and part statuses according to PRD §13.4, flushes text, settles quota, and logs error events.
+ * Updates message and part statuses, flushes text, settles quota, and logs error events.
  */
 export class Finalizer {
   private readonly generations: GenerationRepository;
@@ -73,15 +70,11 @@ export class Finalizer {
     const outcome = toOutcome(input);
     const initialMapping = mapOutcome(outcome, { hasContent: input.accumulatedText.length > 0 });
 
-    // Everything below runs in ONE transaction (recipes T2 & T3, AGENTS §6.12): the terminal
-    // transition, the message/part completion and the quota settlement are atomic. A crash can
-    // therefore never leave a terminal `generation_jobs` row with a stuck `streaming` message or a
-    // dangling `active` reservation — the whole thing rolls back and the reaper can retry it.
     let resolvedText = input.accumulatedText;
     let finishReason = initialMapping.finishReason;
 
     const record = await withTransaction(async (tx) => {
-      // 1. T3 conditional update: exactly one path can win the race to terminal state
+      // Transition generation to terminal state atomically.
       const transitioned = await this.generations.transitionToTerminal(
         {
           generationId: input.generationId,
@@ -153,7 +146,7 @@ export class Finalizer {
           await this.conversations.insertParts(
             [
               {
-                id: input.fallbackPartId ?? `finalizer-${generationRecord.assistantMessageId}`,
+                id: input.fallbackPartId ?? crypto.randomUUID(),
                 messageId: generationRecord.assistantMessageId,
                 position,
                 type: 'text',
@@ -170,8 +163,7 @@ export class Finalizer {
         }
       }
 
-      // 4. Quota settlement (T2 / NoopQuota in Phase 2) — same transaction, so the reservation
-      // can never outlive the terminal transition.
+      // Quota settlement in the same transaction so reservations never outlive terminal state.
       const usage =
         input.usage ?? {
           inputTokens: generationRecord.estInputTokens ?? 0,
@@ -179,20 +171,39 @@ export class Finalizer {
           source: 'estimated' as const,
         };
 
-      // PRD §11.5 outcome policy: a generation that reached the provider consumed tokens even when
-      // it was cancelled or failed afterwards, so those tokens are *settled*, not released. §11.5
-      // decides this from `started_at` — the durable marker that the provider call began — with
-      // accumulated text as a secondary signal for a crash that lost the marker. (`providerAccepted`
-      // from the mapping table describes the *error* semantics, which is not the same question as
-      // "did we already spend tokens"; a mid-stream `provider_unavailable` still spent them.)
       const started = generationRecord.startedAt !== null;
       const shouldSettle = started || resolvedText.length > 0;
+      const durationMs =
+        input.durationMs ??
+        (generationRecord.startedAt !== null
+          ? Math.max(0, now.getTime() - generationRecord.startedAt.getTime())
+          : null);
 
       await this.quota.settleOrRelease(
         {
           generationId: generationRecord.id,
           outcome: shouldSettle ? 'settled' : 'released',
           actualTokens: shouldSettle ? usage.inputTokens + usage.outputTokens : 0,
+          usage: {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            ...(usage.cachedInputTokens !== undefined
+              ? { cachedInputTokens: usage.cachedInputTokens }
+              : {}),
+            ...(usage.reasoningTokens !== undefined
+              ? { reasoningTokens: usage.reasoningTokens }
+              : {}),
+            source: usage.source,
+          },
+          outcomeCategory:
+            input.status === 'completed'
+              ? 'completed'
+              : input.status === 'cancelled'
+                ? 'cancelled'
+                : 'failed',
+          errorCategory: input.error?.code ?? null,
+          durationMs,
+          timeToFirstTokenMs: input.timeToFirstTokenMs ?? null,
         },
         tx,
       );
@@ -211,7 +222,6 @@ export class Finalizer {
         source: 'estimated' as const,
       };
 
-    // 5. Error event logging on failure (outside the transaction: best-effort, own connection)
     if (input.status === 'failed' && input.error !== undefined) {
       try {
         await this.errorEvents.record({
@@ -250,9 +260,7 @@ export class Finalizer {
 }
 
 /**
- * Translate the finalizer's flat input into the domain `GenerationOutcome`. The caller (the run
- * lifecycle or the reaper) reports a terminal `status` plus a wire `finishReason`; this is the
- * only place that knows how those spellings line up with the PRD's outcome kinds.
+ * Translate the finalizer's flat input into the domain `GenerationOutcome`.
  */
 function toOutcome(input: FinalizeInput): GenerationOutcome {
   if (input.status === 'completed') {

@@ -21,7 +21,7 @@ describe('generation state machine', () => {
     expect(isActive('completed')).toBe(false);
   });
 
-  it('allows only the transitions PRD §14.2 defines', () => {
+  it('allows only valid state transitions', () => {
     expect(canTransition('pending', 'generating')).toBe(true);
     expect(canTransition('pending', 'cancelled')).toBe(true);
     expect(canTransition('pending', 'failed')).toBe(true);
@@ -38,7 +38,7 @@ describe('generation state machine', () => {
   });
 });
 
-describe('mapOutcome (PRD §13.4 table)', () => {
+describe('mapOutcome', () => {
   it('maps a completed run to a complete message and the provider finish reason', () => {
     const mapping = mapOutcome({ kind: 'completed', finishReason: 'stop' }, { hasContent: true });
     expect(mapping).toEqual({
@@ -93,7 +93,7 @@ describe('mapOutcome (PRD §13.4 table)', () => {
     expect(mapping.finishReason).toBe('timeout');
   });
 
-  it('maps an interrupted run to failed + incomplete (S1: never `cancelled`)', () => {
+  it('maps an interrupted run to failed + incomplete', () => {
     const mapping = mapOutcome({ kind: 'interrupted' }, { hasContent: true });
     expect(mapping.generationStatus).toBe('failed');
     expect(mapping.messageStatus).toBe('incomplete');

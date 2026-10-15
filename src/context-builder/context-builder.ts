@@ -91,8 +91,6 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     const item = history[i];
     if (!item) continue;
 
-    // Skip incomplete or failed assistant messages. Since this assistant turn is skipped,
-    // the preceding message in history is a user message (PRD §10.3).
     if (item.message.role === 'assistant' && item.message.status !== 'complete') {
       droppedMessageCount++;
       if (expectedRole === 'assistant') {
@@ -101,7 +99,6 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
       continue;
     }
 
-    // Role must alternate (ending with assistant before the new user message)
     if (item.message.role !== expectedRole) {
       droppedMessageCount++;
       continue;
@@ -130,7 +127,6 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     }
   }
 
-  // Conversation history must start with a user message
   if (selectedHistory.length > 0 && selectedHistory[0]?.role === 'assistant') {
     selectedHistory.shift();
     droppedMessageCount++;

@@ -15,10 +15,10 @@ const DEFAULT_INTERVAL_MS = 1000;
 const DEFAULT_MAX_BUFFER_BYTES = 2048;
 
 /**
- * Checkpointer for live generation streaming (recipe T5, AGENTS §6.12).
+ * Checkpointer for live generation streaming.
  * Buffers text deltas and periodically flushes them to `message_parts` in short transactions
- * while bumping `generation_jobs.heartbeat_at` and `generation_jobs.last_event_seq`.
- * Streams hold NO database connection between flushes.
+ * while updating heartbeat and sequence markers.
+ * Streams hold no database connection between flushes.
  */
 export class Checkpointer {
   private readonly generationId: string;
@@ -88,7 +88,6 @@ export class Checkpointer {
             heartbeatAt: this.clock.now(),
           });
         } catch {
-          // Put chunk back ONLY into this specific part's buffer so retries don't cross parts
           const current = this.partBuffers.get(partId) ?? '';
           this.partBuffers.set(partId, chunk + current);
           this.bufferedBytes += Buffer.byteLength(chunk, 'utf-8');
@@ -118,8 +117,6 @@ export class Checkpointer {
 
     this.disposed = true;
 
-    // Drain until nothing is left: a concurrent flush may have re-buffered its chunk on failure and
-    // new deltas may have landed while we waited.
     let guard = 0;
     while ((this.partBuffers.size > 0 || this.inFlight !== null) && guard < 100) {
       guard++;

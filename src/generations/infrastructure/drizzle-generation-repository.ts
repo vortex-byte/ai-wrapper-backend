@@ -131,6 +131,17 @@ export class DrizzleGenerationRepository implements GenerationRepository {
     return toRecord(row as GenerationRow);
   }
 
+  async updateMaxOutputTokens(
+    id: string,
+    maxOutputTokens: number,
+    tx: TransactionContext,
+  ): Promise<void> {
+    await runDb(tx)
+      .update(generationJobs)
+      .set({ maxOutputTokens })
+      .where(eq(generationJobs.id, id));
+  }
+
   async findByIdForUser(
     id: string,
     userId: string,
@@ -233,10 +244,6 @@ export class DrizzleGenerationRepository implements GenerationRepository {
     | { readonly claimed: true }
     | { readonly claimed: false; readonly stored: StoredIdempotentResponse }
   > {
-    // S4 (AGENTS §6.12): `DO UPDATE` (not `DO NOTHING`) so a concurrent uncommitted insert with
-    // the same (user_id, key) is waited on; the loser then returns the winner's row and replays.
-    // `xmax = 0` distinguishes the freshly-inserted row (a true claim) from an updated existing
-    // one (a replay), which `DO NOTHING` cannot express.
     const rows = await runDb(tx)
       .insert(idempotencyKeys)
       .values({

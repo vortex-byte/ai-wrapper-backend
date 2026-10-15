@@ -1,6 +1,5 @@
 /**
  * SSE Event types and wire shapes for generation streaming.
- * Source of truth: docs/API_CONTRACTS.md §7.2
  */
 
 export type SSEEventType =
@@ -88,9 +87,7 @@ export interface SSEFrame {
   readonly data: string;
   readonly byteLength: number;
   /**
-   * When true this is an SSE *comment* (`:heartbeat`), not a named event: it carries no `id:`,
-   * no `event:` and no `data:` line and must never advance the client's `Last-Event-ID`
-   * (PRD §14.3, API_CONTRACTS §7.2). Consumers must write it via {@link formatHeartbeat}.
+   * When true, this is an SSE comment keep-alive (`:heartbeat`) rather than a named event.
    */
   readonly comment?: boolean | undefined;
 }

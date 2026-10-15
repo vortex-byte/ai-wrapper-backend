@@ -29,8 +29,6 @@ function boot(): void {
       hostname: config.HOST,
       port: config.PORT,
       fetch: app.fetch,
-      // Long-lived SSE streams are kept alive by heartbeats (PRD §14.3), so the idle window
-      // must comfortably exceed the heartbeat interval.
       idleTimeout: 120,
     });
 
@@ -47,14 +45,12 @@ function boot(): void {
   }
 
   /**
-   * Graceful shutdown (PRD §24.6, D3):
-   * 1. Fail readiness (GET /readyz returns 503).
-   * 2. Close admission gate (new send/retry return 503 service_busy + Retry-After).
-   * 3. Stop accepting new HTTP connections (server.stop()).
-   * 4. Allow in-flight requests and streams to finish naturally within SHUTDOWN_DRAIN_SECONDS.
-   * 5. At expiry: abort remaining live generation runs with reason 'shutdown',
-   *    persisting partial text, marking failed(interrupted), emitting terminal SSE frames,
-   *    and closing streams before hard server.stop(true).
+   * Graceful shutdown:
+   * 1. Fail readiness.
+   * 2. Close admission gate for new requests.
+   * 3. Stop accepting new HTTP connections.
+   * 4. Allow in-flight requests and streams to drain.
+   * 5. Cancel remaining active runs if drain timeout expires.
    * 6. Close database pool and exit.
    */
   let shuttingDown = false;

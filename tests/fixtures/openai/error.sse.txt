@@ -1,0 +1,7 @@
+data: {"id":"chatcmpl-fixture-err","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fixture-err","choices":[{"index":0,"delta":{"content":"partial response"},"finish_reason":null}]}
+
+data: {"error": {"message": "The server had an error processing your request.", "type": "server_error", "param": null, "code": null}}
+
+data: [DONE]

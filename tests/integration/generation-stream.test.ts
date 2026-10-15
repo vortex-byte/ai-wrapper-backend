@@ -169,13 +169,17 @@ describe('Generation HTTP Surface & Streaming (P2-5 & P2-6)', () => {
     expect(streamText).toContain('event: text.delta');
     expect(streamText).toContain('event: generation.completed');
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
     const pool = getPool();
-    const { rows: partRows } = await pool.query<{ text_content: string; status: string }>(
-      'SELECT text_content, status FROM message_parts WHERE message_id = $1',
-      [assistantId],
-    );
+    let partRows: { text_content: string; status: string }[] = [];
+    for (let attempt = 0; attempt < 50; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const res = await pool.query<{ text_content: string; status: string }>(
+        'SELECT text_content, status FROM message_parts WHERE message_id = $1',
+        [assistantId],
+      );
+      partRows = res.rows;
+      if (partRows.length > 0 && partRows[0]?.status === 'complete') break;
+    }
     expect(partRows.length).toBe(1);
     expect(partRows[0]?.status).toBe('complete');
     expect(partRows[0]?.text_content).toContain('Hello from the fake provider.');
@@ -394,7 +398,7 @@ describe('Generation HTTP Surface & Streaming (P2-5 & P2-6)', () => {
     );
     expect(oldRows[0]?.superseded_by).toBe(newAssistantId);
 
-    // List messages - superseded message must be hidden by default per §13.4
+    // List messages - superseded message must be hidden by default
     const listRes = await app.request(
       new Request(`http://localhost/api/conversations/${convId}/messages`, {
         headers: { Cookie: auth.cookie },
@@ -406,10 +410,7 @@ describe('Generation HTTP Surface & Streaming (P2-5 & P2-6)', () => {
     expect(listedIds).not.toContain(oldAssistantId);
     expect(listedIds).toContain(newAssistantId);
 
-    // Retry AGAIN from the same original user message: the retry must target the *tail* of the
-    // supersession chain, not resurrect the first attempt (§13.4). This is the
-    // findPairedAssistantMessage chain-walk fix. Wait for the retry's generation to go terminal
-    // first (only one live generation per conversation is allowed).
+    // Retry again: retry targets the tail of the supersession chain.
     for (let attempt = 0; attempt < 100; attempt++) {
       const { rows } = await pool.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM generation_jobs

@@ -14,17 +14,11 @@ import type { QuotaPort } from '../ports/quota-port.ts';
 import type { GenerationEnqueuer, EnqueueGenerationInput } from '../ports/generation-enqueuer.ts';
 
 /**
- * T1 — the transactional, idempotent send (AGENTS §6.12, PRD §16.5).
+ * Transactional, idempotent send service.
  *
- * All durable effects — the idempotency claim, quota reservation, sequence allocation, the user
- * message and parts, the assistant placeholder and the `generation_jobs` row — commit together or
- * not at all. The provider call is *never* started here; the caller hands the returned handle to
- * the orchestrator only after this promise resolves (i.e. after commit).
- *
- * Ordering inside the transaction matters:
- * 1. idempotency claim first — a replay short-circuits before any other write;
- * 2. quota reservation second — it can reject the whole send (429) with nothing else written;
- * 3. everything else is pure row creation that cannot fail for business reasons.
+ * All durable effects — the idempotency claim, sequence allocation, user message and parts,
+ * assistant placeholder, generation record, and quota reservation — commit together in one transaction.
+ * The provider call is handed to the orchestrator only after this transaction commits.
  */
 
 export interface SendMessageDeps {
@@ -53,11 +47,7 @@ export interface SendMessageInput {
 }
 
 /**
- * The exact 202 `data` payload (API_CONTRACTS §6.2), already wire-shaped (ISO strings, no Dates).
- *
- * Storing *this* shape — rather than the domain objects — is what makes replay byte-identical:
- * the stored JSON round-trips to the same object the first caller received, and the route can
- * return it without re-serializing.
+ * The wire payload representation stored for idempotent replay.
  */
 export interface SendMessagePayload {
   readonly userMessage: WireMessage;
@@ -96,14 +86,13 @@ export interface SendService {
   retry(input: RetryMessageInput): Promise<SendOutcome>;
 }
 
-/** Files are Phase 4; a text-only model must not silently drop them (PRD §12.6). */
 const MAX_CONTENT_CHARS = 200_000;
 
 export function createSendService(deps: SendMessageDeps): SendService {
   /**
    * Post-commit recovery for a generation the orchestrator refused to enqueue (in-memory capacity
-   * or draining gate). T1 already committed, so the row would otherwise sit `pending` with no
-   * runner and block the conversation until the reaper's 30 s sweep. Mark it terminal here.
+   * or draining gate). The send transaction already committed, so mark it terminal here rather
+   * than waiting for the reaper sweep.
    */
   const recoverUnenqueuedGeneration = async (generationId: string): Promise<void> => {
     try {
@@ -138,7 +127,6 @@ export function createSendService(deps: SendMessageDeps): SendService {
       }
       const { model, provider, runtime } = resolved;
 
-      // Phase 2 is text-only: reject file parts rather than dropping them.
       for (const part of input.parts) {
         if (part.type === 'file') {
           throw new AppError(
@@ -164,7 +152,6 @@ export function createSendService(deps: SendMessageDeps): SendService {
         text: part.text,
       }));
 
-      // Node admission happens *before* any insert: a full node or draining node should not even begin T1.
       if (deps.orchestrator?.isDraining) {
         throw new AppError('service_busy', 'Server is shutting down.', {
           details: { retryAfterSeconds: 5 },
@@ -182,7 +169,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
       let enqueuePayload: EnqueueGenerationInput | null = null;
 
       const outcome = await withTransaction(async (tx) => {
-        // 1. Idempotency claim (S4). A replay returns the stored bytes and writes nothing else.
+        // Idempotency claim. A replay returns the stored response and writes nothing else.
         const claim = await deps.generations.claimIdempotencyKey(
           {
             userId: input.userId,
@@ -209,8 +196,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           return { replayed: true, payload: claim.stored.responseBody as SendMessagePayload };
         }
 
-        // 2. Build context *inside* the transaction only for its validation/budgeting; the pure
-        // builder does no I/O, and this keeps `context_too_large` atomic with the claim.
+        // Build context inside transaction for atomic budgeting.
         const history = await deps.conversations.listMessagesWithParts(
           { conversationId: conversation.id, limit: 200, before: null },
           tx,
@@ -233,20 +219,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           userIdHash,
         });
 
-        // 3. Quota reservation (Phase 3 enforces; Phase 2 accepts). Rejection rolls back T1.
-        const reservation = await deps.quota.reserve(
-          {
-            userId: input.userId,
-            generationId,
-            providerId: provider.id,
-            modelId: model.id,
-            requestedTokens: built.estimatedTokens + maxOutputTokens,
-            estimatedInputTokens: built.estimatedTokens,
-          },
-          tx,
-        );
-
-        // 4. Allocate the sequence pair (row lock serializes concurrent sends per conversation).
+        // Allocate sequence numbers for user and assistant messages.
         const seqs = await deps.conversations.allocateSeqPair(conversation.id, tx);
         if (seqs === null) {
           throw new AppError('not_found', 'Conversation not found.');
@@ -281,7 +254,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
         await deps.conversations.insertMessage(userMessage, tx);
         await deps.conversations.insertParts(userParts, tx);
 
-        // 5. Assistant placeholder — `streaming` with no parts yet; the runner fills it.
+        // Assistant streaming placeholder.
         const assistantMessage: Message = {
           id: deps.idGen.uuidv7(),
           conversationId: conversation.id,
@@ -296,7 +269,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
         };
         await deps.conversations.insertMessage(assistantMessage, tx);
 
-        // 6. The generation row. A live row already exists → partial unique index → 409.
+        // Insert generation row before quota reservation.
         let generation: GenerationRecord;
         try {
           generation = await deps.generations.insert(
@@ -329,7 +302,39 @@ export function createSendService(deps: SendMessageDeps): SendService {
           throw error;
         }
 
-        // 7. First-message auto-title (FR-CONV-7), only while the title is still the default.
+        // Quota reservation. Rejection rolls back the transaction.
+        const reservation = await deps.quota.reserve(
+          {
+            userId: input.userId,
+            generationId,
+            providerId: provider.id,
+            modelId: model.id,
+            estimatedInputTokens: built.estimatedTokens,
+            requestedMaxOutputTokens: maxOutputTokens,
+            modelMaxOutputTokens: model.maxOutputTokens,
+            quotaWeight: runtime.model.quotaWeight,
+            hasMediaParts: newParts.some((part) => part.type !== 'text'),
+            maxInputTokensForRequest: runtime.model.capabilities.contextWindow,
+          },
+          tx,
+        );
+        // When remaining quota is short, the reservation shrinks the output bound.
+        // The provider max_tokens must match so the bound is physically enforced.
+        const effectiveMaxOutput =
+          reservation.effectiveMaxOutputTokens !== null &&
+          reservation.effectiveMaxOutputTokens < maxOutputTokens
+            ? reservation.effectiveMaxOutputTokens
+            : maxOutputTokens;
+        const chatRequest =
+          effectiveMaxOutput === maxOutputTokens
+            ? built.request
+            : { ...built.request, maxOutputTokens: effectiveMaxOutput };
+        if (effectiveMaxOutput !== maxOutputTokens) {
+          await deps.generations.updateMaxOutputTokens(generation.id, effectiveMaxOutput, tx);
+          generation = { ...generation, maxOutputTokens: effectiveMaxOutput };
+        }
+
+        // First-message auto-title, only while the title is still the default.
         const firstText = firstUserText(conversation, textParts);
         if (firstText !== null) {
           await deps.conversations.setTitleIfDefault(
@@ -343,7 +348,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           generation,
           userMessageId: userMessage.id,
           assistantMessageId: assistantMessage.id,
-          chatRequest: built.request,
+          chatRequest,
           contextInfo: {
             truncated: built.truncation.truncated,
             droppedMessageCount: built.truncation.droppedMessageCount,
@@ -359,12 +364,11 @@ export function createSendService(deps: SendMessageDeps): SendService {
             streamUrl: `/api/generations/${generation.id}/stream`,
           },
           quota:
-            // Phase 2's `NoopQuota` reports no account → the block is null (decision S3).
             reservation.accountId === null
               ? null
               : {
                   reservedTokens: reservation.reservedTokens,
-                  remainingTokens: await deps.quota.remainingTokens(input.userId),
+                  remainingTokens: reservation.remainingTokens,
                 },
         };
 
@@ -526,18 +530,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           userIdHash,
         });
 
-        const reservation = await deps.quota.reserve(
-          {
-            userId: input.userId,
-            generationId,
-            providerId: provider.id,
-            modelId: model.id,
-            requestedTokens: built.estimatedTokens + maxOutputTokens,
-            estimatedInputTokens: built.estimatedTokens,
-          },
-          tx,
-        );
-
+        // Allocate new assistant sequence number.
         const newAssistantSeq = await deps.conversations.allocateSeq(conversation.id, 1, tx);
         if (newAssistantSeq === null) {
           throw new AppError('not_found', 'Conversation not found.');
@@ -596,11 +589,41 @@ export function createSendService(deps: SendMessageDeps): SendService {
           throw error;
         }
 
+        // Quota reservation. Rejection rolls back the transaction.
+        const reservation = await deps.quota.reserve(
+          {
+            userId: input.userId,
+            generationId,
+            providerId: provider.id,
+            modelId: model.id,
+            estimatedInputTokens: built.estimatedTokens,
+            requestedMaxOutputTokens: maxOutputTokens,
+            modelMaxOutputTokens: model.maxOutputTokens,
+            quotaWeight: runtime.model.quotaWeight,
+            hasMediaParts: userParts.some((part) => part.type !== 'text'),
+            maxInputTokensForRequest: runtime.model.capabilities.contextWindow,
+          },
+          tx,
+        );
+        const effectiveMaxOutput =
+          reservation.effectiveMaxOutputTokens !== null &&
+          reservation.effectiveMaxOutputTokens < maxOutputTokens
+            ? reservation.effectiveMaxOutputTokens
+            : maxOutputTokens;
+        const chatRequest =
+          effectiveMaxOutput === maxOutputTokens
+            ? built.request
+            : { ...built.request, maxOutputTokens: effectiveMaxOutput };
+        if (effectiveMaxOutput !== maxOutputTokens) {
+          await deps.generations.updateMaxOutputTokens(generation.id, effectiveMaxOutput, tx);
+          generation = { ...generation, maxOutputTokens: effectiveMaxOutput };
+        }
+
         enqueuePayload = {
           generation,
           userMessageId: userMsgWithParts.message.id,
           assistantMessageId: newAssistantMessage.id,
-          chatRequest: built.request,
+          chatRequest,
           contextInfo: {
             truncated: built.truncation.truncated,
             droppedMessageCount: built.truncation.droppedMessageCount,
@@ -616,11 +639,11 @@ export function createSendService(deps: SendMessageDeps): SendService {
             streamUrl: `/api/generations/${generation.id}/stream`,
           },
           quota:
-            reservation.reservedTokens === 0
+            reservation.accountId === null
               ? null
               : {
                   reservedTokens: reservation.reservedTokens,
-                  remainingTokens: await deps.quota.remainingTokens(input.userId),
+                  remainingTokens: reservation.remainingTokens,
                 },
         };
 
@@ -711,8 +734,7 @@ function firstUserText(
 }
 
 /**
- * The platform system prompt is a Phase-1 `system_settings` value; until the settings service is
- * wired here it stays `undefined` (behaviour identical to "no system prompt configured").
+ * Reads platform system prompt when configured.
  */
 async function readPlatformSystemPrompt(): Promise<string | undefined> {
   return undefined;

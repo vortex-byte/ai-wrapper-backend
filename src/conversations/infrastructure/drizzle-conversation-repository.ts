@@ -490,9 +490,6 @@ export class DrizzleConversationRepository implements ConversationRepository {
     conversationId: string,
     tx?: TransactionContext,
   ): Promise<MessageWithParts | null> {
-    // Walk the retry chain to its tail: the assistant message paired with this turn is the one
-    // that is *not* superseded (a retried turn marks each previous assistant message superseded),
-    // so repeated retries always target the latest attempt rather than resurrecting the first.
     const rows = await runDb(tx)
       .select({
         ...messageColumns,
@@ -507,13 +504,10 @@ export class DrizzleConversationRepository implements ConversationRepository {
         ),
       );
 
-    // Chase forward through supersession starting from the first paired assistant message.
     let current: (typeof rows)[number] | undefined = rows[0];
     if (current === undefined) return null;
 
     const byId = new Map<string, (typeof rows)[number]>();
-    // Subsequent attempts are appended as new assistant messages with increasing seq; load the
-    // whole conversation tail so the chain is resolvable.
     const chainRows = await runDb(tx)
       .select({
         ...messageColumns,
@@ -537,7 +531,6 @@ export class DrizzleConversationRepository implements ConversationRepository {
 
     const messageRow = current;
 
-    // Re-read the resolved message with its generation link so callers still get `generationId`.
     const detailRows = await runDb(tx)
       .select({
         ...messageColumns,

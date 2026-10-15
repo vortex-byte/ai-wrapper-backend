@@ -37,8 +37,6 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
   const { conversations, send, auth, config } = deps;
   const routes = new Hono<AppEnv>();
 
-  // Scope the guard to this module's paths: `use('*')` would intercept every unmatched
-  // `/api/*` request (the router is mounted at `/`) and turn a 404 into a 401.
   routes.use('/conversations/*', requireAuth(auth, config));
   routes.use('/conversations/*', requirePasswordChanged());
   routes.use('/conversations/*', async (c, next) => {
@@ -222,9 +220,7 @@ function toWirePart(part: MessagePart) {
 }
 
 /**
- * `Idempotency-Key` is required and must be a UUID (API_CONTRACTS §6.2). A missing or malformed
- * header is `400 invalid_request` and never reaches the use case — idempotency is not optional
- * for a creating request.
+ * Validates that `Idempotency-Key` header is present and is a UUID.
  */
 function readIdempotencyKey(header: string | undefined): string {
   if (header === undefined || header === '') {

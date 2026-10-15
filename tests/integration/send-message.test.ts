@@ -126,7 +126,7 @@ async function send(
   );
 }
 
-describe('Send message — T1 transactional & idempotent (real PostgreSQL)', () => {
+describe('Send message — transactional & idempotent (real PostgreSQL)', () => {
   beforeEach(async () => {
     await resetDatabase();
     (services.rateLimiter as MemoryRateLimiter).clear();
@@ -153,7 +153,7 @@ describe('Send message — T1 transactional & idempotent (real PostgreSQL)', () 
         userMessage: { id: string; seq: number; role: string; status: string };
         assistantMessage: { id: string; seq: number; role: string; status: string };
         generation: { id: string; status: string; streamUrl: string };
-        quota: unknown;
+        quota: { reservedTokens: number; remainingTokens: number } | null;
       };
     };
     expect(body.data.userMessage.role).toBe('user');
@@ -164,8 +164,10 @@ describe('Send message — T1 transactional & idempotent (real PostgreSQL)', () 
     expect(body.data.assistantMessage.seq).toBe(2);
     expect(body.data.generation.status).toBe('pending');
     expect(body.data.generation.streamUrl).toBe(`/api/generations/${body.data.generation.id}/stream`);
-    // Phase 2 has no accounting (decision S3) — the quota block is explicitly null, not absent.
-    expect(body.data.quota).toBeNull();
+    // Quota reports the reservation and remaining balance.
+    expect(body.data.quota).not.toBeNull();
+    expect(body.data.quota?.reservedTokens).toBeGreaterThan(0);
+    expect(body.data.quota?.remainingTokens).toBeGreaterThanOrEqual(0);
 
     const pool = getPool();
     const { rows } = await pool.query<{ count: string }>(

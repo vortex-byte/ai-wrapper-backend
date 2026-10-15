@@ -66,7 +66,7 @@ export interface MessageWithParts {
 }
 
 export const MAX_TITLE_LENGTH = 200;
-/** Titles are derived from the first user text message (FR-CONV-7), truncated. */
+/** Titles are derived from the first user text message, truncated. */
 const DEFAULT_TITLE = 'New conversation';
 
 /**

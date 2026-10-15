@@ -161,13 +161,13 @@ export class GenerationRun {
       },
     });
 
-    // Frame #1: message.created (pre-subscribe, at enqueue).
+    /** Frame #1: message.created (pre-subscribe, at enqueue). */
     this.ringBuffer.push('message.created', {
       userMessageId: input.userMessageId,
       assistantMessageId: input.assistantMessageId,
     });
 
-    // Frame #2: generation.state(generating).
+    /** Frame #2: generation.state (generating). */
     this.ringBuffer.push('generation.state', { state: 'generating' });
 
     if (input.contextInfo.truncated) {
@@ -176,7 +176,7 @@ export class GenerationRun {
       });
     }
 
-    // Arm detach timer initially: if no subscriber attaches within timeout, abort.
+    /** Arm detach timer initially: if no subscriber attaches within timeout, abort. */
     this.armDetachTimer();
   }
 
@@ -344,10 +344,10 @@ export class GenerationRun {
       };
     } finally {
       clearTimeout(timeoutTimer);
-      // Close the provider's async generator so its HTTP socket/buffers are released promptly
-      // instead of lingering until the SDK timeout (abort, timeout or early break). This is
-      // best-effort and *bounded*: a generator that is suspended inside an `await` ignores
-      // `return()` until it resumes, and that must never delay the terminal transition.
+      /**
+       * Close the provider's async generator so its HTTP socket/buffers are released promptly instead of lingering until the SDK timeout (abort, timeout or early break). 
+       * This is best-effort and *bounded*: a generator that is suspended inside an `await` ignores `return()` until it resumes, and that must never delay the terminal transition.
+       */
       try {
         const closed = await Promise.race([
           Promise.resolve(iterator.return?.(undefined)).then(
@@ -375,7 +375,6 @@ export class GenerationRun {
         break;
 
       case 'part_started':
-        // D2 rule: clean failed(internal_error) if adapter emits non-text part
         if (event.partType !== 'text') {
           this.abortController.abort('unsupported_modality');
           throw new Error('Adapter emitted unsupported non-text part');
@@ -398,9 +397,9 @@ export class GenerationRun {
         break;
 
       case 'text_delta':
-        // Some adapters stream text without a preceding `part_started`. Create the part exactly
-        // like a real `part_started` would — including the persistence hook — otherwise the part
-        // row is never inserted and every checkpoint/final write silently updates 0 rows.
+        /**
+         * Some adapters stream text without a preceding `part_started`. Create the part exactly like a real `part_started` would — including the persistence hook — otherwise the part row is never inserted and every checkpoint/final write silently updates 0 rows.
+         */
         if (this.currentPartId === null) {
           this.currentPartId = this.idGen.uuidv7();
           if (this.hooks?.onPartStarted !== undefined) {
@@ -425,7 +424,6 @@ export class GenerationRun {
         break;
 
       case 'artifact_chunk':
-        // D2 rule: clean failed(internal_error) on artifact chunk
         this.abortController.abort('unsupported_modality');
         throw new Error('Adapter emitted unsupported artifact_chunk');
 
@@ -581,8 +579,6 @@ export class GenerationRun {
         return;
       }
       if (this.status === 'generating') {
-        // Deliver a bare SSE comment directly to subscribers without pushing to the ring buffer,
-        // advancing seq or emitting a named event (PRD §14.3 comment heartbeat, D7).
         for (const sub of this.subscribers.values()) {
           sub.push({
             id: 0,

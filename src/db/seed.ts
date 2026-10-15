@@ -61,7 +61,7 @@ export const EXAMPLE_MODELS: readonly ExampleModel[] = [
   },
 ];
 
-/** True when the provider registry table exists (created by the Phase 1 migration). */
+/** True when the provider registry table exists. */
 async function registryTablesPresent(): Promise<boolean> {
   const { rows } = await getPool().query<{ present: string | null }>(
     `SELECT to_regclass('public.ai_providers')::text AS present`,
@@ -70,8 +70,7 @@ async function registryTablesPresent(): Promise<boolean> {
 }
 
 /**
- * Idempotent: re-running inserts nothing new. Refuses in production regardless of the
- * `--force` flag — this is documented behavior, not a convenience.
+ * Idempotent: re-running inserts nothing new. Refuses in production.
  */
 export async function runExampleSeed(): Promise<SeedResult> {
   const config = getConfig();
@@ -82,7 +81,7 @@ export async function runExampleSeed(): Promise<SeedResult> {
   if (!(await registryTablesPresent())) {
     return {
       seeded: false,
-      reason: 'registry tables not present yet (ai_providers lands in Phase 1)',
+      reason: 'registry tables not present yet',
       inserted: {},
     };
   }

@@ -204,7 +204,7 @@ describe('Finalizer', () => {
     expect(partUpdates[0]?.textContent).toBe('Partial checkpointed text that must not be wiped');
   });
 
-  it('is idempotent: second finalize returns false when already terminalized (T3)', async () => {
+  it('is idempotent: second finalize returns false when already terminalized', async () => {
     const mockGenerations: Partial<GenerationRepository> = {
       transitionToTerminal: async () => false, // 0 rows updated -> already terminal
     };
@@ -233,8 +233,7 @@ describe('Finalizer', () => {
 
     const mockGenerations: Partial<GenerationRepository> = {
       transitionToTerminal: async () => true,
-      // startedAt != null -> the provider was already called, so tokens must be settled
-      // (PRD §11.5: cancel/fail after stream start is not free).
+      // startedAt !== null indicates tokens were consumed and must be settled.
       findById: async (id) => createDummyRecord(id),
     };
 
@@ -352,7 +351,7 @@ describe('Finalizer', () => {
     });
 
     expect(result).toBe(true);
-    // PRD §13.4: partial content is kept readable -> `incomplete`, not a hard `failed`.
+    // Partial content is preserved as `incomplete` rather than hard `failed`.
     expect(messageUpdates[0]?.['status']).toBe('incomplete');
     expect(messageUpdates[0]?.['finishReason']).toBe('error');
   });

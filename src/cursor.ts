@@ -1,13 +1,9 @@
 /**
  * Opaque keyset cursors for list endpoints. A cursor encodes the sort tuple the next page
- * continues after; clients treat it as an opaque string and never
- * construct one. Keyset — never `OFFSET` — is the only pagination strategy.
+ * continues after; clients treat it as an opaque string.
  *
  * Format: `base64url("<sort-key>|<id>")`, where `<sort-key>` is either an ISO timestamp or a
  * numeric sequence depending on the list.
- *
- * Platform helper (AGENTS.md §3.3): it is pure, lives outside `http/`, and may be imported by
- * `http/` and `application/` — but never by `domain/`, which stays dependency-free.
  */
 
 export interface KeyedCursor {

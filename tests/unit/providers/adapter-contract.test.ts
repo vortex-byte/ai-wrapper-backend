@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import OpenAI from 'openai';
 import {
   OpenAIAdapter,
   type OpenAIClientLike,
@@ -43,6 +44,13 @@ function decodeAnthropic(fixture: string): unknown[] {
     .split(/\r?\n/)
     .filter((line) => line.startsWith('data: '))
     .map((line) => JSON.parse(line.slice(6)) as unknown);
+}
+
+function isErrorFrame(chunk: unknown): chunk is { error: Record<string, unknown> } {
+  if (typeof chunk !== 'object' || chunk === null || !('error' in chunk)) return false;
+  // why: JSON.parse returns unknown; the guard's job is proving the frame shape once
+  const body = (chunk as { error: unknown }).error;
+  return typeof body === 'object' && body !== null;
 }
 
 describe('provider adapter contract (recorded SSE fixture replay)', () => {
@@ -110,11 +118,84 @@ describe('provider adapter contract (recorded SSE fixture replay)', () => {
   it('contains no real credentials in recorded provider fixtures', async () => {
     for (const path of [
       '../../fixtures/openai/text.sse.txt',
+      '../../fixtures/openai/error.sse.txt',
       '../../fixtures/anthropic/text.sse.txt',
+      '../../fixtures/anthropic/error.sse.txt',
     ]) {
       const fixture = await readFile(new URL(path, import.meta.url), 'utf8');
       expect(fixture).not.toMatch(/Bearer\s+|sk-[A-Za-z0-9]{8,}|api[_-]?key/i);
     }
+  });
+
+  it.each([
+    ['openai', 'openai/error.sse.txt'],
+    ['anthropic', 'anthropic/error.sse.txt'],
+  ])('%s surfaces a mid-stream error frame as one terminal error (no finished)', async (provider, file) => {
+    const fixture = await readFile(new URL(`../../fixtures/${file}`, import.meta.url), 'utf8');
+    const chunks = provider === 'openai' ? decodeOpenAI(fixture) : decodeAnthropic(fixture);
+    const request = makeChatRequest({
+      provider: {
+        ...makeChatRequest().provider,
+        key: provider,
+        adapter: provider,
+        secrets: { apiKey: 'contract-test-secret' },
+      },
+    });
+    const openaiClient: OpenAIClientLike = {
+      models: {
+        async list() {
+          return { data: [] };
+        },
+      },
+      chat: {
+        completions: {
+          async create() {
+            return (async function* () {
+              for (const chunk of chunks) {
+                // why: the real SDK never yields error frames — core/streaming.js throws APIError on them
+                if (isErrorFrame(chunk)) {
+                  throw new OpenAI.APIError(undefined, chunk.error, undefined, new Headers());
+                }
+                yield chunk;
+              }
+            })();
+          },
+        },
+      },
+    };
+    const anthropicClient: AnthropicClientLike = {
+      models: {
+        async list() {
+          return { data: [] };
+        },
+      },
+      messages: {
+        async create() {
+          return (async function* () {
+            yield* chunks;
+          })();
+        },
+      },
+    };
+    const adapter =
+      provider === 'openai'
+        ? new OpenAIAdapter(() => openaiClient)
+        : new AnthropicAdapter(() => anthropicClient);
+    const events = await collect(adapter, request);
+    expect(
+      events
+        .filter((event) => event.type === 'text_delta')
+        .map((event) => (event.type === 'text_delta' ? event.text : '')),
+    ).toEqual(['partial response']);
+    expect(
+      events.filter((event) => event.type === 'finished' || event.type === 'error'),
+    ).toHaveLength(1);
+    const terminal = events.at(-1);
+    expect(terminal?.type).toBe('error');
+    if (provider === 'anthropic' && terminal?.type === 'error') {
+      expect(terminal.error.category).toBe('service_busy');
+    }
+    expect(JSON.stringify(events)).not.toContain('contract-test-secret');
   });
 
   it('aborts OpenAI fixture iteration promptly and emits one terminal error', async () => {

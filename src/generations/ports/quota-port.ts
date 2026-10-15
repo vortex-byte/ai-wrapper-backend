@@ -1,16 +1,8 @@
 /**
- * The quota seam (decision D1).
+ * Quota accounting port.
  *
- * Phase 2 exercises the *shape* of T1 reserve / T2 settle+release without owning the accounting:
- * the send transaction calls `reserve()` and the finalizer calls `settleOrRelease()`. Phase 3
- * swaps the implementation for conditional-UPDATE accounting (AGENTS §6.12) and nothing above
- * this port changes — which is why it exists now rather than in Phase 3.
- *
- * Rules the real implementation (Phase 3) must keep:
- * - `reserve` runs **inside** the T1 transaction, after the idempotency claim, and may throw
- *   `AppError('quota_exceeded')` / `AppError('concurrency_limit')` to roll the whole send back;
- * - `settleOrRelease` is idempotent per generation: a reservation already finalized is a no-op;
- * - neither opens its own transaction (both receive the caller's `TransactionContext`).
+ * Enforces reservation invariants inside send transactions and idempotent
+ * settlement/release during terminal finalization.
  */
 
 import type { TransactionContext } from '@/db/tx.ts';
@@ -20,36 +12,66 @@ export interface ReserveContext {
   readonly generationId: string;
   readonly providerId: string;
   readonly modelId: string;
-  /** Estimated input tokens + worst-case output, pre-multiplied by model `quota_weight`. */
-  readonly requestedTokens: number;
-  /** Input tokens the context builder estimated (stored on the reservation for §11.2 reporting). */
+  /**
+   * Raw estimated input tokens from the context builder before estimation margin is applied.
+   */
   readonly estimatedInputTokens: number;
+  /** Worst-case output requested for this call (already clamped to model caps by the caller). */
+  readonly requestedMaxOutputTokens: number;
+  /** Model hard cap (`ai_models.max_output_tokens`) for the clamp math. */
+  readonly modelMaxOutputTokens: number;
+  /** `ai_models.quota_weight` (default 1.0). */
+  readonly quotaWeight: number;
+  /** Per-model margin override from `models.config.estimation.margin`, when configured. */
+  readonly marginOverride?: number | undefined;
+  /** True when the request carries image/document parts (heavier estimation uncertainty). */
+  readonly hasMediaParts: boolean;
+  /** Model context cap for per-request input token validation. */
+  readonly maxInputTokensForRequest?: number | undefined;
 }
 
-/** Opaque handle handed from `reserve()` to `settleOrRelease()`; Phase 3 carries the account id. */
 export interface ReservationHandle {
   readonly generationId: string;
   readonly reservedTokens: number;
   readonly accountId: string | null;
+  /**
+   * Effective output bound after clamping. When remaining quota is low, this bound
+   * is reduced to fit available tokens.
+   */
+  readonly effectiveMaxOutputTokens: number | null;
+  /** Quota tokens still available after this reservation. */
+  readonly remainingTokens: number | null;
 }
 
 /** Terminal accounting for a generation: `actualTokens = 0` means "release, did not consume". */
 export interface Settlement {
   readonly generationId: string;
   readonly outcome: 'settled' | 'released';
+  /** Raw provider tokens (input + output). Multiplied by `quota_weight` by the implementation. */
   readonly actualTokens: number;
+  /** Usage breakdown for `usage_events` (optional: absent ⇒ raw actualTokens only). */
+  readonly usage?: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly cachedInputTokens?: number | undefined;
+    readonly reasoningTokens?: number | undefined;
+    readonly source: 'provider' | 'estimated';
+  } | undefined;
+  readonly outcomeCategory?: 'completed' | 'cancelled' | 'failed' | undefined;
+  readonly errorCategory?: string | null | undefined;
+  readonly durationMs?: number | null | undefined;
+  readonly timeToFirstTokenMs?: number | null | undefined;
 }
 
 export interface QuotaPort {
-  /** Reserve quota for a new generation inside T1. Throws `AppError` on rejection. */
+  /** Reserve quota for a new generation. Throws `AppError` on rejection. */
   reserve(ctx: ReserveContext, tx: TransactionContext): Promise<ReservationHandle>;
 
   /** Settle (consume) or release (give back) the reservation, keyed by generation. Idempotent. */
   settleOrRelease(settlement: Settlement, tx: TransactionContext): Promise<void>;
 
   /**
-   * Live "tokens remaining" for a user, for the 202 body / `GET /generations/:id`.
-   * Phase 2 has no accounts → `null` (API_CONTRACTS §6.2/§7.1 mark this nullable).
+   * Live tokens remaining for a user. Returns null when no current-period account exists.
    */
   remainingTokens(userId: string): Promise<number | null>;
 }

@@ -8,12 +8,12 @@ export interface ReaperHandlerDeps {
 }
 
 /**
- * Recovers orphaned/crashed generations (PRD §13.4, D5).
+ * Recovers orphaned or crashed generations.
  * Sweeps for:
  * 1. generations with status='generating' whose heartbeat is older than 45s;
  * 2. generations with status='pending' older than 30s with no runner.
  *
- * Finalizes them via T3 to failed(interrupted) and marks parts/messages as incomplete.
+ * Finalizes them to failed(interrupted) and marks parts/messages as incomplete.
  */
 export function createReaperHandler(deps: ReaperHandlerDeps) {
   return async (): Promise<{ reapedCount: number }> => {
@@ -34,7 +34,7 @@ export function createReaperHandler(deps: ReaperHandlerDeps) {
           generationId: row.id,
           status: 'failed',
           finishReason: 'interrupted',
-          accumulatedText: '', // finalizer automatically resolves existing checkpointed text from parts
+          accumulatedText: '',
           error: {
             code: 'generation_interrupted',
             message: 'Generation was abandoned or worker process crashed.',

@@ -158,8 +158,8 @@ bun run dev
 - [x] M2.1 — Finalizer (T2/T3): settlement seam, `messages` terminal state, SSE terminal event; idempotent.
 - [x] M2.2 — Cancel; reaper (stale heartbeat > 45 s → `failed(interrupted)`); provider error translation (no detail leaks).
 - [x] M2.2 — Idempotent retry endpoint; graceful shutdown drain (SIGTERM, §24.6).
-- [ ] M2.3 — Adapter contract suite + recorded fixture replay (in progress).
-- [x] M2.3 — FakeProvider example seed; manual live smoke command remains to be added (requires real provider credentials).
+- [x] M2.3 — Adapter contract suite + recorded fixture replay (happy-path + mid-stream error frames for both adapters).
+- [x] M2.3 — FakeProvider example seed; live smoke via `bun run cli smoke-live --provider <openai|anthropic>` (requires real provider credentials to run).
 
 **Deliverables.** End-to-end streamed chat with cancel, reconnect, retry, and crash recovery.
 
@@ -170,37 +170,43 @@ bun run dev
 **Objective.** Correct reservation/settlement accounting under concurrency.
 
 **Tasks**
-- [ ] Policy resolution (`user → division → global`, per field) + lazy period creation.
-- [ ] Reservation via conditional `UPDATE` (T1); settle/release via `SELECT … FOR UPDATE` (T2); ledger rows (signed) for every movement.
-- [ ] Reservation reaper, quota reaper integration, estimation + margins, overshoot handling.
-- [ ] **Tokenizer per provider (FR-QUOTA-7):** `tiktoken` (WASM, lazy-init, cached per encoding) in OpenAI adapter; local port `dhamaniasad/claude-tokenizer` in Anthropic adapter; local/BPE tokenizer + margin for other adapter. Other adapter using heuristic.
-- [ ] Comapre between `est_tokens` vs usage actual provider → metrics `estimation_error_ratio`; override margin per model via `models.config.estimation.margin`.
-- [ ] Token estimation for message with image/PDF via formula per-provider in adapter; calibrate using real data.
-- [ ] `GET /me/quota`, `GET /me/usage`; admin quota APIs (`quota-policies`, `adjustments`, user quota + ledger).
-- [ ] `usage_events` written once per settled generation; `usage_daily` rollup handler + nightly rebuild.
-- [ ] Nightly reconciliation (counters vs ledger) + a `reconcile` job.
-- [ ] **Concurrency/property tests** (real PostgreSQL): the 100,000-limit / 50×20,000 test → exactly 5 succeed.
+- [x] Policy resolution (`user → division → global`, per field) + lazy period creation.
+- [x] Reservation via conditional `UPDATE` (T1); settle/release via `SELECT … FOR UPDATE` (T2); ledger rows (signed) for every movement.
+- [x] Reservation reaper, quota reaper integration, estimation + margins, overshoot handling.
+- [x] Tokenizer per provider (FR-QUOTA-7): `tiktoken` (WASM, lazy-init, cached per encoding) in OpenAI adapter; local port `dhamaniasad/claude-tokenizer` in Anthropic adapter; local/BPE tokenizer + margin for other adapter. Other adapter using heuristic.
+- [x] Comapre between `est_tokens` vs usage actual provider → metrics `estimation_error_ratio`; override margin per model via `models.config.estimation.margin`.
+- [x] Token estimation for message with image/PDF via formula per-provider in adapter; calibrate using real data.
+- [x] `GET /me/quota`, `GET /me/usage`; admin quota APIs (`quota-policies`, `adjustments`, user quota + ledger).
+- [x] `usage_events` written once per settled generation; `usage_daily` rollup handler + nightly rebuild.
+- [x] Nightly reconciliation (counters vs ledger) + a `reconcile` job.
+- [x] **Concurrency/property tests** (real PostgreSQL): the 100,000-limit / 50×20,000 test → exactly 5 succeed.
 
 **Deliverables.** Enforced per-user monthly quota (default 500,000 tokens), accurate usage reporting, auditable ledger.
 
 **Exit criteria.** Concurrency + property tests green; `used + reserved <= limit` holds at every sampled instant; daily reconciliation runs (must stay clean for 14 days across Phases 3–5).
 
-## Phase 4 — Files & multimodal
+## Phase 4 — Files, multimodal & built-in provider tools
 
-**Objective.** Upload, validate, extract, attach, and serve binary artifacts; prove the abstraction with a third adapter.
+**Objective.** Upload, validate, extract, attach, and serve binary artifacts; integrate built-in provider cloud tools (search, fetch, code execution, skills, image/doc generation); prove the abstraction with a third adapter.
 
 **Tasks**
 - [ ] `attachments` + `file_extractions` migrations; `StorageProvider` interface + `LocalStorageProvider` (`STORAGE_LOCAL_ROOT`, opaque keys only — no paths stored/returned).
 - [ ] Upload pipeline: size/type limits, magic-byte detection, image dimension/probe, archive-bomb + macro + encrypted-PDF rejection, `sha256`.
 - [ ] Async extraction job (forked child: timeout + memory limit); 5 s fast-path; `RETAIN_EXTRACTIONS`.
-- [ ] Attach flow inside the send transaction; `ArtifactSink` for `generated_file` parts (tested with `FakeProvider`).
+- [ ] Attach flow inside the send transaction; `ArtifactSink` for `generated_file` and generated image parts.
+- [ ] Built-in provider tools (cloud-executed, toggleable via `options.tools`):
+  - Web search (`web_search`) and web fetch (`web_fetch`) grounding.
+  - Cloud code execution (`code_execution`) sandbox & built-in skills (`xlsx`, `docx`, `pptx`, `pdf`).
+  - Image generation (OpenAI/Claude image generation).
+  - Multi-part SSE streaming (`part.started`, `tool.started`, `tool.delta`, `tool.completed`, `part.completed`).
+  - Artifact hydration: `ArtifactSink` intercepts provider `file_id` / generated bytes, downloads them from provider APIs (e.g. Anthropic Files API), commits them to local storage, and creates `attachments` rows.
 - [ ] `GET /files/:id/content` (owner-only, correct headers, `Range`); `GET`/`DELETE /attachments/:id`.
 - [ ] Cleanup jobs: `files.expire_and_delete` (two-phase), `files.orphan_reaper`, `storage.reconcile` weekly.
 - [ ] **Third adapter: Gemini** (must require zero core changes to `orchestrator/`).
 
-**Deliverables.** Image + document upload → attach → grounded answer; generated files stored and downloadable; TTL cleanup working.
+**Deliverables.** Image + document upload → attach → grounded answer; toggleable search/fetch/skills; generated files and images stored and downloadable; TTL cleanup working.
 
-**Exit criteria.** Upload-hardening tests pass; third adapter added with **zero** core changes; disk-space alerts set.
+**Exit criteria.** Upload-hardening tests pass; built-in tool streaming and artifact downloads verified with real/fake providers; third adapter added with **zero** core changes; disk-space alerts set.
 
 ## Phase 5 — Admin, observability, hardening
 
@@ -233,7 +239,12 @@ bun run dev
 
 ## Post-MVP
 
-P1 items first (division-scoped model visibility, circuit breaker, error explorer, RLS hardening, AV scanning, fork, exports), then P2 (§26.3). Enable each by **adding modules behind existing interfaces** — no new tables/queues/services in the MVP.
+Detailed in [`docs/POST_MVP_PLAN.md`](POST_MVP_PLAN.md) across three distinct engineering phases:
+- **Phase 1: Operational Resilience, Governance & Security** (division model access, circuit breakers, provider health UI, admin error explorer & CSV exports, ClamAV antivirus, RLS hardening).
+- **Phase 2: Enterprise Identity, Storage & Alerting** (OIDC SSO, SCIM 2.0 directory sync, TOTP/MFA, S3/R2 object storage migration, quota warning alerts, OCR pipeline).
+- **Phase 3: Distributed Scale & Multi-Tenant Infrastructure** (multi-node Redis stream relay, distributed rate limiting, multi-tenant organizations, rolling context compaction, SIEM audit streaming).
+
+Conversation forking has been permanently excluded from the post-MVP plan. All post-MVP features attach cleanly to existing interfaces without rewriting MVP core logic.
 
 ---
 

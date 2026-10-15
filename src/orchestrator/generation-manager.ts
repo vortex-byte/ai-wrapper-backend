@@ -196,8 +196,6 @@ export class GenerationManager {
             error_category: outcome.error?.code ?? '',
           });
 
-          // Latency + time-to-first-token histograms (PRD §21.3). Recorded only when the provider
-          // call actually started, so aborted-before-start generations do not skew the buckets.
           const durationSeconds = run.durationSeconds(this.clock.now());
           if (durationSeconds !== null) {
             this.metrics?.generationDuration.observe(
@@ -210,7 +208,6 @@ export class GenerationManager {
             this.metrics?.generationTtft.observe({ provider: providerKey, model: modelKey }, ttftSeconds);
           }
 
-          // Provider error counter by normalized category (low cardinality).
           if (outcome.error !== undefined) {
             this.metrics?.providerErrors.inc({
               provider: providerKey,

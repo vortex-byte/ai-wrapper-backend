@@ -1,4 +1,7 @@
 import type { Config } from './config/index.ts';
+import { and, eq, isNull } from 'drizzle-orm';
+import { runDb } from './db/client.ts';
+import { users as usersTable } from './db/schema.ts';
 import type { AuthService } from './auth/application/auth-service.ts';
 import { createAuthService } from './auth/application/auth-service.ts';
 import { BunPasswordHasher } from './auth/infrastructure/bun-password-hasher.ts';
@@ -33,7 +36,15 @@ import { DrizzleSettingsRepository } from './settings/infrastructure/drizzle-set
 import type { SendService } from './generations/application/send-service.ts';
 import { createSendService } from './generations/application/send-service.ts';
 import { DrizzleGenerationRepository } from './generations/infrastructure/drizzle-generation-repository.ts';
-import { NoopQuota } from './generations/infrastructure/noop-quota.ts';
+import { RealQuota } from './quota/infrastructure/real-quota.ts';
+import { DrizzleQuotaAccountRepository } from './quota/infrastructure/drizzle-quota-account-repository.ts';
+import { DrizzleQuotaPolicyRepository } from './quota/infrastructure/drizzle-quota-policy-repository.ts';
+import { DrizzleUsageRepository } from './quota/infrastructure/drizzle-usage-repository.ts';
+import { QuotaService } from './quota/application/quota-service.ts';
+import { UsageService } from './quota/application/usage-service.ts';
+import type { QuotaPort } from './generations/ports/quota-port.ts';
+import type { QuotaService as QuotaServiceType } from './quota/application/quota-service.ts';
+import type { UsageService as UsageServiceType } from './quota/application/usage-service.ts';
 import type { ErrorEventWriter } from './generations/ports/error-event-writer.ts';
 import { DrizzleErrorEventWriter } from './generations/infrastructure/drizzle-error-event-writer.ts';
 import { createGenerationMetrics, type GenerationMetrics } from './observability/metrics.ts';
@@ -52,6 +63,10 @@ import {
   createIdempotencyPurgeHandler,
   createSessionsPurgeHandler,
 } from './jobs/application/handlers/purge-handler.ts';
+import { createQuotaReaperHandler } from './jobs/application/handlers/quota-reaper-handler.ts';
+import { createReconciliationHandler } from './jobs/application/handlers/reconciliation-handler.ts';
+import { createUsageRollupHandler } from './jobs/application/handlers/usage-rollup-handler.ts';
+import { createPrecreatePeriodsHandler } from './jobs/application/handlers/precreate-periods-handler.ts';
 
 export interface Services {
   readonly auth: AuthService;
@@ -74,6 +89,9 @@ export interface Services {
   readonly jobRunner: JobRunner;
   readonly scheduler: Scheduler;
   readonly reaperHandler: () => Promise<{ reapedCount: number }>;
+  readonly quota: QuotaPort;
+  readonly quotaService: QuotaServiceType;
+  readonly usageService: UsageServiceType;
 }
 
 export function createServices(config: Config): Services {
@@ -147,7 +165,27 @@ export function createServices(config: Config): Services {
   const errorEvents = new DrizzleErrorEventWriter();
   const metrics = createGenerationMetrics();
   const generationRepository = new DrizzleGenerationRepository();
-  const quota = new NoopQuota();
+
+  const quotaAccountsRepo = new DrizzleQuotaAccountRepository();
+  const quotaPoliciesRepo = new DrizzleQuotaPolicyRepository();
+  const usageRepo = new DrizzleUsageRepository();
+  const realQuota = new RealQuota({
+    accounts: quotaAccountsRepo,
+    policies: quotaPoliciesRepo,
+    usage: usageRepo,
+    clock: systemClock,
+    idGen: uuidv7Generator,
+    quotaTimezone: config.QUOTA_TIMEZONE,
+  });
+  const quota: QuotaPort = realQuota;
+  const quotaService: QuotaServiceType = new QuotaService({
+    accounts: quotaAccountsRepo,
+    policies: quotaPoliciesRepo,
+    idGen: () => uuidv7Generator.uuidv7(),
+    quotaTimezone: config.QUOTA_TIMEZONE,
+  });
+  const usageService: UsageServiceType = new UsageService({ usage: usageRepo });
+
   const finalizer = new Finalizer({
     generations: generationRepository,
     conversations: conversationRepository,
@@ -187,9 +225,39 @@ export function createServices(config: Config): Services {
   const idempotencyPurgeHandler = createIdempotencyPurgeHandler();
   const sessionsPurgeHandler = createSessionsPurgeHandler();
 
+  const quotaReaperHandler = createQuotaReaperHandler({
+    accounts: quotaAccountsRepo,
+    finalizer,
+    clock: systemClock,
+  });
+  const reconciliationHandler = createReconciliationHandler({
+    accounts: quotaAccountsRepo,
+    clock: systemClock,
+  });
+  const usageRollup = createUsageRollupHandler({ usage: usageRepo });
+  const precreatePeriodsHandler = createPrecreatePeriodsHandler({
+    accounts: quotaAccountsRepo,
+    userIds: async () => {
+      const rows = await runDb()
+        .select({ id: usersTable.id })
+        .from(usersTable)
+        .where(and(eq(usersTable.status, 'active'), isNull(usersTable.deletedAt)));
+      return rows.map((row) => row.id);
+    },
+    clock: systemClock,
+    idGen: uuidv7Generator,
+    quotaTimezone: config.QUOTA_TIMEZONE,
+    resolvePolicyForUser: (userId, tx) => realQuota.resolvePolicyForUser(userId, tx),
+  });
+
   jobRunner.registerHandler('generation.reaper', async () => reaperHandler());
   jobRunner.registerHandler('idempotency.purge', async () => idempotencyPurgeHandler());
   jobRunner.registerHandler('sessions.purge', async () => sessionsPurgeHandler());
+  jobRunner.registerHandler('quota.reservations.reaper', async () => quotaReaperHandler());
+  jobRunner.registerHandler('quota.reconcile', async () => reconciliationHandler());
+  jobRunner.registerHandler('usage.rollup.incremental', async () => usageRollup.incremental());
+  jobRunner.registerHandler('usage.rollup.nightly', async () => usageRollup.nightly());
+  jobRunner.registerHandler('quota.precreate_periods', async () => precreatePeriodsHandler());
 
   return {
     auth,
@@ -212,5 +280,8 @@ export function createServices(config: Config): Services {
     jobRunner,
     scheduler,
     reaperHandler,
+    quota,
+    quotaService,
+    usageService,
   };
 }

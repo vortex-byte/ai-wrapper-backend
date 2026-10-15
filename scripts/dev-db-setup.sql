@@ -6,8 +6,8 @@
 --   aichat       — the dev database (DATABASE_URL)
 --   aichat_test  — integration tests (TEST_DATABASE_URL)
 --
--- Never run this against production. The VPS deploy guide (deploy/vps/) uses a
--- dedicated migrator role and explicit grants instead (AGENTS §6.11).
+-- Never run this against production. Production environments use a
+-- dedicated migrator role and explicit grants instead.
 
 \set ON_ERROR_STOP on
 

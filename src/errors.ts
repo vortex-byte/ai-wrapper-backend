@@ -135,7 +135,7 @@ export function isUniqueViolation(value: unknown): boolean {
  * True when a PostgreSQL unique-constraint violation (23505) names a specific constraint.
  *
  * Used where several unique constraints can fire on one insert and the caller must react
- * differently to each (e.g. T1: the one-active-generation partial index → 409, a duplicate
+ * differently to each (e.g. the one-active-generation partial index → 409, a duplicate
  * `request_id` → a genuine bug). `constraint` is the constraint/index name PostgreSQL reports;
  * it is never user data, so comparing it is safe.
  *

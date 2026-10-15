@@ -38,11 +38,11 @@ export function healthFailed(error: unknown, latencyMs = 0): HealthCheckResult {
   return { ok: false, latencyMs, detail };
 }
 
-/** Errors that are not yet implemented in Phase 1 (streaming lands in Phase 2). */
+/** Creates a standard provider error for unimplemented operations. */
 export function notImplementedError(provider: string): ProviderError {
   return providerError('provider_unavailable', 'The model provider is unavailable.', {
     retryable: true,
-    internalMessage: `${provider} adapter execute() is not implemented until Phase 2`,
+    internalMessage: `${provider} adapter execute() is not implemented`,
   });
 }
 
@@ -62,6 +62,53 @@ export function parseRetryAfter(header: string | null | undefined): number | und
     return Math.max(0, dateMs - Date.now());
   }
   return undefined;
+}
+
+/**
+ * Transport-level cancellation detection shared by real adapters. Provider SDKs
+ * surface aborts as classes that never set `err.name` (they inherit "Error"),
+ * so match on the SDK class plus message content.
+ */
+export function isAbortLikeError(
+  err: unknown,
+  abortClasses: ReadonlyArray<new (...args: never[]) => Error> = [],
+): boolean {
+  for (const cls of abortClasses) {
+    if (err instanceof cls) return true;
+  }
+  if (err instanceof Error) {
+    if (err.name === 'AbortError') return true;
+    return err.message.toLowerCase().includes('abort');
+  }
+  if (typeof err === 'object' && err !== null) {
+    return (err as { name?: unknown }).name === 'AbortError';
+  }
+  return false;
+}
+
+/**
+ * Transport-level timeout detection shared by real adapters. Both SDKs throw
+ * `APIConnectionTimeoutError` with the message "Request timed out." (no custom
+ * `name`), so a plain `includes('timeout')` check misses it.
+ */
+export function isTimeoutLikeError(
+  err: unknown,
+  timeoutClasses: ReadonlyArray<new (...args: never[]) => Error> = [],
+): boolean {
+  for (const cls of timeoutClasses) {
+    if (err instanceof cls) return true;
+  }
+  if (err instanceof Error) {
+    if (err.name === 'TimeoutError') return true;
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes('timeout') ||
+      msg.includes('timed out') ||
+      msg.includes('etimedout') ||
+      msg.includes('esockettimedout')
+    );
+  }
+  return false;
 }
 
 export function scrubSecrets(text: string): string {

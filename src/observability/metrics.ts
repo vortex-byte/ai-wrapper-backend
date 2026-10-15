@@ -1,12 +1,6 @@
 /**
- * Minimal in-process Prometheus registry for the generation core (PRD §21.3).
- *
- * Scope: the Phase 2 metric subset. Counters/gauges are integers or floats; histograms keep a
- * fixed bucket set and expose `_bucket`/`_sum`/`_count`. Labels are **low-cardinality only** —
- * never `userId`, never message ids (PRD §21.3). The `/metrics` route renders this.
- *
- * This is intentionally hand-rolled (no prom-client): the surface is tiny, and the existing
- * `/metrics` route already emits the `aichat_` prefix.
+ * In-process Prometheus registry for generation metrics.
+ * Labels are low-cardinality only (no user IDs or message IDs).
  */
 
 export type Labels = Readonly<Record<string, string>>;
@@ -157,8 +151,8 @@ export class Histogram {
 }
 
 /**
- * The generation-core metric set (PRD §21.3 subset). One instance per process; the composition
- * root passes it to the orchestrator, the SSE route and the /metrics endpoint.
+ * The generation metric set. One instance per process; wired to the orchestrator,
+ * SSE routes, and /metrics endpoint.
  */
 export interface GenerationMetrics {
   readonly registry: MetricsRegistry;

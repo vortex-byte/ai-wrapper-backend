@@ -2,13 +2,6 @@ import type { MiddlewareHandler } from 'hono';
 import type { Config } from '@/config/index.ts';
 import type { AppEnv } from '../types.ts';
 
-/**
- * CORS for the cross-origin SPA: the session cookie rides along, so the origin must be matched
- * exactly against `ALLOWED_ORIGINS` (never `*`) and `Vary: Origin` keeps caches from mixing
- * responses. A disallowed origin gets no CORS headers (the browser blocks it) but is not rejected
- * here — that check belongs to `requireCsrf`.
- */
-
 const ALLOWED_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS';
 const ALLOWED_HEADERS = 'Content-Type, X-CSRF-Token, Idempotency-Key, X-Request-Id';
 const MAX_AGE_SECONDS = '600';
@@ -27,7 +20,10 @@ export function cors(config: Config): MiddlewareHandler<AppEnv> {
     if (allowed !== null) {
       c.header('Access-Control-Allow-Origin', allowed);
       c.header('Access-Control-Allow-Credentials', 'true');
-      c.header('Access-Control-Expose-Headers', 'X-Request-Id, RateLimit-Remaining');
+      c.header(
+        'Access-Control-Expose-Headers',
+        'X-Request-Id, RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After',
+      );
     }
 
     if (c.req.method === 'OPTIONS') {

@@ -32,10 +32,10 @@
 |---|---|---|---|---|
 | 0 | Foundations (scaffold) | 1–1.5 wk | Auth + RBAC tests green; deploy to staging | [x] code · [ ] CI + staging |
 | 1 | Registry & conversations | 1.5 wk | Create conversation, history loads, model lock enforced | [x] code · [ ] integration suite run |
-| 2 | Generation core | 2 wk | Streaming E2E; kill -9 recovery; adapter contract tests green | [ ] |
-| 3 | Quota & usage | 2 wk | Concurrency/property tests green; reconciliation clean | [ ] |
-| 4 | Files, multimodal & cloud containers | 2 wk | Cloud doc generation (PDF/DOCX/XLSX/PPTX) & upload work; third adapter = zero core changes | [ ] |
-| 5 | Admin, observability, hardening | 1.5–2 wk | §25 readiness checklist fully checked | [ ] |
+| 2 | Generation core | 2 wk | Streaming E2E; kill -9 recovery; adapter contract tests green | [x] code · [ ] staging smoke |
+| 3 | Quota & usage | 2 wk | Concurrency/property tests green; reconciliation clean | [x] code · [ ] staging reconciliation clean |
+| 4 | Files, multimodal & cloud containers | 2 wk | Cloud doc generation (PDF/DOCX/XLSX/PPTX) & upload work; third adapter = zero core changes | [x] code · [ ] live container verification |
+| 5 | Admin, observability, hardening | 1.5–2 wk | §25 readiness checklist fully checked | [ ] in progress (two-tier RBAC landed) |
 | 6 | Pilot & launch | 2 wk | SLOs met 2 weeks; no P1 defects | [ ] |
 | — | Post-MVP | — | P1 items, S3 migration, multi-node streaming, P2 | [ ] |
 
@@ -100,7 +100,7 @@ Copied from `AGENTS.md` — these are not revisited during the build.
 - [x] Repo layout exactly as `AGENTS.md` §3.7 (`src/config/`, `src/db/`, `src/http/`, `src/observability/`, `src/clock/`, feature modules such as `src/auth/`, `src/providers/`, glue `src/orchestrator/`; `src/app.ts`, `src/server.ts`, `migrations/`). ✅ M0.1
 - [x] **Config:** Zod schema for the full env (§24.2 + Appendix A) — including `SHUTDOWN_DRAIN_SECONDS`, `TOKENIZER_CACHE_DIR`, `OTEL_EXPORTER_OTLP_ENDPOINT` and the CLI-only `MIGRATION_DATABASE_URL`. **Fail fast** at boot on missing/invalid config; SIGTERM respects the bounded drain window. ✅ M0.1
 - [x] Lint gates: ESLint (provider-import ban) + `dependency-cruiser` (AGENTS.md §3.2 inward rule) + Prettier. ✅ M0.1
-- [x] Hono app: request-id middleware, JSON logging (pino) with redaction, `/healthz`, `/readyz`, `/metrics` (**raw, not enveloped**). ✅ M0.1
+- [x] Hono app: request-id middleware, JSON logging with redaction, `/healthz`, `/readyz` (**raw, not enveloped**). ✅ M0.1
 - [x] **Wire contract (v1.3):** unversioned `/api` prefix + shared envelope helpers (`{status,message,data}` / `{status,code,message,retryable,details,trace?}`, `trace` only when `NODE_ENV=development`), per `docs/API_CONTRACTS.md` §1. No route hand-rolls JSON; 2xx never returns `204`. ✅ M0.1/M0.0
 - [x] DB layer: pool, Drizzle client, migration runner (forward-only, `pg_advisory_lock`), `db/seed` for the example registry (**never auto-applied in prod**). ✅ M0.2/M0.6 (`seed-example` guarded; populates once Phase 1 registry tables exist)
 - [x] **Migrations baseline:** `users`, `sessions`, `divisions`, `audit_logs`, `system_settings`, `jobs` (+ `citext` extension). Apply the AGENTS.md §6 grammar from day one (UUIDv7, `text`+`CHECK` with `CHECK (role IN ('user','admin','super_admin'))` and `CHECK (role <> 'admin' OR division_id IS NOT NULL)`, partial indexes). ✅ M0.2
@@ -174,7 +174,7 @@ bun run dev
 - [x] Reservation via conditional `UPDATE` (T1); settle/release via `SELECT … FOR UPDATE` (T2); ledger rows (signed) for every movement.
 - [x] Reservation reaper, quota reaper integration, estimation + margins, overshoot handling.
 - [x] Tokenizer per provider (FR-QUOTA-7): `tiktoken` (WASM, lazy-init, cached per encoding) in OpenAI adapter; local port `dhamaniasad/claude-tokenizer` in Anthropic adapter; local/BPE tokenizer + margin for other adapter. Other adapter using heuristic.
-- [x] Comapre between `est_tokens` vs usage actual provider → metrics `estimation_error_ratio`; override margin per model via `models.config.estimation.margin`.
+- [x] Compare between `est_tokens` vs usage actual provider → structured logs & overshoot calculation; override margin per model via `models.config.estimation.margin`.
 - [x] Token estimation for message with image/PDF via formula per-provider in adapter; calibrate using real data.
 - [x] `GET /me/quota`, `GET /me/usage`; super admin quota APIs (`quota-policies`, `adjustments`, user quota + ledger).
 - [x] `usage_events` written once per settled generation; `usage_daily` rollup handler + nightly rebuild.
@@ -193,19 +193,19 @@ bun run dev
 > We deliberately avoid running self-hosted containers (Docker, microVMs, headless LibreOffice, Python sandboxes) on the VPS for file generation. The VPS stays a lightweight, native Bun process (`ROLE = api | worker | all`, no Docker daemon required). All arbitrary code execution, document generation, and sandbox rendering are offloaded to **Anthropic Claude Container Sandbox** (`code_execution` + official `pptx`, `xlsx`, `docx`, `pdf` skills) and **OpenAI Hosted Container** (`code_interpreter` and `shell` + `container_auto` + skills). **Image generation is provider-hosted too**: OpenAI's `image_generation` tool runs on OpenAI's side and returns the image over the API — there is no local renderer (no LibreOffice, no image libraries) on the VPS. Anthropic Claude cannot generate images; Gemini support is post-MVP. This guarantees zero host sandbox escape risks, preserves VPS CPU/memory, and delivers production-grade document fidelity with zero container overhead on the host.
 
 **Tasks**
-- [ ] **M4.1 — Storage & Attachments Domain Foundations:**
-  - Migrations: `attachments` and `file_extractions` tables (per `AGENTS.md` §6.7).
-  - Ports & Adapters: `StorageProviderPort` interface (`putStream`, `getStream`, `delete`, `exists`, `getMetadata`) + `LocalStorageProvider` (`STORAGE_LOCAL_ROOT`, e.g. `/var/lib/ai-chat/files`).
-  - Opaque key scheme: `files/YYYY/MM/<uuid>` — strictly no filesystem paths stored in DB or returned over HTTP (PRD §12.1).
-  - Content endpoint: `GET /files/:id/content` with strict owner-authorization (`AuthContext`), correct MIME headers, `Content-Disposition`, anti-sniffing headers (`X-Content-Type-Options: nosniff`), and HTTP `Range` byte-serving support for large files.
-  - Attachment metadata APIs: `GET /attachments/:id`, `DELETE /attachments/:id` (soft-delete + storage purge).
+- [x] **M4.1 — Storage & Attachments Domain Foundations:**
+  - [x] Migrations: `attachments` and `file_extractions` tables (per `AGENTS.md` §6.7).
+  - [x] Ports & Adapters: `StorageProviderPort` interface (`putStream`, `getStream`, `delete`, `exists`, `getMetadata`) + `LocalStorageProvider` (`STORAGE_LOCAL_ROOT`, e.g. `/var/lib/ai-chat/files`).
+  - [x] Opaque key scheme: `files/YYYY/MM/<uuid>` — strictly no filesystem paths stored in DB or returned over HTTP (PRD §12.1).
+  - [x] Content endpoint: `GET /files/:id/content` with strict owner-authorization (`AuthContext`), correct MIME headers, `Content-Disposition`, anti-sniffing headers (`X-Content-Type-Options: nosniff`), and HTTP `Range` byte-serving support for large files.
+  - [x] Attachment metadata APIs: `GET /attachments/:id` (polling status); `DELETE /attachments/:id` deferred to P1 (unattached uploads cleaned up by background orphan reaper).
 
-- [ ] **M4.2 — Upload Validation & Lightweight Text Extraction Pipeline:**
-  - Hardened upload pipeline: size limits (30MB total, configurable per MIME), magic-byte sniffing (via file signature analysis, rejecting mismatched declared MIME), image dimension probing (PNG/JPEG/WebP/GIF).
-  - Security rejections: zip-bomb / archive expansion limits, macro-enabled documents (`.docm`, `.xlsm` rejected), encrypted/password-protected PDFs rejected.
-  - Input text extraction: Asynchronous extraction job (`file_extractions`) for user-uploaded documents, powered by [`firecrawl/anydoc`](https://github.com/firecrawl/anydoc) (`@firecrawl/anydoc`) — Rust converter (DOCX/DOC, XLSX/XLS, PPTX, PDF, CSV, RTF, ODF, EPUB → Markdown) with Node bindings off the event loop. Scanned PDFs (`NeedsOcr`) are recorded `failed/needs_ocr`; hosted OCR is a P2 extension point (off by default).
-  - Fast-path execution (5s wait in upload request): returns `201 ready` if fast-path completes, else `202 processing` with background worker.
-  - *Scope demarcation:* Local extraction is strictly read-only text indexing for conversation context. Binary document generation (PDF/DOCX/XLSX/PPTX) is **never performed locally**.
+- [x] **M4.2 — Upload Validation & Lightweight Text Extraction Pipeline:**
+  - [x] Hardened upload pipeline: size limits (30MB total, configurable per MIME), magic-byte sniffing (via file signature analysis, rejecting mismatched declared MIME), image dimension probing (PNG/JPEG/WebP/GIF).
+  - [x] Security rejections: zip-bomb / archive expansion limits, macro-enabled documents (`.docm`, `.xlsm` rejected), encrypted/password-protected PDFs rejected.
+  - [x] Input text extraction: Asynchronous extraction job (`file_extractions`) for user-uploaded documents, powered by [`firecrawl/anydoc`](https://github.com/firecrawl/anydoc) (`@firecrawl/anydoc`) — Rust converter (DOCX/DOC, XLSX/XLS, PPTX, PDF, CSV, RTF, ODF, EPUB → Markdown) with Node bindings off the event loop. Scanned PDFs (`NeedsOcr`) are recorded `failed/needs_ocr`; hosted OCR is a P2 extension point (off by default).
+  - [x] Fast-path execution (5s wait in upload request): returns `201 ready` if fast-path completes, else `202 processing` with background worker.
+  - [x] *Scope demarcation:* Local extraction is strictly read-only text indexing for conversation context. Binary document generation (PDF/DOCX/XLSX/PPTX) is **never performed locally**.
 
 - [ ] **M4.3 — Anthropic Claude Cloud Container & Agent Skills Adapter:**
   - [x] Enable Anthropic code execution tool (`code_execution_20250825` or `code_execution_20260120`) in `src/providers/infrastructure/adapters/anthropic/`.
@@ -242,8 +242,8 @@ bun run dev
     `GET /v1/containers/{container_id}/files/{file_id}/content`, persisted via `StorageProvider`, and linked to `attachments`/`message_parts`.
   - Context compaction: deferred (bounded by `max_output_tokens` and the generation timeout).
 
-- [ ] **M4.5 — PAL Orchestration, ArtifactSink & Multi-Part SSE Streaming:**
-  - PAL (Provider Abstraction Layer) unification:
+- [x] **M4.5 — PAL Orchestration, ArtifactSink & Multi-Part SSE Streaming:**
+  - [x] PAL (Provider Abstraction Layer) unification:
     - Provider-agnostic representation for container tools, skills, and file generation in `NormalizedChatRequest`.
     - Unified streaming events:
       - `tool.started` (tool name: code_execution, bash, shell, skills)
@@ -251,19 +251,19 @@ bun run dev
       - `tool.completed` (status, return code, provider file references)
       - `part.started` / `part.completed` (`type = 'generated_file'` or `'image'`)
     - Client SSE payload includes hydrated download endpoint (`/api/files/{id}/content`), display name, MIME type, and byte size.
-  - `ArtifactSink` implementation:
+  - [x] `ArtifactSink` implementation:
     - Intercepts provider file IDs during streaming finalization.
     - Streams binary bytes directly from provider Files API to local storage.
     - Computes `sha256`, detects actual MIME, populates `attachments` and `message_parts` inside settlement transaction (T2).
-  - Quota accounting:
+  - [x] Quota accounting:
     - Account for container tool execution tokens (input, output, reasoning) in `usage_events` and quota settlement.
 
-- [ ] **M4.6 — File Retention, Cleanup & Third Adapter (Gemini):**
-  - Automated retention jobs:
+- [x] **M4.6 — File Retention, Cleanup & Third Adapter (Gemini):**
+  - [x] Automated retention jobs:
     - `files.expire_and_delete`: Two-phase TTL reaper (mark `expired`, unlink binary from disk after grace period).
     - `files.orphan_reaper`: Cleans unattached uploads after 24h.
     - `storage.reconcile`: Weekly job cross-referencing disk blobs with DB `attachments` records.
-  - Third adapter: Google Gemini:
+  - [x] Third adapter: Google Gemini:
     - Implement Gemini adapter adhering to PAL without changing `orchestrator/`.
     - Support Gemini multimodal inputs (images, audio, PDF) and built-in Google Search / Code Execution tools.
 
@@ -289,17 +289,60 @@ bun run dev
 **Objective.** Meet the production readiness checklist (PRD §25).
 
 **Tasks**
-- [ ] Super admin reporting APIs: usage (`groupBy`), error explorer (`error_events`), audit log search; CSV exports (P1); verification of division admin vs super admin permission boundaries.
-- [ ] Metrics (low cardinality), dashboards, alert rules (§21.5); OTLP tracing hook (sample errors 100 %, success 10 %).
-- [ ] Rate limiting (per-IP/login/user/message/upload) with `RateLimit-*` headers; security headers + CORS + CSRF/Origin.
-- [ ] Retention jobs (messages, files, ledger, audit, logs); session/idempotency purge.
-- [ ] Load test (150 concurrent streams / 30 min) + 24 h soak; `EXPLAIN` review of top queries; autovacuum tuning.
-- [ ] Runbooks: DB restore, secret rotation, provider outage, disk full, reconciliation mismatch; DR drill (RTO ≤ 1 h, RPO ≤ 5 min).
-- [ ] Dependency/vulnerability scan; pen-test fixes; log-redaction verification.
+- [x] **M5.1 — Two-Tier Administrative RBAC:**
+  - `super_admin` platform-wide authority vs. division-scoped `admin` strictly isolated to assigned division (`division_id NOT NULL`, cross-division 404 on access, role escalation forbidden).
+  - Last-super-admin safeguard (`409 conflict`).
+  - CLI `bootstrap-admin` updated to create initial `super_admin`.
+- [x] **M5.2 — Super Admin Reporting & Inspection APIs:**
+  - Usage aggregations: `GET /api/admin/usage` (`groupBy`: `user`, `model`, `provider`, `day`, `month`, `division`) querying `usage_daily` and `usage_events`.
+  - Error explorer: `GET /api/admin/errors` (keyset-paginated search over `error_events` filtering by category, provider, model, date range; secrets redacted).
+  - Audit log search: `GET /api/admin/audit-logs` (keyset-paginated, actor/action/target filters; secrets redacted).
+  - CSV usage exports: `GET /api/admin/usage/export` (P1).
+  - _Implemented in `src/reporting/` (CQRS-lite, read-only). Aggregates read `usage_daily`, which is the durable rollup, so a conversation purge that removes detailed `usage_events` rows cannot erase reported usage. `usage_daily.provider_sourced_requests` (migration `0015`) supplies the provider-vs-estimated ratio required by API_CONTRACTS §10.5._
+- [x] **M5.3 — Conventional Winston Structured Logging with Daily Rotation & Stack Traces (No Metrics):**
+  - **Remove Prometheus metrics:** strip `/metrics` endpoint, in-process metric registry, and metric counters/gauges/histograms.
+  - **Winston JSON logging:** transition from pino to standard `winston` structured logger with JSON format, timestamps, and log levels.
+  - **Correlation & trace context:** bind `requestId` and `generationId` across HTTP middleware, orchestrator lifecycle events, and background worker jobs.
+  - **Daily file rotation (`winston-daily-rotate-file`):**
+    - Combined application log: `/var/log/ai-chat/app-%DATE%.log` (info, warn, error).
+    - Dedicated error log: `/var/log/ai-chat/error-%DATE%.log` (error-level only).
+    - Date pattern: `YYYY-MM-DD`, file retention (14–30 days), max file size before rotation (20MB), and automatic gzip compression (`zippedArchive: true`).
+  - **Stack trace serialization:** format error objects (`error.stack`, `error.name`, `error.message`, `error.code`, `error.status`, `error.details`) into structured JSON log fields for immediate debugging.
+  - **Strict redaction:** enforce central redaction rules (`LOG_CONTENT=false`) — no passwords, session tokens, API keys, prompt text, message text, or raw provider bodies in logs or stack traces.
+  - **Log-based operational observability:** alerting and incident diagnosis driven by parsing `error-%DATE%.log`, checking `/healthz` and `/readyz` probes, and inspecting DB reporting tables (`usage_daily`, `error_events`).
+  - _Implemented in `src/observability/logger.ts`. Rotation, gzip archiving and error-only routing are covered by `tests/unit/observability/logger.test.ts`; the redaction gate is `tests/unit/security/log-redaction.test.ts`. File transports are disabled in tests via `LOG_TO_FILES=false`._
+- [x] **M5.4 — Rate Limiting & Security Hardening:**
+  - Tiered rate limiting (per-IP, login endpoint, per-user requests, uploads, streaming messages) returning standard `RateLimit-*` and `Retry-After` headers.
+  - Security headers middleware (`Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `Strict-Transport-Security`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`).
+  - CORS with exact `ALLOWED_ORIGINS` allow-list (`credentials: true`, `Vary: Origin`) and stateless signed CSRF token validation on non-GET `/api` calls.
+  - _Buckets: `api` (coarse per-IP ceiling on `/api/*`, sized for shared office NAT), `auth-ip` (60/min on `/api/auth/*`), `login`, `user` (general per-user ceiling), `generation` (send + retry), `upload`. Limits are `RATE_LIMIT_*` env values. The API sends a deny-by-default CSP (`default-src 'none'`, `frame-ancestors 'none'`) and a `Permissions-Policy` that disables device APIs; the SPA owns its own headers._
+- [x] **M5.5 — Automated Retention & Purge Jobs:**
+  - Database cleanup jobs: expired sessions, expired idempotency keys, soft-deleted conversations (>30 days), file expiration two-phase reaper.
+  - Log retention verification: ensure Winston daily rotation cleans old compressed archives without filling disk.
+  - _`conversations.purge_soft_deleted` runs daily, deletes in batches of 50, and removes blobs only after commit (orphans are collected by `storage.reconcile`). Window is `CONVERSATION_RETENTION_DAYS` (default 30). Integration coverage: `tests/integration/conversation-purge.test.ts`._
+- [ ] **M5.6 — Performance, Load & Soak Testing:**
+  - [ ] Synthetic load test: 150 concurrent streams for 30 minutes; 24-hour soak test. _Runner ready at `scripts/load-test.ts` (one shared session, one conversation per worker, p50/p95/p99 time-to-first-token, non-zero exit on any failure, warns when the account's concurrency limit is too low). Staging only — it spends real provider money and the account needs raised rate/concurrency limits:_
+    ```bash
+    bun run scripts/load-test.ts \
+      --base-url https://api.staging.example \
+      --origin https://app.staging.example \
+      --email loadtest@corp.example --password '…' \
+      --concurrency 150 --duration 1800 --model-id <cheap-model-id>
+    ```
+    _Requires enough quota on the load-test account and a spend cap on the provider key._
+  - [x] Autovacuum tuning on high-churn tables (`message_parts`, `quota_accounts`, `jobs`). _Migration `0016`._
+  - [ ] `EXPLAIN ANALYZE` review of the top queries on production-shaped data. _Runner: `scripts/explain-top-queries.sql` — 10 plans (conversation/message keyset, parts, active generation, job poll, expiry, usage rollup, error/audit keyset, reservation update) plus an index-usage and dead-tuple inventory. The review itself is a staging exercise._
+- [ ] **M5.7 — Production Runbooks & Disaster Recovery:**
+  - [x] Runbooks: database PITR restore, provider secret rotation, provider outage response, disk full handling, quota reconciliation mismatch. _See `docs/runbooks/` (plus log operations)._
+  - [ ] DR drill (RTO ≤ 1 h, RPO ≤ 5 min) and backup verification on staging. _Requires a staging host with WAL archiving enabled._
+- [x] **M5.8 — Security Scan & Log Redaction Verification:**
+  - Dependency vulnerability audit (`bun audit`).
+  - CI test verifying zero leaks of keys, passwords, session tokens, prompts, or file content in Winston logs and error stack traces.
+  - _Audit result: 1 moderate advisory, `esbuild ≤ 0.24.2` (GHSA-67mh-4wv8-2f99, dev-server CORS), reached only through `drizzle-kit → @esbuild-kit/core-utils` and `vitest → tsx`. It is build/dev tooling that is never exposed at runtime; re-check after the next drizzle-kit/vitest upgrade. The redaction gate is `tests/unit/security/log-redaction.test.ts`._
 
-**Deliverables.** All monitoring, alerting, retention, and hardening in place; runbooks written.
+**Deliverables.** Two-tier admin APIs, reporting endpoints, Winston daily rotating JSON logging with error stack traces (metrics-free), rate limiting, security headers, retention jobs, load testing, and operations runbooks.
 
-**Exit criteria.** PRD §25 checklist **fully checked**; SLOs measured under load.
+**Exit criteria.** PRD §25 checklist **fully checked**; Winston daily rotation and error stack traces verified in staging; SLOs measured under load.
 
 ## Phase 6 — Pilot & launch
 
@@ -350,8 +393,8 @@ Conversation forking has been permanently excluded from the post-MVP plan. All p
 - [ ] Create the service user and directories:
 ```bash
 sudo useradd --system --home /srv/ai-chat --shell /usr/sbin/nologin aichat
-sudo mkdir -p /srv/ai-chat/releases /etc/ai-chat /var/lib/ai-chat/files /var/backups/ai-chat
-sudo chown -R aichat:aichat /srv/ai-chat /var/lib/ai-chat
+sudo mkdir -p /srv/ai-chat/releases /etc/ai-chat /var/lib/ai-chat/files /var/log/ai-chat /var/backups/ai-chat
+sudo chown -R aichat:aichat /srv/ai-chat /var/lib/ai-chat /var/log/ai-chat
 sudo chmod 750 /etc/ai-chat
 ```
 
@@ -691,14 +734,14 @@ blobs are marked `missing` and the UI shows "unavailable"). Back up the **databa
 
 ## B11 — Observability & logging
 
-- [ ] `journalctl -u ai-chat@blue -f` for live logs; set `LOG_LEVEL=info`, `LOG_CONTENT=false`.
-- [ ] **logrotate** (or journald caps) so JSON logs cannot fill the disk:
-  ```
-  /etc/logrotate.d/ai-chat  →  rotate 14, daily, compress, copytruncate
-  ```
-- [ ] Scrape `/metrics` from a network-restricted source; dashboards for p50/95/99 latency, TTFT, errors by category, tokens, active generations, quota rejections.
+- [ ] `journalctl -u ai-chat@blue -f` for live systemd logs; set `LOG_LEVEL=info`, `LOG_CONTENT=false`.
+- [ ] **Winston daily rotating JSON logs** configured in `/var/log/ai-chat/`:
+  - Combined app log: `/var/log/ai-chat/app-%DATE%.log` (info, warn, error).
+  - Dedicated error log: `/var/log/ai-chat/error-%DATE%.log` (error-level only, capturing serialized `err.stack`, `code`, `status`, `details`).
+  - Automated rotation via `winston-daily-rotate-file`: `datePattern: 'YYYY-MM-DD'`, `maxSize: '20m'`, `maxFiles: '14d'`, `zippedArchive: true`.
+  - Content redaction strictly verified: zero credentials, tokens, prompts, or provider payloads leak into log files or stack traces.
 - [ ] Health probes: external uptime monitor on `https://ai.corp.example/healthz` (liveness) and `/readyz` (readiness). **Provider health is not readiness** (§21.6).
-- [ ] Alerts (§21.5): generation failure rate, provider 401/403, reservations past expiry, reconciliation mismatch, disk < 20 %, DB pool > 80 %, readiness flapping.
+- [ ] Log-based alerts (§21.5): generation failure rate spikes in `error-*.log`, provider 401/403 errors, reservations past expiry, reconciliation mismatch, disk < 20 %, DB pool > 80 %, readiness flapping. (No Prometheus `/metrics` scraping).
 
 ## B12 — Security hardening
 
@@ -740,7 +783,7 @@ blobs are marked `missing` and the UI shows "unavailable"). Back up the **databa
 - [ ] PRD §25 checklist fully checked.
 - [ ] `bootstrap-admin` executed on the production DB (provisions initial `super_admin`); first login forces a password change.
 - [ ] Provider registry populated; keys valid; health check green; spend caps set.
-- [ ] Verified tokenizers per provider: `tiktoken` for OpenAI and the ported `claude-tokenizer` for Anthropic produce estimates within a margin of error against actual `usage` (metric `estimation_error_ratio`); cold-start estimation was recorded in the load test.
+- [ ] Verified tokenizers per provider: `tiktoken` for OpenAI and the ported `claude-tokenizer` for Anthropic produce estimates within a margin of error against actual `usage` (verified via structured logs); cold-start estimation was recorded in the load test.
 - [ ] Backups running + **restore drill passed**; offsite copy verified.
 - [ ] Alerts wired to on-call; runbooks available (B14).
 - [ ] Graceful shutdown verified under load; rollback rehearsed.

@@ -3,8 +3,6 @@ import { runDb } from '@/db/client.ts';
 import { aiModelPrices, usageEvents, users } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
 import type {
-  AdminUsageQuery,
-  AdminUsageRow,
   UsageAggregateRow,
   UsageEventInput,
   UsageQuery,
@@ -117,59 +115,6 @@ export class DrizzleUsageRepository implements UsageRepository {
     }));
   }
 
-  async aggregateAdmin(
-    query: AdminUsageQuery,
-    tx?: TransactionContext,
-  ): Promise<readonly AdminUsageRow[]> {
-    const dayExpr = sql<string>`to_char(${usageEvents.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`;
-    const monthExpr = sql<string>`to_char(${usageEvents.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM')`;
-
-    const dimension = (() => {
-      switch (query.groupBy) {
-        case 'user':
-          return { expr: usageEvents.userId, name: 'userId' as const };
-        case 'model':
-          return { expr: usageEvents.modelId, name: 'modelId' as const };
-        case 'provider':
-          return { expr: usageEvents.providerId, name: 'providerId' as const };
-        case 'division':
-          return { expr: usageEvents.divisionId, name: 'divisionId' as const };
-        case 'month':
-          return { expr: monthExpr, name: 'month' as const };
-        case 'day':
-        default:
-          return { expr: dayExpr, name: 'day' as const };
-      }
-    })();
-
-    const rows = await runDb(tx)
-      .select({
-        key: dimension.expr,
-        requests: sql<number>`count(*)::int`,
-        failedRequests: sql<number>`count(*) FILTER (WHERE ${usageEvents.outcome} = 'failed')::int`,
-        inputTokens: sql<number>`COALESCE(sum(${usageEvents.inputTokens}), 0)::bigint`,
-        outputTokens: sql<number>`COALESCE(sum(${usageEvents.outputTokens}), 0)::bigint`,
-        quotaTokens: sql<number>`COALESCE(sum(${usageEvents.quotaTokens}), 0)::bigint`,
-        estCostMicros: sql<number | null>`COALESCE(sum(${usageEvents.estCostMicros}), 0)::bigint`,
-      })
-      .from(usageEvents)
-      .where(
-        and(gte(usageEvents.createdAt, query.from), lt(usageEvents.createdAt, query.to)),
-      )
-      .groupBy(dimension.expr)
-      .orderBy(dimension.expr);
-
-    return rows.map((row) => ({
-      key: { [dimension.name]: row.key === null ? null : String(row.key) },
-      requests: Number(row.requests),
-      failedRequests: Number(row.failedRequests),
-      inputTokens: Number(row.inputTokens),
-      outputTokens: Number(row.outputTokens),
-      quotaTokens: Number(row.quotaTokens),
-      estCostMicros: row.estCostMicros === null ? null : Number(row.estCostMicros),
-    }));
-  }
-
   async rollupDay(day: string, tx?: TransactionContext): Promise<number> {
     const result = await runDb(tx).execute<{ rolled: number }>(sql`
       WITH daily AS (
@@ -181,6 +126,8 @@ export class DrizzleUsageRepository implements UsageRepository {
           ${usageEvents.modelId} AS model_id,
           count(*)::int AS requests,
           count(*) FILTER (WHERE ${usageEvents.outcome} = 'failed')::int AS failed_requests,
+          count(*) FILTER (WHERE ${usageEvents.usageSource} = 'provider')::int
+            AS provider_sourced_requests,
           COALESCE(sum(${usageEvents.inputTokens}), 0) AS input_tokens,
           COALESCE(sum(${usageEvents.outputTokens}), 0) AS output_tokens,
           COALESCE(sum(${usageEvents.quotaTokens}), 0) AS quota_tokens,
@@ -192,15 +139,16 @@ export class DrizzleUsageRepository implements UsageRepository {
       )
       INSERT INTO usage_daily
         (day, user_id, division_id, provider_id, model_id, requests, failed_requests,
-         input_tokens, output_tokens, quota_tokens, est_cost_micros)
+         provider_sourced_requests, input_tokens, output_tokens, quota_tokens, est_cost_micros)
       SELECT day, user_id, division_id, provider_id, model_id, requests, failed_requests,
-             input_tokens, output_tokens, quota_tokens, est_cost_micros
+             provider_sourced_requests, input_tokens, output_tokens, quota_tokens, est_cost_micros
       FROM daily
       ON CONFLICT (day, user_id, model_id) DO UPDATE SET
         division_id    = EXCLUDED.division_id,
         provider_id    = EXCLUDED.provider_id,
         requests       = EXCLUDED.requests,
         failed_requests = EXCLUDED.failed_requests,
+        provider_sourced_requests = EXCLUDED.provider_sourced_requests,
         input_tokens   = EXCLUDED.input_tokens,
         output_tokens  = EXCLUDED.output_tokens,
         quota_tokens   = EXCLUDED.quota_tokens,

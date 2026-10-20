@@ -46,22 +46,6 @@ export interface UsageAggregateRow {
   readonly estCostMicros: number | null;
 }
 
-export interface AdminUsageQuery {
-  readonly from: Date;
-  readonly to: Date;
-  readonly groupBy: 'user' | 'model' | 'provider' | 'day' | 'month' | 'division';
-}
-
-export interface AdminUsageRow {
-  readonly key: Record<string, string | null>;
-  readonly requests: number;
-  readonly failedRequests: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly quotaTokens: number;
-  readonly estCostMicros: number | null;
-}
-
 export interface UsageRepository {
   /**
    * Write the usage event on the settlement path. `generation_id` is UNIQUE so a replayed
@@ -85,12 +69,6 @@ export interface UsageRepository {
 
   /** User usage aggregates (`GET /me/usage`) from `usage_events`. */
   aggregateForUser(query: UsageQuery, tx?: TransactionContext): Promise<readonly UsageAggregateRow[]>;
-
-  /** Admin usage aggregates (`GET /admin/usage`) from `usage_events`. */
-  aggregateAdmin(
-    query: AdminUsageQuery,
-    tx?: TransactionContext,
-  ): Promise<readonly AdminUsageRow[]>;
 
   /**
    * Incremental 5-min rollup: recompute today's (or the given day's) rows from `usage_events`

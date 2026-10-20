@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
-import { conversations, generationJobs, messageParts, messages } from '@/db/schema.ts';
+import { conversations, attachments, generationJobs, messageParts, messages } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
 import type {
   Conversation,
@@ -569,5 +569,43 @@ export class DrizzleConversationRepository implements ConversationRepository {
       .from(messages)
       .where(eq(messages.conversationId, conversationId));
     return rows[0]?.count ?? 0;
+  }
+
+  async findPurgeableIds(
+    cutoff: Date,
+    limit: number,
+    tx?: TransactionContext,
+  ): Promise<readonly string[]> {
+    const purgeable = await runDb(tx)
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(lt(conversations.deletedAt, cutoff), sql`${conversations.deletedAt} IS NOT NULL`))
+      .orderBy(conversations.deletedAt)
+      .limit(limit);
+    return purgeable.map((row) => row.id);
+  }
+
+  async attachmentStorageKeysFor(
+    conversationIds: readonly string[],
+    tx?: TransactionContext,
+  ): Promise<readonly { readonly conversationId: string; readonly storageKey: string }[]> {
+    if (conversationIds.length === 0) return [];
+    const rows = await runDb(tx)
+      .select({
+        conversationId: attachments.conversationId,
+        storageKey: attachments.storageKey,
+      })
+      .from(attachments)
+      .where(inArray(attachments.conversationId, [...conversationIds]));
+    return rows;
+  }
+
+  async hardDelete(ids: readonly string[], tx?: TransactionContext): Promise<number> {
+    if (ids.length === 0) return 0;
+    const deleted = await runDb(tx)
+      .delete(conversations)
+      .where(inArray(conversations.id, [...ids]))
+      .returning({ id: conversations.id });
+    return deleted.length;
   }
 }

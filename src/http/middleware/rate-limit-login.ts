@@ -8,9 +8,6 @@ import type { AuditLogRepository } from '@/audit/ports/audit-log-repository.ts';
 import { AUDIT_ACTIONS } from '@/audit/actions.ts';
 import { hashUserAgent } from '@/crypto.ts';
 
-export const LOGIN_RATE_LIMIT = 10;
-export const LOGIN_RATE_WINDOW_SECONDS = 60;
-
 export function rateLimitLogin(
   config: Config,
   rateLimiter: RateLimiter,
@@ -23,7 +20,11 @@ export function rateLimitLogin(
         ? `login:ip:${rawIp}`
         : `login:ua:${hashUserAgent(c.req.header('user-agent')) ?? 'unknown'}`;
 
-    const result = await rateLimiter.check(key, LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS);
+    const result = await rateLimiter.check(
+      key,
+      config.RATE_LIMIT_LOGIN_REQUESTS,
+      config.RATE_LIMIT_WINDOW_SECONDS,
+    );
 
     c.header('RateLimit-Limit', result.limit.toString());
     c.header('RateLimit-Remaining', result.remaining.toString());

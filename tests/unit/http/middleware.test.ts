@@ -10,6 +10,7 @@ import { requireCsrf, enforceOrigin } from '@/http/middleware/require-csrf.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
 import { requireAdmin, requireRole } from '@/http/middleware/require-role.ts';
 import { rateLimitLogin } from '@/http/middleware/rate-limit-login.ts';
+import { rateLimit, userRateLimit } from '@/http/middleware/rate-limit.ts';
 import { MemoryRateLimiter } from '@/http/infrastructure/memory-rate-limiter.ts';
 import type { AppEnv } from '@/http/types.ts';
 import type { AuthService } from '@/auth/application/auth-service.ts';
@@ -331,5 +332,118 @@ describe('rateLimitLogin', () => {
     expect(alice.status).toBe(200);
     expect(bob.status).toBe(200);
     expect(bob.headers.get('RateLimit-Remaining')).toBe('9');
+  });
+});
+
+describe('rateLimit (general buckets)', () => {
+  it('emits RateLimit headers and blocks past the configured limit', async () => {
+    const config = testConfig();
+    const limiter = new MemoryRateLimiter();
+    const app = buildApp(config, (a) => {
+      a.use(
+        '/api/*',
+        rateLimit(config, limiter, {
+          name: 'test',
+          scope: 'ip',
+          limit: 2,
+          windowSeconds: 60,
+        }),
+      );
+      a.get('/api/thing', (c) => c.json({ ok: true }));
+    });
+
+    const first = await app.request('/api/thing');
+    expect(first.status).toBe(200);
+    expect(first.headers.get('RateLimit-Limit')).toBe('2');
+    expect(first.headers.get('RateLimit-Remaining')).toBe('1');
+    expect(Number(first.headers.get('RateLimit-Reset'))).toBeGreaterThan(0);
+
+    expect((await app.request('/api/thing')).status).toBe(200);
+
+    const blocked = await app.request('/api/thing');
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBeDefined();
+    expect(blocked.headers.get('RateLimit-Remaining')).toBe('0');
+  });
+
+  it('uses a custom message and never leaks the bucket key', async () => {
+    const config = testConfig();
+    const limiter = new MemoryRateLimiter();
+    const app = buildApp(config, (a) => {
+      a.use(
+        '/api/*',
+        rateLimit(config, limiter, {
+          name: 'upload',
+          scope: 'ip',
+          limit: 1,
+          windowSeconds: 60,
+          message: 'Too many uploads. Try again shortly.',
+        }),
+      );
+      a.get('/api/thing', (c) => c.json({ ok: true }));
+    });
+
+    await app.request('/api/thing');
+    const blocked = await app.request('/api/thing');
+    expect(blocked.status).toBe(429);
+    const body = (await blocked.json()) as { code: string };
+    expect(body.code).toBe('rate_limited');
+  });
+
+  it('keys user-scoped buckets by user id, so one user cannot exhaust another', async () => {
+    const config = testConfig();
+    const limiter = new MemoryRateLimiter();
+    const app = buildApp(config, (a) => {
+      a.use('/api/*', async (c, next) => {
+        const user = (c.req.header('x-test-user') ?? 'u-1') as string;
+        c.set('auth', {
+          user: makeUser({ id: user }),
+          session: {
+            id: 'session-1',
+            userId: user,
+            createdAt: new Date(),
+            lastSeenAt: new Date(),
+            expiresAt: new Date(Date.now() + 60_000),
+            revokedAt: null,
+            rotatedFrom: null,
+          },
+        });
+        await next();
+      });
+      a.use(
+        '/api/*',
+        rateLimit(config, limiter, {
+          name: 'generation',
+          scope: 'user',
+          limit: 1,
+          windowSeconds: 60,
+        }),
+      );
+      a.get('/api/thing', (c) => c.json({ ok: true }));
+    });
+
+    expect(
+      (await app.request('/api/thing', { headers: { 'x-test-user': 'u-1' } })).status,
+    ).toBe(200);
+    expect(
+      (await app.request('/api/thing', { headers: { 'x-test-user': 'u-1' } })).status,
+    ).toBe(429);
+    // A different user has its own bucket.
+    expect(
+      (await app.request('/api/thing', { headers: { 'x-test-user': 'u-2' } })).status,
+    ).toBe(200);
+  });
+
+  it('userRateLimit derives its limit from RATE_LIMIT_USER_REQUESTS', async () => {
+    const config = testConfig({ RATE_LIMIT_USER_REQUESTS: '7' });
+    const limiter = new MemoryRateLimiter();
+    const app = buildApp(config, (a) => {
+      a.use('/api/*', userRateLimit(config, limiter));
+      a.get('/api/thing', (c) => c.json({ ok: true }));
+    });
+
+    const res = await app.request('/api/thing');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('RateLimit-Limit')).toBe('7');
   });
 });

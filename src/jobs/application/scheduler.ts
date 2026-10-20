@@ -21,6 +21,7 @@ const DEFAULT_TASKS: readonly SchedulerTask[] = [
   { name: 'attachments-expiry', jobType: 'attachments.expire', intervalMs: 3_600_000 },
   { name: 'attachments-orphans', jobType: 'attachments.purge_orphans', intervalMs: 3_600_000 },
   { name: 'storage-reconcile', jobType: 'storage.reconcile', intervalMs: 604_800_000 },
+  { name: 'conversations-purge', jobType: 'conversations.purge_soft_deleted', intervalMs: 86_400_000 },
 ];
 
 export class Scheduler {

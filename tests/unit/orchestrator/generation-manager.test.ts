@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { GenerationManager } from '@/orchestrator/generation-manager.ts';
 import { FakeProvider } from '@/providers/infrastructure/fake/fake-provider.ts';
-import { createGenerationMetrics } from '@/observability/metrics.ts';
 import { loadConfig } from '@/config/env.ts';
 import type { ProviderRegistry } from '@/providers/ports/provider-registry.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
 import type { GenerationRecord } from '@/generations/ports/generation-repository.ts';
+import { captureLogs } from '../../helpers/capture-logs.ts';
 
 function createDummyRequest(): NormalizedChatRequest {
   return {
@@ -185,7 +185,7 @@ describe('GenerationManager', () => {
     expect(known.subscriber).toBeDefined();
   });
 
-  it('records duration, TTFT and provider-error metrics on finalization', async () => {
+  it('records duration, TTFT and provider-error fields on finalization', async () => {
     const config = loadConfig({
       DATABASE_URL: 'postgresql://aichat:changeme@127.0.0.1:5432/aichat_test',
       SESSION_SECRET: '01234567890123456789012345678901',
@@ -195,7 +195,7 @@ describe('GenerationManager', () => {
     // A real (monotonic-ish) clock so duration/TTFT are non-negative.
     let tick = 0;
     const realClock = { now: () => new Date(1_700_000_000_000 + tick++ * 10) };
-    const metrics = createGenerationMetrics();
+    const logs = captureLogs();
     const registry: ProviderRegistry = {
       register: () => {},
       get: () => new FakeProvider({ chunks: ['Hello'] }),
@@ -203,31 +203,40 @@ describe('GenerationManager', () => {
       keys: () => ['fake'],
     };
 
-    const manager = new GenerationManager({
-      providerRegistry: registry,
-      clock: realClock,
-      idGen,
-      config,
-      metrics,
-    });
+    try {
+      const manager = new GenerationManager({
+        providerRegistry: registry,
+        clock: realClock,
+        idGen,
+        config,
+      });
 
-    const run = manager.enqueue({
-      generation: createDummyRecord('gen-metrics'),
-      userMessageId: 'm-user',
-      assistantMessageId: 'm-assistant',
-      chatRequest: createDummyRequest(),
-      contextInfo: { truncated: false },
-    });
+      const run = manager.enqueue({
+        generation: createDummyRecord('gen-metrics'),
+        userMessageId: 'm-user',
+        assistantMessageId: 'm-assistant',
+        chatRequest: createDummyRequest(),
+        contextInfo: { truncated: false },
+      });
 
-    while (run.currentStatus !== 'completed') {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      while (run.currentStatus !== 'completed') {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      const started = logs.records.find((record) => record.msg === 'generation run started');
+      expect(started).toBeDefined();
+      expect(started?.meta['provider']).toBe('openai');
+
+      const finished = logs.records.find((record) => record.msg === 'generation run finished');
+      expect(finished).toBeDefined();
+      expect(finished?.meta['status']).toBe('completed');
+      expect(finished?.meta['provider']).toBe('openai');
+      expect(finished?.meta['model']).toBe('gpt-4o');
+      expect(typeof finished?.meta['durationMs']).toBe('number');
+      expect(typeof finished?.meta['ttftMs']).toBe('number');
+    } finally {
+      logs.restore();
     }
-
-    const text = metrics.registry.render();
-    expect(text).toContain('aichat_generation_duration_seconds_count');
-    expect(text).toContain('aichat_generation_ttft_seconds_count');
-    expect(text).toContain('aichat_generations_finished_total');
-    expect(text).toContain('outcome="completed"');
   });
 
   it('cancels active generation when requested', () => {

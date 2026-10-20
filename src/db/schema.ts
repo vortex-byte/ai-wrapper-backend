@@ -477,6 +477,7 @@ export const usageDaily = pgTable(
     modelId: uuid('model_id').notNull(),
     requests: integer('requests').notNull(),
     failedRequests: integer('failed_requests').notNull(),
+    providerSourcedRequests: integer('provider_sourced_requests').notNull().default(0),
     inputTokens: bigint('input_tokens', { mode: 'number' }).notNull(),
     outputTokens: bigint('output_tokens', { mode: 'number' }).notNull(),
     quotaTokens: bigint('quota_tokens', { mode: 'number' }).notNull(),

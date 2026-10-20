@@ -7,11 +7,13 @@ import { ok, okEmpty } from '@/http/envelope.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requireCsrf } from '@/http/middleware/require-csrf.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
+import { userRateLimit } from '@/http/middleware/rate-limit.ts';
+import type { RateLimiter } from '@/http/ports/rate-limiter.ts';
 import type { AppEnv } from '@/http/types.ts';
+import { getLogger } from '@/observability/logger.ts';
 import type { GenerationRepository } from '../ports/generation-repository.ts';
 import type { ConversationRepository } from '@/conversations/ports/conversation-repository.ts';
 import type { GenerationManager } from '@/orchestrator/generation-manager.ts';
-import type { GenerationMetrics } from '@/observability/metrics.ts';
 import type { Finalizer } from '../application/finalizer.ts';
 
 export interface GenerationRoutesDeps {
@@ -21,18 +23,19 @@ export interface GenerationRoutesDeps {
   readonly finalizer: Finalizer;
   readonly auth: AuthService;
   readonly config: Config;
-  readonly metrics?: GenerationMetrics | undefined;
+  readonly rateLimiter: RateLimiter;
 }
 
 /**
  * Generation status, cancel, and SSE stream API.
  */
 export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
-  const { generations, conversations, orchestrator, finalizer, auth, config, metrics } = deps;
+  const { generations, conversations, orchestrator, finalizer, auth, config, rateLimiter } = deps;
   const routes = new Hono<AppEnv>();
 
   routes.use('/generations/*', requireAuth(auth, config));
   routes.use('/generations/*', requirePasswordChanged());
+  routes.use('/generations/*', userRateLimit(config, rateLimiter));
   routes.use('/generations/*', async (c, next) => {
     if (c.req.method === 'GET') return next();
     return requireCsrf(config)(c, next);
@@ -118,7 +121,7 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
       const parsed = parseInt(lastEventIdHeader, 10);
       if (!Number.isNaN(parsed)) {
         lastEventSeq = parsed;
-        metrics?.sseReconnects.inc();
+        getLogger().info({ generationId: id, lastEventSeq }, 'sse stream resumed');
       }
     }
 
@@ -127,14 +130,12 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
     c.header('Connection', 'keep-alive');
     c.header('X-Accel-Buffering', 'no');
 
-    metrics?.sseConnectionsActive.inc();
-
     return streamSSE(c, async (stream) => {
       let isClosed = false;
       const cleanup = () => {
         if (!isClosed) {
           isClosed = true;
-          metrics?.sseConnectionsActive.dec();
+          getLogger().info({ generationId: id }, 'sse stream closed');
         }
       };
 

@@ -47,7 +47,6 @@ import type { QuotaService as QuotaServiceType } from './quota/application/quota
 import type { UsageService as UsageServiceType } from './quota/application/usage-service.ts';
 import type { ErrorEventWriter } from './generations/ports/error-event-writer.ts';
 import { DrizzleErrorEventWriter } from './generations/infrastructure/drizzle-error-event-writer.ts';
-import { createGenerationMetrics, type GenerationMetrics } from './observability/metrics.ts';
 import { GenerationManager } from './orchestrator/index.ts';
 
 import type { ConversationRepository } from './conversations/ports/conversation-repository.ts';
@@ -78,10 +77,14 @@ import {
   createIdempotencyPurgeHandler,
   createSessionsPurgeHandler,
 } from './jobs/application/handlers/purge-handler.ts';
+import { createConversationPurgeHandler } from './jobs/application/handlers/conversation-purge-handler.ts';
 import { createQuotaReaperHandler } from './jobs/application/handlers/quota-reaper-handler.ts';
 import { createReconciliationHandler } from './jobs/application/handlers/reconciliation-handler.ts';
 import { createUsageRollupHandler } from './jobs/application/handlers/usage-rollup-handler.ts';
 import { createPrecreatePeriodsHandler } from './jobs/application/handlers/precreate-periods-handler.ts';
+
+import { ReportingService } from './reporting/application/reporting-service.ts';
+import { DrizzleReportingRepository } from './reporting/infrastructure/drizzle-reporting-repository.ts';
 
 export interface Services {
   readonly auth: AuthService;
@@ -97,7 +100,6 @@ export interface Services {
   readonly send: SendService;
   readonly generationRepository: GenerationRepository;
   readonly errorEvents: ErrorEventWriter;
-  readonly metrics: GenerationMetrics;
   readonly orchestrator: GenerationManager;
   readonly finalizer: Finalizer;
   readonly jobQueue: JobQueue;
@@ -109,6 +111,7 @@ export interface Services {
   readonly usageService: UsageServiceType;
   readonly attachments: AttachmentServiceType;
   readonly storage: LocalStorageProvider;
+  readonly reporting: ReportingService;
 }
 
 export function createServices(config: Config): Services {
@@ -180,7 +183,6 @@ export function createServices(config: Config): Services {
   });
 
   const errorEvents = new DrizzleErrorEventWriter();
-  const metrics = createGenerationMetrics();
   const generationRepository = new DrizzleGenerationRepository();
 
   const storage = new LocalStorageProvider(config.STORAGE_LOCAL_ROOT);
@@ -236,7 +238,6 @@ export function createServices(config: Config): Services {
     clock: systemClock,
     idGen: uuidv7Generator,
     config,
-    metrics,
     finalizer,
     generationRepo: generationRepository,
     conversationRepo: conversationRepository,
@@ -281,6 +282,12 @@ export function createServices(config: Config): Services {
   const reaperHandler = createReaperHandler({ finalizer, generations: generationRepository });
   const idempotencyPurgeHandler = createIdempotencyPurgeHandler();
   const sessionsPurgeHandler = createSessionsPurgeHandler();
+  const conversationPurgeHandler = createConversationPurgeHandler({
+    conversations: conversationRepository,
+    storage,
+    clock: systemClock,
+    retentionDays: config.CONVERSATION_RETENTION_DAYS,
+  });
 
   const quotaReaperHandler = createQuotaReaperHandler({
     accounts: quotaAccountsRepo,
@@ -310,6 +317,9 @@ export function createServices(config: Config): Services {
   jobRunner.registerHandler('generation.reaper', async () => reaperHandler());
   jobRunner.registerHandler('idempotency.purge', async () => idempotencyPurgeHandler());
   jobRunner.registerHandler('sessions.purge', async () => sessionsPurgeHandler());
+  jobRunner.registerHandler('conversations.purge_soft_deleted', async () =>
+    conversationPurgeHandler(),
+  );
   jobRunner.registerHandler('quota.reservations.reaper', async () => quotaReaperHandler());
   jobRunner.registerHandler('quota.reconcile', async () => reconciliationHandler());
   jobRunner.registerHandler('usage.rollup.incremental', async () => usageRollup.incremental());
@@ -333,7 +343,6 @@ export function createServices(config: Config): Services {
     send,
     generationRepository,
     errorEvents,
-    metrics,
     orchestrator,
     finalizer,
     jobQueue,
@@ -345,5 +354,6 @@ export function createServices(config: Config): Services {
     usageService,
     attachments,
     storage,
+    reporting: new ReportingService({ repository: new DrizzleReportingRepository() }),
   };
 }

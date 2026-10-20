@@ -1,6 +1,6 @@
 import type { Clock, IdGenerator } from '@/clock/index.ts';
 import type { Config } from '@/config/index.ts';
-import type { GenerationMetrics } from '@/observability/metrics.ts';
+import { getLogger } from '@/observability/logger.ts';
 import type { ProviderRegistry } from '@/providers/ports/provider-registry.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
 import type {
@@ -40,7 +40,6 @@ export interface GenerationManagerDeps {
   readonly clock: Clock;
   readonly idGen: IdGenerator;
   readonly config: Config;
-  readonly metrics?: GenerationMetrics | undefined;
   readonly finalizer?: Finalizer | undefined;
   readonly generationRepo?: GenerationRepository | undefined;
   readonly conversationRepo?: ConversationRepository | undefined;
@@ -54,7 +53,6 @@ export class GenerationManager {
   private readonly clock: Clock;
   private readonly idGen: IdGenerator;
   private readonly config: Config;
-  private readonly metrics?: GenerationMetrics | undefined;
   private readonly finalizer?: Finalizer | undefined;
   private readonly generationRepo?: GenerationRepository | undefined;
   private readonly conversationRepo?: ConversationRepository | undefined;
@@ -66,7 +64,6 @@ export class GenerationManager {
     this.clock = deps.clock;
     this.idGen = deps.idGen;
     this.config = deps.config;
-    this.metrics = deps.metrics;
     this.finalizer = deps.finalizer;
     this.generationRepo = deps.generationRepo;
     this.conversationRepo = deps.conversationRepo;
@@ -225,35 +222,21 @@ export class GenerationManager {
           const providerKey = input.chatRequest.provider.key;
           const modelKey = input.chatRequest.model.apiModelId;
 
-          this.metrics?.generationsActive.dec({ provider: providerKey });
-          this.metrics?.generationsFinished.inc({
-            provider: providerKey,
-            model: modelKey,
-            outcome: outcome.status,
-            error_category: outcome.error?.code ?? '',
-          });
-
           const durationSeconds = run.durationSeconds(this.clock.now());
-          if (durationSeconds !== null) {
-            this.metrics?.generationDuration.observe(
-              { provider: providerKey, model: modelKey },
-              durationSeconds,
-            );
-          }
           const ttftSeconds = run.timeToFirstTokenSeconds;
-          if (ttftSeconds !== null) {
-            this.metrics?.generationTtft.observe(
-              { provider: providerKey, model: modelKey },
-              ttftSeconds,
-            );
-          }
-
-          if (outcome.error !== undefined) {
-            this.metrics?.providerErrors.inc({
+          getLogger().info(
+            {
+              generationId: run.generationId,
               provider: providerKey,
-              category: outcome.error.code,
-            });
-          }
+              model: modelKey,
+              status: outcome.status,
+              finishReason: outcome.finishReason,
+              durationMs: durationSeconds === null ? null : Math.round(durationSeconds * 1000),
+              ttftMs: ttftSeconds === null ? null : Math.round(ttftSeconds * 1000),
+              errorCategory: outcome.error?.code ?? null,
+            },
+            'generation run finished',
+          );
 
           if (input.hooks?.onFinalize !== undefined) {
             await input.hooks.onFinalize(outcome);
@@ -264,13 +247,15 @@ export class GenerationManager {
 
     this.runs.set(run.generationId, run);
 
-    this.metrics?.generationsStarted.inc({
-      provider: input.chatRequest.provider.key,
-      model: input.chatRequest.model.apiModelId,
-    });
-    this.metrics?.generationsActive.inc({
-      provider: input.chatRequest.provider.key,
-    });
+    getLogger().info(
+      {
+        generationId: run.generationId,
+        provider: input.chatRequest.provider.key,
+        model: input.chatRequest.model.apiModelId,
+        activeGenerations: this.runs.size,
+      },
+      'generation run started',
+    );
 
     void run.start();
 

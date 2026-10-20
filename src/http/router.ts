@@ -10,6 +10,7 @@ import { conversationRoutes } from '../conversations/http/routes.ts';
 import { generationRoutes } from '../generations/http/routes.ts';
 import { quotaRoutes } from '../quota/http/routes.ts';
 import { attachmentRoutes } from '../attachments/http/routes.ts';
+import { reportingRoutes } from '../reporting/http/routes.ts';
 import type { AppEnv } from './types.ts';
 
 export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
@@ -33,6 +34,7 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
       send: services.send,
       auth: services.auth,
       config,
+      rateLimiter: services.rateLimiter,
     }),
   );
   api.route(
@@ -44,7 +46,7 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
       finalizer: services.finalizer,
       auth: services.auth,
       config,
-      metrics: services.metrics,
+      rateLimiter: services.rateLimiter,
     }),
   );
   api.route('/admin', adminRoutes({ admin: services.admin, auth: services.auth, config }));
@@ -54,6 +56,7 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
       service: services.attachments,
       auth: services.auth,
       config,
+      rateLimiter: services.rateLimiter,
     }),
   );
   api.route(
@@ -70,6 +73,14 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
     '/admin',
     registryAdminRoutes({
       registryAdmin: services.registryAdmin,
+      auth: services.auth,
+      config,
+    }),
+  );
+  api.route(
+    '/admin',
+    reportingRoutes({
+      reporting: services.reporting,
       auth: services.auth,
       config,
     }),

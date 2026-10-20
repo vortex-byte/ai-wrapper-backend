@@ -6,6 +6,8 @@ import { AppError, isAppError } from '@/errors.ts';
 import { ok } from '@/http/envelope.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requireCsrf } from '@/http/middleware/require-csrf.ts';
+import { rateLimit, userRateLimit } from '@/http/middleware/rate-limit.ts';
+import type { RateLimiter } from '@/http/ports/rate-limiter.ts';
 import type { AppEnv } from '@/http/types.ts';
 import type { AttachmentService } from '../application/attachment-service.ts';
 import { FILE_LIMITS, sanitizeDisplayName, type Attachment } from '../domain/attachment.ts';
@@ -82,8 +84,19 @@ export function attachmentRoutes(input: {
   readonly service: AttachmentService;
   readonly auth: AuthService;
   readonly config: Config;
+  readonly rateLimiter: RateLimiter;
 }): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
+
+  const generalLimit = userRateLimit(input.config, input.rateLimiter);
+
+  const uploadLimit = rateLimit(input.config, input.rateLimiter, {
+    name: 'upload',
+    scope: 'user',
+    limit: input.config.RATE_LIMIT_UPLOAD_REQUESTS,
+    windowSeconds: input.config.RATE_LIMIT_WINDOW_SECONDS,
+    message: 'Too many uploads. Try again shortly.',
+  });
 
   /**
    * Auth and CSRF are bound to this exact route so an unmatched path under the shared `/api`
@@ -92,7 +105,9 @@ export function attachmentRoutes(input: {
   routes.post(
     '/conversations/:id/attachments',
     requireAuth(input.auth, input.config),
+    generalLimit,
     requireCsrf(input.config),
+    uploadLimit,
     async (c) => {
       const auth = c.get('auth');
       if (auth === undefined) throw new AppError('unauthenticated');
@@ -157,7 +172,7 @@ export function attachmentRoutes(input: {
   );
 
   /** Processing status only; the client polls until `ready`. */
-  routes.get('/attachments/:id', requireAuth(input.auth, input.config), async (c) => {
+  routes.get('/attachments/:id', requireAuth(input.auth, input.config), generalLimit, async (c) => {
     const auth = c.get('auth');
     if (auth === undefined) throw new AppError('unauthenticated');
     const view = await input.service.getForUser(c.req.param('id'), auth.user.id);
@@ -177,6 +192,7 @@ export function attachmentRoutes(input: {
   routes.get(
     '/files/:id/content',
     requireAuth(input.auth, input.config),
+    generalLimit,
     async (c: Context<AppEnv>) => {
       const auth = c.get('auth');
       if (auth === undefined) throw new AppError('unauthenticated');

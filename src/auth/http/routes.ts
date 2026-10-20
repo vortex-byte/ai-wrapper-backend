@@ -19,6 +19,7 @@ import { ChangePasswordBodySchema, LoginBodySchema } from './schemas.ts';
 import type { RateLimiter } from '@/http/ports/rate-limiter.ts';
 import type { AuditLogRepository } from '@/audit/ports/audit-log-repository.ts';
 import { rateLimitLogin } from '@/http/middleware/rate-limit-login.ts';
+import { rateLimit } from '@/http/middleware/rate-limit.ts';
 
 function toWireUser(user: User) {
   return {
@@ -43,6 +44,15 @@ export function authRoutes(deps: AuthRoutesDeps): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
 
   if (rateLimiter) {
+    routes.use(
+      '/auth/*',
+      rateLimit(config, rateLimiter, {
+        name: 'auth-ip',
+        scope: 'ip',
+        limit: config.RATE_LIMIT_IP_REQUESTS,
+        windowSeconds: config.RATE_LIMIT_WINDOW_SECONDS,
+      }),
+    );
     routes.post('/auth/login', rateLimitLogin(config, rateLimiter, audit));
   }
 

@@ -9,6 +9,8 @@ import { requireCsrf } from '@/http/middleware/require-csrf.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
 import type { AppEnv } from '@/http/types.ts';
 import { parseJsonBody } from '@/http/validate.ts';
+import { rateLimit, userRateLimit } from '@/http/middleware/rate-limit.ts';
+import type { RateLimiter } from '@/http/ports/rate-limiter.ts';
 import type { Conversation, MessagePart, MessageWithParts } from '../domain/conversation.ts';
 import type { ConversationService } from '../application/conversation-service.ts';
 import type { SendService } from '@/generations/application/send-service.ts';
@@ -27,17 +29,27 @@ export interface ConversationRoutesDeps {
   readonly send: SendService;
   readonly auth: AuthService;
   readonly config: Config;
+  readonly rateLimiter: RateLimiter;
 }
 
 /**
  * Every route is scoped to the signed-in user; another user's id yields `404 not_found`.
  */
 export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
-  const { conversations, send, auth, config } = deps;
+  const { conversations, send, auth, config, rateLimiter } = deps;
   const routes = new Hono<AppEnv>();
+
+  const generationLimit = rateLimit(config, rateLimiter, {
+    name: 'generation',
+    scope: 'user',
+    limit: config.RATE_LIMIT_GENERATION_REQUESTS,
+    windowSeconds: config.RATE_LIMIT_WINDOW_SECONDS,
+    message: 'Too many generation requests. Try again shortly.',
+  });
 
   routes.use('/conversations/*', requireAuth(auth, config));
   routes.use('/conversations/*', requirePasswordChanged());
+  routes.use('/conversations/*', userRateLimit(config, rateLimiter));
   routes.use('/conversations/*', async (c, next) => {
     if (c.req.method === 'GET') return next();
     return requireCsrf(config)(c, next);
@@ -113,7 +125,7 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
     );
   });
 
-  routes.post('/conversations/:id/messages', async (c) => {
+  routes.post('/conversations/:id/messages', generationLimit, async (c) => {
     const caller = c.get('auth');
     if (!caller) throw new AppError('unauthenticated');
 
@@ -135,7 +147,7 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
     return c.json(ok(result.payload, 'Generation queued.'), 202);
   });
 
-  routes.post('/conversations/:id/messages/:mid/retry', async (c) => {
+  routes.post('/conversations/:id/messages/:mid/retry', generationLimit, async (c) => {
     const caller = c.get('auth');
     if (!caller) throw new AppError('unauthenticated');
 

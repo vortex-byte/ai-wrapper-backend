@@ -16,7 +16,7 @@ Every post-MVP capability attaches cleanly to extension points already designed 
 | **Division Model Visibility** | `quota_policies.allowed_model_ids`, `users.division_id` | `GET /api/models` query layer |
 | **Circuit Breaker** | `ai_providers.status`, `error_events` table | `providers/circuit-breaker.ts` wrapping `ProviderPort` |
 | **RLS Hardening** | `current_setting('app.user_id')` | `db/withTransaction.ts` session config |
-| **ClamAV Antivirus** | `attachments.status = 'validating'` | Pipeline hook in `attachments/application/upload.ts` |
+| **ClamAV Antivirus** | `attachments.status = 'validating'` | Pipeline hook in `attachments/application/attachment-service.ts` |
 | **Object Storage (S3 / R2)** | `attachments.storage_provider`, `storage_key` | `StorageProviderPort` (`storage/s3`) |
 | **SSO / OIDC (Entra ID, Okta)** | `users.idp_subject` (indexed partial unique) | `auth/ports/AuthProviderPort` behind session middleware |
 | **Quota Threshold Warnings** | `quota_accounts` counter state + `jobs` outbox | `jobs/handlers/quota-alert.ts` worker |
@@ -55,15 +55,15 @@ Every post-MVP capability attaches cleanly to extension points already designed 
 * **Implementation Details:**
   - Implemented in `src/providers/circuit-breaker.ts` implementing `ProviderPort`.
   - Trips write an entry to `error_events` (`category: 'circuit_breaker_tripped'`).
-  - Emits telemetry metrics `provider_circuit_state{provider="openai"} 0|1|2`.
+  - Logs circuit state transitions in structured Winston JSON logs and records an entry in `error_events`.
 
 ---
 
 ### 1.3 Provider Health & Latency Dashboard
 
-* **Objective:** Provide internal ops and admins with real-time insight into upstream provider performance.
+* **Objective:** Provide internal ops and super admins with real-time insight into upstream provider performance.
 * **API Endpoints:**
-  - `GET /api/admin/providers/health`: Returns rolling 5-minute stats per provider:
+  - `GET /api/admin/providers/health`: Requires `role=super_admin`. Returns rolling 5-minute stats per provider:
     ```json
     {
       "status": "ok",
@@ -80,16 +80,16 @@ Every post-MVP capability attaches cleanly to extension points already designed 
       ]
     }
     ```
-* **Implementation:** Read directly from rolling in-process window (and Prometheus metrics counters in `observability/metrics.ts`).
+* **Implementation:** Read directly from rolling in-process window and `error_events`.
 
 ---
 
 ### 1.4 Admin Error Explorer & CSV Usage Exports
 
-* **Objective:** Enable IT and finance to inspect operational errors and export granular usage logs.
+* **Objective:** Enable IT and finance super admins to inspect operational errors and export granular usage logs.
 * **Endpoints:**
-  - `GET /api/admin/errors`: Keyset-paginated search over `error_events` (filters: `category`, `providerId`, `modelId`, date range). Sensitive headers and body contents remain completely redacted.
-  - `GET /api/admin/usage/export`: Streamed CSV generation from `usage_events` and `usage_daily` with standard columns (`date,user_email,division,provider,model,input_tokens,output_tokens,quota_tokens,cost_usd`).
+  - `GET /api/admin/errors`: Requires `role=super_admin`. Keyset-paginated search over `error_events` (filters: `category`, `providerId`, `modelId`, date range). Sensitive headers and body contents remain completely redacted.
+  - `GET /api/admin/usage/export`: Requires `role=super_admin`. Streamed CSV generation from `usage_events` and `usage_daily` with standard columns (`date,user_email,division,provider,model,input_tokens,output_tokens,quota_tokens,cost_usd`).
 
 ---
 
@@ -97,7 +97,7 @@ Every post-MVP capability attaches cleanly to extension points already designed 
 
 * **Objective:** Ensure uploaded files (documents, images, archives) are free of malware before being exposed to parsers or other employees.
 * **Execution:**
-  - During the upload pipeline (`attachments/application/upload.ts`), files enter `status = 'validating'`.
+  - During the upload pipeline (`attachments/application/attachment-service.ts`), files enter `status = 'validating'`.
   - Dispatches scan stream via Unix domain socket `/var/run/clamav/clamd.ctl` (or clamd TCP socket `localhost:3310`).
   - Scan timeout: 5.0 seconds. If clean, transitions to `status = 'ready'`.
   - If malware signature matches: immediately deletes binary from storage, sets `status = 'rejected'`, sets `error_code = 'virus_detected'`, and logs to `audit_logs`.
@@ -205,7 +205,7 @@ Every post-MVP capability attaches cleanly to extension points already designed 
 
 * **Objective:** Extract searchable text from scanned image-only PDFs and raw camera uploads so that document context can be indexed and preserved in long conversations.
 * **Implementation:**
-  - In `attachments/application/extraction.ts`: if PDF contains zero extractable text streams (pure scanned images), dispatches to the OCR worker.
+  - In `attachments/application/text-extraction.ts`: if PDF contains zero extractable text streams (pure scanned images), dispatches to the OCR worker.
   - Worker runs Tesseract OCR or OCR microservice with a 30-second cap.
   - Inserts extracted text into `file_extractions` (`extractor = 'tesseract'`, `truncated = boolean`).
   - Text survives binary TTL expiry (`RETAIN_EXTRACTIONS = true`), allowing conversations to recall scanned document content indefinitely.

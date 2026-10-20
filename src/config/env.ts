@@ -87,11 +87,36 @@ export const EnvSchema = z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
       .default('info'),
     LOG_CONTENT: boolish(false),
-    // Optional OTLP collector endpoint (traces; enabled when set).
+    LOG_DIR: z.string().min(1).default('./.var/logs'),
+    LOG_FILE_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+    LOG_MAX_SIZE: z.string().min(1).default('20m'),
+    LOG_TO_FILES: z.preprocess(
+      (value) => {
+        if (value === undefined) return undefined;
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'string') {
+          const v = value.trim().toLowerCase();
+          if (['true', '1', 'yes', 'on'].includes(v)) return true;
+          if (['false', '0', 'no', 'off', ''].includes(v)) return false;
+        }
+        return value;
+      },
+      z.boolean().optional(),
+    ),
+
     OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
 
     ALLOWED_ORIGINS: csv,
-    METRICS_TOKEN: z.string().default(''),
+
+    RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).default(60),
+    RATE_LIMIT_IP_REQUESTS: z.coerce.number().int().min(1).default(60),
+    RATE_LIMIT_API_IP_REQUESTS: z.coerce.number().int().min(1).default(600),
+    RATE_LIMIT_USER_REQUESTS: z.coerce.number().int().min(1).default(300),
+    RATE_LIMIT_LOGIN_REQUESTS: z.coerce.number().int().min(1).default(10),
+    RATE_LIMIT_UPLOAD_REQUESTS: z.coerce.number().int().min(1).default(30),
+    RATE_LIMIT_GENERATION_REQUESTS: z.coerce.number().int().min(1).default(20),
+
+    CONVERSATION_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
 
     JOB_POLL_INTERVAL_MS: z.coerce.number().int().min(50).default(1000),
     JOB_POLL_INTERVAL_IDLE_MS: z.coerce.number().int().min(100).default(5000),

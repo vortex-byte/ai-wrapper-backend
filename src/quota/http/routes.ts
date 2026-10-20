@@ -39,10 +39,6 @@ export const AdjustmentBodySchema = z.object({
 });
 
 const USAGE_GROUP_BY = z.enum(['day', 'model']).optional().default('day');
-const ADMIN_GROUP_BY = z
-  .enum(['user', 'model', 'provider', 'day', 'month', 'division'])
-  .optional()
-  .default('day');
 
 export interface QuotaRoutesDeps {
   readonly quota: QuotaService;
@@ -191,17 +187,6 @@ export function quotaRoutes(deps: QuotaRoutesDeps): Hono<AppEnv> {
         })),
       }),
     );
-  });
-
-  admin.get('/admin/usage', async (c) => {
-    const parsed = ADMIN_GROUP_BY.safeParse(c.req.query('groupBy'));
-    const groupBy = parsed.success ? parsed.data : 'day';
-    const items = await usage.adminUsage({
-      from: c.req.query('from'),
-      to: c.req.query('to'),
-      groupBy,
-    });
-    return c.json(ok({ items }));
   });
 
   routes.route('/', admin);

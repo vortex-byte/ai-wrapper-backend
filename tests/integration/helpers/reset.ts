@@ -14,6 +14,7 @@ import { getPool } from '@/db/index.ts';
  */
 const RESET_STATEMENTS = [
   'DELETE FROM audit_logs',
+  'DELETE FROM error_events',
   'DELETE FROM file_extractions',
   'DELETE FROM attachments',
   'DELETE FROM sessions',

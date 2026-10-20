@@ -6,9 +6,11 @@
 > **API surface:** [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md).
 > **Build & deploy:** [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) (phases → VPS, no Docker).
 
-Current repo state: **docs only.** No code yet. Implementation follows PRD §29 (Phase 0 →
-Foundations first). Anything described below as a command or path is the **target convention**
-to adopt as the code lands.
+Current repo state: **Phases 0–5 implemented** (`src/`, `migrations/`, `tests/`, `scripts/`).
+Phase 5 (admin, observability, hardening) is complete except for the staging-only exercises:
+the 150-concurrency load/soak run, the DR drill, and the `EXPLAIN ANALYZE` review
+(`docs/IMPLEMENTATION_PLAN.md` M5.6–M5.7). Everything below is the enforced convention, not a
+target.
 
 ---
 
@@ -150,7 +152,7 @@ src/
   config/                # env schema (Zod) + constants
   db/                    # pool, drizzle client, schema, withTransaction (Unit of Work)
   http/                  # middleware: request-id, cors, auth, csrf, rate limit, error envelope
-  observability/         # pino, metrics, tracing
+  observability/         # winston JSON logging with daily rotation, stack traces, and redaction
   clock/                 # Clock + IdGenerator ports and implementations
   errors.ts              # error vocabulary + AppError (shared by application & http)
   crypto.ts              # session-token generation/hashing, UA hashing
@@ -182,24 +184,29 @@ src/
 
 docs/                    # PRD.md, API_CONTRACTS.md, IMPLEMENTATION_PLAN.md
 migrations/              # forward-only SQL migrations
+scripts/                 # operator tooling (load test); not part of the server bundle
+docs/runbooks/           # incident procedures (PITR, secret rotation, outage, disk, quota)
 ```
 
 > Layer subfolders (`domain/ application/ ports/ infrastructure/ http/`) are introduced per module
 > as it gains code; a new module starts as a single `application/` folder and splits when it earns
 > the structure.
 
-## 4. Commands (target)
+## 4. Commands
 
 ```
 bun install
 bun run dev            # api + worker, watch mode
 bun run typecheck      # tsc --noEmit
 bun run lint           # eslint (includes the provider-import rule, §5)
-bun run test           # vitest
-bun run test:integration
+bun run depcruise      # module-boundary rules (§3.2)
+bun run verify         # typecheck + lint + depcruise + test
+bun run test           # vitest (unit)
+bun run test:integration   # requires TEST_DATABASE_URL; DB name must contain "test"
 bun run db:migrate     # forward-only, advisory-locked; run as a pre-deploy job
 bun run db:seed:example# documented example providers/models — NEVER auto-applied in prod
 bun run cli bootstrap-admin --email you@corp.example
+bun run scripts/load-test.ts --base-url … --origin … --email … --password … --concurrency 150
 docker compose up -d pg redis   # local dev deps
 ```
 

@@ -144,4 +144,17 @@ export interface ConversationRepository {
   ): Promise<MessageWithParts | null>;
 
   countMessages(conversationId: string, tx?: TransactionContext): Promise<number>;
+
+  findPurgeableIds(
+    cutoff: Date,
+    limit: number,
+    tx?: TransactionContext,
+  ): Promise<readonly string[]>;
+
+  attachmentStorageKeysFor(
+    conversationIds: readonly string[],
+    tx?: TransactionContext,
+  ): Promise<readonly { readonly conversationId: string; readonly storageKey: string }[]>;
+
+  hardDelete(ids: readonly string[], tx?: TransactionContext): Promise<number>;
 }

@@ -6,6 +6,7 @@ import { cors } from './http/middleware/cors.ts';
 import { requestId } from './http/middleware/request-id.ts';
 import { requestLogger } from './http/middleware/request-logger.ts';
 import { securityHeaders } from './http/middleware/security-headers.ts';
+import { rateLimit } from './http/middleware/rate-limit.ts';
 import { apiRouter } from './http/router.ts';
 import type { AppEnv } from './http/types.ts';
 import { healthRoutes } from './health/routes.ts';
@@ -20,9 +21,18 @@ export function createApp(config: Config, customServices?: Services): Hono<AppEn
   app.use('*', requestLogger());
   app.use('*', securityHeaders(config));
   app.use('/api/*', cors(config));
+  app.use(
+    '/api/*',
+    rateLimit(config, services.rateLimiter, {
+      name: 'api',
+      scope: 'ip',
+      limit: config.RATE_LIMIT_API_IP_REQUESTS,
+      windowSeconds: config.RATE_LIMIT_WINDOW_SECONDS,
+    }),
+  );
   app.onError(onError(config));
   app.notFound(notFound);
-  app.route('/', healthRoutes(config, services.metrics.registry));
+  app.route('/', healthRoutes(config));
   app.route('/api', apiRouter(config, services));
 
   return app;

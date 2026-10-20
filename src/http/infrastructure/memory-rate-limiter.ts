@@ -6,27 +6,16 @@ interface Bucket {
 }
 
 export interface MemoryRateLimiterOptions {
-  /** Hard cap on tracked keys; oldest-expiring buckets are evicted first. */
   readonly maxKeys?: number;
 }
 
 const DEFAULT_MAX_KEYS = 10_000;
+const SWEEP_INTERVAL_MS = 1000;
 
-/**
- * In-memory fixed-window rate limiter (single-process default).
- *
- * Bounded by design: an attacker rotating keys (e.g. spoofed forwarded IPs) cannot grow
- * the map without limit. Expired buckets are swept on a periodic tick, and if the map is
- * still at capacity the entries closest to expiry are evicted first. The map is safe for
- * Node/Bun's single-threaded event loop.
- *
- * This limiter is **per process**. With more than one instance the port must be backed by
- * a shared store (Redis) so the effective limit does not multiply by replica count; the
- * `RateLimiter` port exists precisely so that swap stays a composition-root change.
- */
 export class MemoryRateLimiter implements RateLimiter {
   private readonly buckets = new Map<string, Bucket>();
   private readonly maxKeys: number;
+  private lastSweepMs = 0;
 
   constructor(
     private readonly clock: { now: () => Date } = { now: () => new Date() },
@@ -39,7 +28,10 @@ export class MemoryRateLimiter implements RateLimiter {
     const nowMs = this.clock.now().getTime();
     const windowMs = windowSeconds * 1000;
 
-    this.sweepExpired(nowMs);
+    if (nowMs - this.lastSweepMs >= SWEEP_INTERVAL_MS) {
+      this.sweepExpired(nowMs);
+      this.lastSweepMs = nowMs;
+    }
 
     let bucket = this.buckets.get(key);
 
@@ -96,7 +88,6 @@ export class MemoryRateLimiter implements RateLimiter {
     if (soonestKey !== undefined) this.buckets.delete(soonestKey);
   }
 
-  /** Number of tracked keys — used by tests to assert the bound holds. */
   size(): number {
     return this.buckets.size;
   }

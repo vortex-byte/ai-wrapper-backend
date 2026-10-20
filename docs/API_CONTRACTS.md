@@ -4,7 +4,7 @@
 |---|---|
 | **Document status** | v1.3 — aligned with `docs/PRD.md` (Draft v1.3) |
 | **Date** | 2026-10-08 |
-| **Base URL** | `/api` (e.g. `https://ai.corp.example/api`). Ops endpoints are served at the root (`/healthz`, `/readyz`, `/metrics`). |
+| **Base URL** | `/api` (e.g. `https://ai.corp.example/api`). Ops endpoints are served at the root (`/healthz`, `/readyz`). |
 | **Transport** | HTTPS · JSON (`application/json`) · SSE (`text/event-stream`) for generation streams |
 
 This file is the contract between the backend and the SPA. The PRD is authoritative for behaviour;
@@ -36,7 +36,7 @@ environment — PRD A-16).
 - **No provider-specific fields** ever appear in a response; providers are represented by a display label only.
 - **Provider secrets** are never accepted or returned by any endpoint (env-only — PRD A-16).
 - **Envelope exemptions (raw bodies):** `GET /api/files/:id/content` (binary + `Range`), SSE frames
-  (§7.2), `/healthz`, `/readyz`, `/metrics`. Everything else uses the envelope.
+  (§7.2), `/healthz`, `/readyz`. Everything else uses the envelope.
 
 ### 1.1 Success envelope (all 2xx with a body)
 
@@ -83,7 +83,7 @@ type that string encodes. Header names are case-insensitive on the wire.
 |---|---|---|---|
 | `X-Request-Id` | string, `^[A-Za-z0-9_-]{8,64}$` | always | Echoes a valid client-supplied id, else a server-generated UUID. Correlation handle in all environments. |
 | `Content-Type` | string | whenever there is a body | `application/json; charset=UTF-8` for enveloped bodies; `text/event-stream` (§7.2) and blob types (§8.4) are exceptions. Absent on bodiless responses. |
-| `Cache-Control` | string, literal `no-store` | always on `/api` JSON and `/metrics` | JSON API responses are never cacheable. Overridden on `GET /api/files/:id/content` → `private, no-store` (§8.4). |
+| `Cache-Control` | string, literal `no-store` | always on `/api` JSON | JSON API responses are never cacheable. Overridden on `GET /api/files/:id/content` → `private, no-store` (§8.4). |
 | `Vary` | string, contains `Origin` | always | Set even when no `Origin` is present, so shared caches never mix origins. |
 | `X-Content-Type-Options` | string, literal `nosniff` | always | Baseline hardening. |
 | `X-Frame-Options` | string, literal `DENY` | always | |
@@ -128,7 +128,7 @@ rejected with `403 forbidden` by the CSRF/`Origin` check (§1).
 |---|---|---|---|
 | `Access-Control-Allow-Origin` | string, an exact origin | origin allowed | **Never `*`** — an exact echo of the allowed origin. |
 | `Access-Control-Allow-Credentials` | string, literal `true` | origin allowed | Required for the session cookie to ride along. |
-| `Access-Control-Expose-Headers` | string, literal `X-Request-Id, RateLimit-Remaining` | origin allowed | Headers the SPA may read from JS. |
+| `Access-Control-Expose-Headers` | string, literal `X-Request-Id, RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After` | origin allowed | Headers the SPA may read from JS. |
 | `Access-Control-Allow-Methods` | string, CSV of methods | **preflight (OPTIONS) only** | `GET, POST, PATCH, DELETE, OPTIONS`. |
 | `Access-Control-Allow-Headers` | string, CSV of names | **preflight only** | `Content-Type, X-CSRF-Token, Idempotency-Key, X-Request-Id`. |
 | `Access-Control-Max-Age` | integer as string (seconds), literal `600` | **preflight only** | Browsers cache the preflight for 10 min. |
@@ -259,7 +259,7 @@ are serialized as UTC or with an explicit offset. Use `period.start` for a local
 
 ### 3.3 `GET /api/me/usage`
 
-Returns aggregated token usage metrics and estimated cost breakdown for the authenticated user across a specified date range.
+Returns aggregated token usage statistics and estimated cost breakdown for the authenticated user across a specified date range.
 
 **Query parameters:**
 | Parameter | Value type | Required | Description |
@@ -683,7 +683,7 @@ Poll until `ready` before sending it in a message.
 |---|---|---|---|
 | `id` | string (UUIDv7) | Yes | Attachment ID (unattached uploads only). |
 
-Deletes an **unattached** upload.
+Deletes an **unattached** upload (reserved / deferred to P1; unattached uploads are purged automatically after 24 hours by the background orphan reaper job).
 ```json
 { "status": "ok", "message": "Attachment deleted." }
 ```
@@ -790,7 +790,7 @@ never stored in plaintext.
 ### 9.3 `GET /api/admin/users/:id`
 
 Retrieves account details and profile information for a specific user.
-When called by a division `admin`, returns **404** if the target user belongs to a different division or has no division.
+When called by a division `admin`, returns **404** if the target user belongs to a different division, has no division, or has a role other than `'user'` (unless inspecting their own account).
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -813,9 +813,9 @@ When called by a division `admin`, returns **404** if the target user belongs to
 
 Updates profile attributes, role, division assignment, or account status for a user.
 When called by a division `admin`:
-- Returns **404** if target user is in a different division or unassigned.
+- Returns **404** if target user is in a different division, unassigned, or has a role other than `'user'` (unless updating their own display name).
 - Can only update `displayName` and `status` (`active` | `disabled`). Supplying `role` or `divisionId` returns `403 forbidden`.
-- Cannot demote or disable their own account.
+- Cannot disable their own administrator account (`403 forbidden`).
 
 When called by `super_admin`:
 - Can update `displayName`, `role`, `divisionId`, `status`.
@@ -854,7 +854,7 @@ Safeguards: cannot disable/demote the last active `super_admin` (`409 conflict`)
 ### 9.5 `POST /api/admin/users/:id/password/reset`
 
 Resets a user's password, revokes all active sessions, and forces a password update upon next login.
-When called by a division `admin`, returns **404** if the target user belongs to a different division or has no division.
+When called by a division `admin`, returns **404** if the target user belongs to a different division, has no division, or has a role other than `'user'`.
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -1049,14 +1049,14 @@ Current period counters plus the recent ledger:
 
 ### 10.5 `GET /api/admin/usage`
 
-Retrieves system-wide usage metrics, token volumes, and estimated costs grouped by user, model, provider, division, or time period.
+Retrieves system-wide token usage statistics, token volumes, and estimated costs grouped by user, model, provider, division, or time period.
 
 **Query parameters:**
 | Parameter | Value type | Required | Description |
 |---|---|---|---|
 | `from` | string (ISO-8601 date / timestamp) | No | Start date/timestamp for usage report range. |
 | `to` | string (ISO-8601 date / timestamp) | No | End date/timestamp for usage report range. |
-| `groupBy` | string (`user` \| `model` \| `provider` \| `day` \| `month` \| `division`) | No | Dimension to aggregate usage metrics by. |
+| `groupBy` | string (`user` \| `model` \| `provider` \| `day` \| `month` \| `division`) | No | Dimension to aggregate usage statistics by. |
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
@@ -1066,6 +1066,27 @@ Retrieves system-wide usage metrics, token volumes, and estimated costs grouped 
       "estimatedCostUsd": 41.27,
       "usageSource": { "provider": 0.998, "estimated": 0.002 } } ] } }
 ```
+
+`key` always contains the grouping column (`userId`, `modelId`, `providerId`, `divisionId`, `day`,
+or `month`) plus resolved labels where they exist (`email`, `displayName`, `modelKey`, `provider`,
+`name`). Aggregates come from the `usage_daily` rollup, so they survive a conversation purge;
+today's rows may lag by up to one incremental rollup window (5 minutes).
+
+`usageSource` is the share of settled generations whose token counts came from the provider
+(`provider`) versus a local estimate (`estimated`); the two add up to `1`.
+
+### 10.6 `GET /api/admin/usage/export`
+
+The same aggregate as §10.5, as a downloadable file. Accepts the identical query parameters and the
+same `super_admin` requirement.
+
+- **Response:** `200`, `Content-Type: text/csv; charset=utf-8`,
+  `Content-Disposition: attachment; filename="usage-<groupBy>-<YYYY-MM-DD>.csv"`, `Cache-Control: no-store`.
+- **Body:** RFC 4180 CSV, `CRLF` line endings, header row first. Columns are the grouping columns in
+  alphabetical order, then `requests`, `failedRequests`, `inputTokens`, `outputTokens`,
+  `quotaTokens`, `estimatedCostUsd`, `usageSourceProvider`, `usageSourceEstimated`.
+- Numbers are unquoted; text cells are quoted only when they contain `,`, `"`, CR, or LF. A missing
+  `estimatedCostUsd` is an empty cell (never `0`, which would be a false cost).
 
 ---
 
@@ -1293,9 +1314,8 @@ Sanitized `error_events` (no provider bodies, keys, or stack traces) in `data` a
 |---|---|---|
 | `GET /healthz` | liveness (no dependencies) | internal |
 | `GET /readyz` | DB reachable, migrations current, storage writable | internal |
-| `GET /metrics` | Prometheus exposition | network-restricted |
 
-Provider health is **not** part of readiness.
+Provider health is **not** part of readiness. (The `/metrics` endpoint is removed in favor of Winston daily rotating JSON logs and database reporting tables).
 
 ---
 
@@ -1361,6 +1381,7 @@ Errors after a stream has started cannot change the HTTP status: they arrive as 
 
 | Scope | Default |
 |---|---|
+| Per IP — whole `/api` tree (abuse ceiling) | 600 req/min |
 | Per IP (unauthenticated + auth endpoints) | 60 req/min; login **10 req/min** |
 | Per user — general API | 300 req/min |
 | Per user — `POST …/messages` | 20/min (plus the concurrency limit) |

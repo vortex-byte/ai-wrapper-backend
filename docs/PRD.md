@@ -131,7 +131,7 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 | **Employee (user)** | Chat with a chosen model, attach documents/images, see history, see own remaining quota | ~95 % of users; mostly non-technical |
 | **Division administrator (admin)** | Manage user accounts within assigned division only (CRUD user, reset passwords, enable/disable) | Scoped strictly to assigned division (`division_id NOT NULL`); cannot access other divisions, models, providers, quotas, or platform settings |
 | **Super administrator (super_admin)** | System-wide control: provision divisions, set quotas, enable/disable models, configure providers, manage all users/admins, investigate errors/usage, review audit logs | 2–5 people; cannot read chat content (A-13) |
-| **Platform engineer** | Deploy, monitor, back up, rotate keys | Needs health checks, metrics, runbooks |
+| **Platform engineer** | Deploy, monitor, back up, rotate keys | Needs health checks, structured logs with stack traces, runbooks |
 
 ## 5. User Stories
 
@@ -152,7 +152,7 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 | US-13 | Super Admin | to see usage by user/model/provider/day/division | I can report and forecast | P0 |
 | US-14 | Super Admin | to see provider health and recent errors | I can diagnose problems quickly | P1 |
 | US-15 | Super Admin | to review who changed what across the platform | I can satisfy compliance | P0 |
-| US-16 | Platform engineer | traceable request IDs and metrics | I can debug production | P0 |
+| US-16 | Platform engineer | traceable request IDs and structured logs with stack traces | I can debug production | P0 |
 | US-17 | Employee | to toggle web search, web fetch, and cloud code/skills execution | I can access up-to-date facts and perform data calculations | P0 |
 | US-18 | Employee | to prompt the model to generate images and office documents (XLSX, DOCX, charts) | I can produce visual and tabular artifacts directly in chat | P0 |
 | US-19 | Division Admin | to create, list, view, and update user accounts within my assigned division | I can onboard and manage team members without waiting for super admins | P0 |
@@ -220,7 +220,7 @@ See §20. Two administrative roles:
 2. **Super Admin (`super_admin`):** System-wide administration: divisions, all users/admins, quota policies and adjustments, models, providers, provider health, usage reporting, system error explorer, audit logs, platform settings.
 
 ### 6.8 Operations
-- **FR-OPS-1 (P0)** Request IDs on every request/generation; structured logs; Prometheus metrics; health endpoints.
+- **FR-OPS-1 (P0)** Request IDs on every request/generation; structured Winston JSON logs with daily rotation and stack traces; health endpoints (/healthz, /readyz).
 - **FR-OPS-2 (P0)** Background cleanup of files, reservations, stale generations.
 
 ## 7. Non-Functional Requirements
@@ -300,7 +300,7 @@ Glue lives only in the **Orchestrator** (runs a generation), **Context Builder**
 3. **Single short transaction:** insert idempotency row → reserve quota → create user message + parts → create assistant placeholder message (`streaming`) → create generation (`pending`) → attach files → commit. Return `202 {message, assistantMessage, generation}`.
 4. Orchestrator picks up the generation in-process (`pending → generating`), calls the adapter with an `AbortSignal`, converts provider events to normalized events, appends to the ring buffer, checkpoints text to PostgreSQL.
 5. Client opens `GET /generations/:id/stream` (SSE), replays from `Last-Event-ID` if reconnecting.
-6. **Finalizer** (always runs, exactly once): persists final parts, sets message/generation terminal state, **settles or releases** the reservation, writes `usage_records`, emits the terminal SSE event, logs/metrics.
+6. **Finalizer** (always runs, exactly once): persists final parts, sets message/generation terminal state, **settles or releases** the reservation, writes `usage_records`, emits the terminal SSE event, structured logging.
 
 > **Decision D-1 — Create and stream are separate calls**
 > - *Why:* A POST that both creates and streams cannot be safely retried: the client may not know whether it was created.
@@ -444,7 +444,7 @@ Rules:
 - Non-streaming models (or job-style image/doc generation) still return `AsyncIterable` — they emit `started → part_* → usage → finished` in one burst. The orchestrator has one code path.
 - Adapters never persist anything and never touch storage; binary output arrives as `artifact_chunk` events and is stored by the **ArtifactSink**.
 - Provider-specific knobs (e.g., safety settings, reasoning effort, beta headers) live in `providers.config` / `models.config` JSON, validated by a Zod schema owned by the adapter.
-- **Tokenizer library per provider.** Adapter `openai` memakai `tiktoken` (WASM, offline); adapter `anthropic` memakai port lokal dari `dhamaniasad/claude-tokenizer`; adapter lain memakai tokenizer lokal/heuristik BPE miliknya. Setiap dependency tokenizer berada di dalam folder adapter (`src/providers/adapters/<name>/`) dan **wajib lazy-init** (lihat R19) karena inisialisasi encoding memakan puluhan MB dan puluhan milidetik pada cold start.
+- **Tokenizer library per provider.** The `openai` adapter uses `tiktoken` (WASM, offline); the `anthropic` adapter uses a local port of `dhamaniasad/claude-tokenizer`; other adapters use their own local tokenizer/BPE heuristic. Every tokenizer dependency resides inside the adapter folder (`src/providers/adapters/<name>/`) and **must be lazily initialized** (see R19) because encoding initialization consumes tens of megabytes and tens of milliseconds on cold start.
 
 ### 9.4 Provider registry & model registry (runtime, DB-driven)
 
@@ -584,21 +584,21 @@ with a system instruction that content inside is data, not instructions (§15.8)
 
 ```
 est_input     = adapter.estimateInputTokens(request).tokens × margin
-margin        = 1.00 (tokenizer lokal provider / exact count endpoint) | 1.10 (tokenizer pendekatan / teks approx) | 1.25 (bila ada images/PDF)   // calibrate with real data
+margin        = 1.00 (local provider tokenizer / exact count endpoint) | 1.10 (approximate tokenizer / approx text) | 1.25 (when images/PDFs present)   // calibrate with real data
 worst_output  = effective_max_output_tokens
 reserve_raw   = est_input + worst_output
 reserve       = ceil(reserve_raw × model.quota_weight)
 ```
 
-- **Tokenizer per provider (dipilih oleh adapter; tidak ada network call):**
+- **Tokenizer per provider (selected by adapter; no network calls):**
 
   | Provider | Tokenizer | Margin default |
   |---|---|---|
-  | `openai` (ChatGPT) | **`tiktoken`** (`@dqbd/tiktoken` / `js-tiktoken`, WASM, offline) | `1.00` — encoding lokal identik dengan provider; deviasi hanya dari overhead pesan (`<im_start>`/`<im_end>`, ~3–4 token/pesan) yang ditambahkan eksplisit oleh adapter |
-  | `anthropic` (Claude) | **Port dari [`dhamaniasad/claude-tokenizer`](https://github.com/dhamaniasad/claude-tokenizer)** ke TypeScript (BPE package di `src/providers/adapters/anthropic/tokenizer/`) | `1.10` — Claude tidak mempublikasikan encoding resmi; referensi ini adalah pendekatan terbaik yang tersedia |
-  | lainnya (mis. `gemini`) | **Tokenizer lokal / heuristik BPE** yang sudah dimiliki adapter, tanpa network | `1.10` teks murni; `1.25` bila ada gambar/PDF |
+  | `openai` (ChatGPT) | **`tiktoken`** (`@dqbd/tiktoken` / `js-tiktoken`, WASM, offline) | `1.00` — local encoding identical to provider; deviation arises only from message overhead (`<im_start>`/`<im_end>`, ~3–4 tokens/message) added explicitly by the adapter |
+  | `anthropic` (Claude) | **Port of [`dhamaniasad/claude-tokenizer`](https://github.com/dhamaniasad/claude-tokenizer)** to TypeScript (BPE package in `src/providers/adapters/anthropic/tokenizer/`) | `1.10` — Claude does not publish an official encoding library; this reference is the best available approximation |
+  | others (e.g. `gemini`) | **Local tokenizer / BPE heuristic** owned by the adapter, without network calls | `1.10` pure text; `1.25` when images/PDFs present |
 
-- Adapter boleh memakai endpoint count resmi provider **hanya bila `latency` diizinkan**; bila dipakai, `confidence: 'exact'` dan margin di tabel di atas dapat diturunkan ke `1.00`. Bila tidak dipakai, `confidence: 'approx'`.
+- An adapter may use the provider's official count endpoint **only when additional latency is acceptable**; if used, `confidence: 'exact'` applies and the margin in the table above may be reduced to `1.00`. If not used, `confidence: 'approx'`.
 - Image/PDF token costs are estimated from dimensions/pages using per-provider formulas inside the adapter (**calibrate against real usage reports during Phase 3; track `estimation_error_ratio` metric**).
 - `effective_max_output_tokens = min(request.max_output, policy.max_output_per_request, model.max_output_tokens)`, further clamped so `est_input + output ≤ remaining_quota` when remaining quota is lower than a full reserve and at least `MIN_USEFUL_OUTPUT` (default 256) remains; otherwise reject with `quota_exceeded`. This lets users spend their last tokens without overshoot.
 - Rejections before reservation: `est_input > policy.max_input_tokens_per_request` → `context_too_large`.
@@ -1067,7 +1067,7 @@ Zod schemas on every route (params, query, body, headers); reject unknown fields
 - Provider API keys are supplied through the **process environment / `.env` secret file** (A-16). They are never stored in the database, code, or images: `providers.secret_ref` holds the **environment variable name** (e.g. `OPENAI_API_KEY`), resolved at boot. `GET /admin/providers/:id` exposes the `secretRef` name and health status, never the key.
 - **Rotation** is an operator action: update the env/secret file and restart the process. A rolling restart (standby node, §24.6) avoids downtime; this satisfies NFR-SEC-2 (no code rebuild or redeploy). Keys are separated per environment.
 - `.env`/secret files are excluded from version control, mounted `0600`, owned by the app user, and **not** included in database backups.
-- Pino log redaction paths for `authorization`, `apiKey`, `x-api-key`, `password`, cookies; CI secret scanning; provider-console spend caps as a backstop.
+- Winston log redaction paths for `authorization`, `apiKey`, `x-api-key`, `password`, cookies; CI secret scanning; provider-console spend caps as a backstop.
 - **Egress allow-list** from the API host to provider domains only.
 - Browser never contacts providers; no provider URLs/IDs are exposed except display names.
 
@@ -1115,7 +1115,7 @@ Zod schemas on every route (params, query, body, headers); reject unknown fields
   "retryable": false, "details": { "resetAt": "2026-11-01T00:00:00Z", "remainingTokens": 0 } }
 ```
 `trace` is present **only when `NODE_ENV=development`** (sanitized), never in staging/production.
-- **Envelope exemptions** (raw bodies): `GET /api/files/:id/content`, SSE frames (§14.3), `/healthz`, `/readyz`, `/metrics`.
+- **Envelope exemptions** (raw bodies): `GET /api/files/:id/content`, SSE frames (§14.3), `/healthz`, `/readyz`.
 - **No provider-specific fields** appear in any contract; models are described by normalized capabilities.
 
 ### 16.2 Endpoint overview
@@ -1161,7 +1161,7 @@ Zod schemas on every route (params, query, body, headers); reject unknown fields
 | | `GET /admin/errors?from&to&category` | Sanitized system errors | super_admin |
 | | `GET /admin/audit-logs?…` | Audit log search | super_admin |
 | **Admin – settings** | `GET/PUT /admin/system-settings/:key` | Platform system settings | super_admin |
-| **Ops** | `GET /healthz`, `GET /readyz`, `GET /metrics` | Liveness, readiness, Prometheus (network-restricted) | internal |
+| **Ops** | `GET /healthz`, `GET /readyz` | Liveness, readiness | internal |
 
 ### 16.3 Models
 
@@ -1656,7 +1656,7 @@ CREATE TABLE system_settings (
 
 ### 18.1 Normalized error categories
 
-All errors surface as the envelope in §16.1. `AppErrorCategory` is the single vocabulary shared by API, SSE events, logs, and metrics.
+All errors surface as the envelope in §16.1. `AppErrorCategory` is the single vocabulary shared by API, SSE events, `error_events`, and logs.
 
 | Code | HTTP | Retryable (client) | Meaning / user-facing guidance |
 |---|---|---|---|
@@ -1716,7 +1716,7 @@ Errors after the stream starts cannot change the HTTP status; they are delivered
 | API request (non-streaming routes) | 30 s | `503/504`, logged |
 | Upload request | 120 s | abort, cleanup temp |
 | Provider connect | 10 s | retryable `provider_unavailable` |
-| Tokenizer cold init + estimation (first request in a process) | 250 ms (setelah warm: 20 ms untuk 200 KB teks) | local failure, non-retryable `internal_error` (tidak dikirim ke client sebagai provider error) |
+| Tokenizer cold init + estimation (first request in a process) | 250 ms (once warm: 20 ms for 200 KB text) | local failure, non-retryable `internal_error` (not sent to client as a provider error) |
 | Time to first provider event | 45 s (120 s for reasoning-heavy/doc generation) | retryable (pre-output) |
 | Idle gap between provider events | 60 s | `generation_timeout`, partial kept |
 | Max generation duration | 300 s (180 s typical text; up to 900 s for job-style models) | `generation_timeout` |
@@ -1749,7 +1749,7 @@ GenerationHandle.abortController          (owned by runner)
 ```
 Abort sources and reasons: `user_cancel`, `detached` (grace expired), `timeout`, `shutdown`, `admin_disable_model` *(P1: optionally cancel in-flight on kill-switch)*.
 **The inbound HTTP request's abort signal is deliberately *not* wired to the provider call** (D-2). It only removes the SSE subscriber.
-After abort, the finalizer always runs: persist partial parts → set terminal state → settle/release (§11.5) → emit terminal event (if any subscriber) → metrics.
+After abort, the finalizer always runs: persist partial parts → set terminal state → settle/release (§11.5) → emit terminal event (if any subscriber) → structured log.
 
 ### 19.5 Client disconnect (summary)
 Subscriber removed → detach timer (60 s) → continue or cancel. Reconnect within grace restores the stream seamlessly (§14.4). Provider responses arriving after a disconnect are processed normally and persisted.
@@ -1799,48 +1799,50 @@ The platform implements a **two-tier administrative model**:
 ## 21. Observability
 
 ### 21.1 Request identity
-Each inbound request gets `requestId` (UUID). Each generation inherits it and also has `generationId`. IDs propagate through logs, spans, SSE events, `error_events`, and (where the provider supports metadata) as an opaque tag. Provider request IDs are stored on `generations.provider_request_id` for support tickets.
+Each inbound request gets `requestId` (UUID). Each generation inherits it and also has `generationId`. IDs propagate through Winston logs, SSE events, `error_events`, and (where the provider supports metadata) as an opaque tag. Provider request IDs are stored on `generations.provider_request_id` for support tickets.
 
-### 21.2 Structured logs (JSON via pino)
-Required fields on generation lifecycle logs: `ts, level, requestId, userId, conversationId, messageId, generationId, provider, model, status, startedAt, durationMs, ttftMs, inputTokens, outputTokens, quotaTokens, usageSource, errorCategory, attempt`.
-- **No message text, file contents, prompts, or provider bodies** by default (`LOG_CONTENT=false`); user emails are logged as `userId` only.
-- Redaction list enforced centrally; CI test greps log fixtures for key patterns.
-- Retention 30 days (A-7), shipped to central log store.
+### 21.2 Structured logs (JSON via Winston with daily rotation and stack trace)
+The platform uses conventional **Winston structured JSON logging** with daily file rotation (`winston-daily-rotate-file`) and automated retention:
+- **Output files:**
+  - Combined application log: `/var/log/ai-chat/app-%DATE%.log` (info, warn, error).
+  - Dedicated error log: `/var/log/ai-chat/error-%DATE%.log` (error-level only).
+  - Console transport active for development and systemd journal inspection (`journalctl -u ai-chat@blue -f`).
+- **Rotation & retention:**
+  - Daily rotation (`datePattern: 'YYYY-MM-DD'`), max chunk size before rotation (`maxSize: '20m'`), file retention 14–30 days (`maxFiles: '14d'` or `'30d'`), and automatic gzip compression (`zippedArchive: true`).
+- **Required fields on lifecycle logs:** `ts, level, requestId, userId, conversationId, messageId, generationId, provider, model, status, startedAt, durationMs, ttftMs, inputTokens, outputTokens, quotaTokens, usageSource, errorCategory, attempt`.
+- **Error stack trace serialization:**
+  - For all logged errors, Winston formats and includes full error stack traces (`err: { name, message, stack, code, status, details }`) directly in the JSON output.
+  - Enables instant, actionable root-cause debugging directly from log files without requiring interactive debuggers or separate telemetry agents.
+- **Strict central content redaction:**
+  - **No message text, file contents, prompts, or provider bodies** by default (`LOG_CONTENT=false`).
+  - No passwords, session tokens, or API keys may appear in log fields or serialized error stack traces.
+  - User emails are logged as `userId` only.
+  - Redaction list enforced centrally; CI tests scan log fixtures for leak patterns.
 
-### 21.3 Metrics (Prometheus; low-cardinality labels — never `userId`)
+### 21.3 Metrics policy (No Prometheus / No `/metrics` endpoint)
+In accordance with operational simplification decisions, **Prometheus metric exposition (`/metrics`), metric registries, and metric scrapers are excluded from the platform**.
 
-| Metric | Type | Labels |
-|---|---|---|
-| `http_requests_total`, `http_request_duration_seconds` | counter/histogram | route, method, status |
-| `generations_started_total`, `generations_finished_total` | counter | provider, model, outcome, error_category |
-| `generation_duration_seconds`, `generation_ttft_seconds` | histogram (p50/p95/p99) | provider, model |
-| `generations_active` | gauge | provider |
-| `tokens_total` | counter | provider, model, direction(in/out), source |
-| `quota_reservations_active`, `quota_rejections_total` | gauge/counter | reason |
-| `quota_overshoot_ratio` | histogram | model |
-| `quota_reconciliation_mismatch_total` | counter | — |
-| `provider_errors_total` | counter | provider, category |
-| `provider_retry_total`, `provider_circuit_state` | counter/gauge | provider |
-| `file_uploads_total`, `file_processing_failures_total` | counter | kind, reason |
-| `storage_bytes_used`, `storage_free_bytes`, `cleanup_deleted_total` | gauge/counter | provider |
-| `sse_connections_active`, `sse_reconnects_total` | gauge/counter | — |
-| `job_duration_seconds`, `job_failures_total`, `job_queue_depth` | histogram/counter/gauge | type |
-| `db_pool_in_use`, `db_query_duration_seconds` | gauge/histogram | query_group |
-| `event_loop_lag_seconds`, process CPU/memory | gauge | — |
+Operational visibility is fulfilled through:
+1. **Conventional Winston daily rotating JSON logs with stack traces.**
+2. **PostgreSQL reporting tables (`usage_daily`, `usage_events`, `error_events`):** High-level token counts, request totals, latencies, cost estimates, and error categories are persisted transactionally and queried via super admin APIs (`GET /api/admin/usage`, `GET /api/admin/errors`).
+3. **Log-based alerting & log tailing:** SREs and platform engineers monitor application health by inspecting `error-%DATE%.log` and running log analysis on rotating log files.
 
-### 21.4 Tracing
-OpenTelemetry spans: `http.request → generation.run → context.build → quota.reserve → provider.execute (per attempt) → artifact.store → generation.finalize`. Export via OTLP; sample 100 % of errors, 10 % of successes.
+### 21.4 Tracing & correlation
+Request and generation context (`requestId`, `generationId`) is injected into every Winston log entry, SSE frame, and `error_events` record, providing end-to-end trace correlation across HTTP middleware, orchestrator execution, and background worker jobs without the overhead of external OTLP collectors.
 
-### 21.5 Alerts (initial)
-- Generation failure rate > 10 % over 10 min (per provider) · provider circuit open > 5 min.
-- Provider auth errors (401/403) > 0 · p95 TTFT regression > 2× baseline.
-- Reservations active past expiry · ledger reconciliation mismatch > 0 · overshoot p95 > 10 %.
-- Disk free < 20 % · cleanup job failing · job queue depth growing · DB pool saturation > 80 %.
-- Readiness flapping · error budget burn (availability SLO).
+### 21.5 Alerts (log-based & health probes)
+Alert rules are driven by log monitoring on `error-%DATE%.log`, health probes, and database job reconciliation:
+- Generation failure rate > 10 % over 10 min (per provider) or provider circuit trip.
+- Provider authentication errors (401/403) > 0.
+- Reservations active past expiry or quota ledger reconciliation mismatch > 0.
+- Storage disk free < 20 % or attachment cleanup job failing.
+- Database pool saturation > 80 %.
+- Readiness flapping on `/readyz`.
 
 ### 21.6 Health endpoints
-- `/healthz` — process alive (no dependencies).
-- `/readyz` — DB reachable and migrations current, storage writable with free space, Redis optional (degraded, not failing). **Provider health is *not* part of readiness** (a provider outage must not take the API out of rotation); it is exposed in admin health and metrics.
+- `/healthz` — process alive (liveness probe, no dependencies).
+- `/readyz` — DB reachable and migrations current, storage writable with free space (readiness probe). **Provider health is *not* part of readiness** (a provider outage must not take the API out of rotation); it is exposed in admin health APIs and structured logs.
+- The `/metrics` endpoint is removed.
 
 ## 22. Background Processing
 
@@ -1864,7 +1866,7 @@ OpenTelemetry spans: `http.request → generation.run → context.build → quot
 ### 22.2 Job runner (no external queue in MVP)
 - `jobs` table with `SELECT … FOR UPDATE SKIP LOCKED` polling (1 s when busy, 5 s idle), `attempts`, exponential retry, `dead` state after `max_attempts`, `dedupe_key` for idempotent scheduling.
 - Runs in the same image with `ROLE=worker|all`. Scheduler (cron-like) runs under `pg_try_advisory_lock` so only one instance schedules.
-- Handlers are idempotent; each logs duration and failures to metrics.
+- Handlers are idempotent; each logs duration and failures in structured logs.
 - **Heavy work isolation:** extraction handlers fork a child process (timeout, memory limit) so a malicious file cannot stall the event loop.
 - **Future queue:** `JobQueue { enqueue(type, payload, opts); registerHandler(type, fn) }` hides the implementation → swap to pg-boss/BullMQ/SQS without touching handlers. Introduce when: > 1 worker node needed, jobs > ~50/s, or cross-service workflows appear.
 
@@ -1970,7 +1972,7 @@ The file volume holds **temporary** data and is **not backed up** by design (D-7
 1. Readiness → fail (stop receiving new traffic); stop accepting new generations (`503 service_busy`, `Retry-After`).
 2. **Drain** active generations up to `SHUTDOWN_DRAIN_SECONDS` (default 120). SSE clients stay connected.
 3. At expiry: abort remaining with reason `shutdown`; finalizer persists partial text, marks `failed(interrupted)`, settles/releases; terminal SSE event emitted.
-4. Flush logs/metrics, close DB pool, exit. Orchestrator's stop-grace must be > drain (e.g., 150 s).
+4. Flush logs, close DB pool, exit. Orchestrator's stop-grace must be > drain (e.g., 150 s).
 Rolling deploys therefore normally interrupt nothing; worst case the user sees "Interrupted — Retry".
 
 ### 24.7 Rollback
@@ -2022,10 +2024,10 @@ dev/staging/prod; CI: lint (incl. provider-import rule), typecheck, unit/integra
 - [ ] Per-IP, per-user, upload, and message limits active; headers returned
 
 **Monitoring, logging, error handling**
-- [ ] Dashboards: traffic, latency (p50/95/99), TTFT, errors by category, tokens, active generations, quota rejections
-- [ ] Alerts wired to on-call with runbooks (provider outage, disk, reconciliation, reaper)
-- [ ] Request ID traceable from API response → logs → provider request ID
-- [ ] Error envelope consistent; no stack traces in responses (outside `NODE_ENV=development`)
+- [ ] Winston daily rotating JSON logs configured (`app-%DATE%.log`, `error-%DATE%.log`) with automatic compression and retention; error stack traces captured in structured JSON format
+- [ ] Alerts wired to on-call with runbooks (error log frequency, provider outage, disk space, reconciliation mismatch, reaper)
+- [ ] Request ID traceable from API response → Winston logs → provider request ID
+- [ ] Error envelope consistent; full stack traces captured in error logs while omitted from HTTP responses (outside `NODE_ENV=development`)
 
 **Deployment & operations**
 - [ ] Health/readiness endpoints verified (provider outage does not fail readiness)
@@ -2041,7 +2043,7 @@ dev/staging/prod; CI: lint (incl. provider-import rule), typecheck, unit/integra
 ## 26. MVP vs Future Scope
 
 ### 26.1 Must Have for MVP (P0)
-Authentication (email/password + PostgreSQL sessions, lockout, super admin & division-scoped admin provisioning & password reset) · user management (roles: user, admin, super_admin; divisions, enable/disable, last-super-admin protection) · model registry + selection · **one model per conversation** (DB-enforced) · multi-provider abstraction (≥ 2 adapters live, third proves the abstraction) · text chat · SSE streaming with cancel/reconnect · conversation persistence · token quota (reserve/settle/release, ledger, monthly periods) · usage tracking & super admin usage views · image upload · document upload (PDF, DOCX, XLSX, CSV, TXT, MD) · multimodal message-part model · multimodal **response persistence** (text, images, and binary generated files) · **toggleable built-in provider tools** (web search, web fetch, provider cloud code execution, built-in skills) · **image and document generation** (ArtifactSink download and persistence) · temporary local storage with TTL cleanup · idempotent send · retry of failed generations · basic security (two-tier administrative RBAC, rate limiting, validation, headers, audit) · basic observability (logs, metrics, health) · production runbook basics.
+Authentication (email/password + PostgreSQL sessions, lockout, super admin & division-scoped admin provisioning & password reset) · user management (roles: user, admin, super_admin; divisions, enable/disable, last-super-admin protection) · model registry + selection · **one model per conversation** (DB-enforced) · multi-provider abstraction (≥ 2 adapters live, third proves the abstraction) · text chat · SSE streaming with cancel/reconnect · conversation persistence · token quota (reserve/settle/release, ledger, monthly periods) · usage tracking & super admin usage views · image upload · document upload (PDF, DOCX, XLSX, CSV, TXT, MD) · multimodal message-part model · multimodal **response persistence** (text, images, and binary generated files) · **toggleable built-in provider tools** (web search, web fetch, provider cloud code execution, built-in skills) · **image and document generation** (ArtifactSink download and persistence) · temporary local storage with TTL cleanup · idempotent send · retry of failed generations · basic security (two-tier administrative RBAC, rate limiting, validation, headers, audit) · basic observability (structured Winston JSON logs with daily rotation, stack traces, health) · production runbook basics.
 
 ### 26.2 Should have (P1, cut first)
 Model visibility per division · circuit breaker · provider health page · error explorer · CSV exports · RLS hardening · AV scanning · editable settings UI · provider-specific token caps.
@@ -2069,7 +2071,7 @@ Model visibility per division · circuit breaker · provider health page · erro
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| R1 | Token estimation inaccurate (esp. images/PDFs) → over-reservation (user frustration) or overshoot | High | Medium | Tokenizer per provider (`tiktoken` untuk OpenAI, port `claude-tokenizer` untuk Anthropic — §11.2); local tokenizer/BPE + margin untuk provider lain; calibrated margins; output clamping; actual-usage settlement; `estimation_error_ratio` metric; revisit margins monthly |
+| R1 | Token estimation inaccurate (esp. images/PDFs) → over-reservation (user frustration) or overshoot | High | Medium | Tokenizer per provider (`tiktoken` for OpenAI, `claude-tokenizer` port for Anthropic — §11.2); local tokenizer/BPE + margin for other providers; calibrated margins; output clamping; actual-usage settlement; `estimation_error_ratio` metric; revisit margins monthly |
 | R2 | Provider outage/rate limits | High | High | Timeouts, bounded retries, circuit breaker, concurrency caps, clear UX, status page; no silent fallback (by requirement) |
 | R3 | Provider usage not reported on abort/failure | Medium | Medium | Estimated settlement policy; document as known inaccuracy; measure delta |
 | R4 | Single-node in-process generation ownership limits scale/HA | Medium | Medium | A-4 explicit; fast recovery via reaper; Redis relay path designed; load tested |
@@ -2084,11 +2086,11 @@ Model visibility per division · circuit breaker · provider health page · erro
 | R13 | Cost spikes from big contexts | Medium | Medium | Max input/output limits, quota weights, provider spend caps, usage alerts |
 | R14 | Admin abuse/insider risk | Low | High | Two-tier administrative RBAC, division admin isolation, no content access (A-13), immutable audit, last-super-admin protection |
 | R15 | Scope creep toward agents/RAG | Medium | Medium | Explicit non-goals, guardrail in §26.3 |
-| R16 | Provider API key leak (`.env`/secret file, logs, repo, or a compromised host) | Medium | High | Keys only in env/secret files (`0600`, not in VCS/images/DB backups), Pino redaction + CI secret scanning, egress allow-list, provider-console spend caps, documented rotate-and-restart runbook, separate keys per environment |
+| R16 | Provider API key leak (`.env`/secret file, logs, repo, or a compromised host) | Medium | High | Keys only in env/secret files (`0600`, not in VCS/images/DB backups), Winston redaction + CI secret scanning, egress allow-list, provider-console spend caps, documented rotate-and-restart runbook, separate keys per environment |
 | R17 | Password attacks (credential stuffing, spraying) and account takeover; no MFA | Medium | High | argon2id hashing, per-account lockout + per-IP login limit, generic errors (no enumeration), full audit of login failures, admin reset revokes sessions; MFA out of MVP (Q-14, closed v1.2) |
 | R18 | Provider-key rotation requires a process restart (A-16) | Low | Medium | Rolling restart with the standby node (§24.6) so rotation causes no downtime; spend caps limit exposure during the window |
-| R19 | Tokenizer initialization cost: `tiktoken` (WASM) memuat encoding puluhan MB dan puluhan ms saat cold start; port Claude tokenizer memuat tabel BPE miliknya; risiko memori/RSS naik dan latency request pertama pada satu node | Medium | Low | **Lazy `init()` per adapter** (memoized `Promise`, bukan di-import saat boot); satu instance encoding di-cache per proses (encoding berbeda di-key by nama encoding); WASM dijalankan di worker thread bila terbukti memblokir event loop saat load ~200 KB konteks; diukur sebagai bagian dari load test Phase 5 |
-| R20 | Akurasi tokenizer Claude bersifat pendekatan (tidak ada encoding resmi dari Anthropic) → salah estimasi input bisa menaikkan overshoot atau over-reservation | Medium | Medium | Margin `1.10` sebagai buffer; verifikasi terhadap **usage aktual provider** (perbandingan `estimation_error_ratio`) per model, dengan override margin per model via `models.config` bila deviasi konsisten; settlement selalu memakai usage aktual sehingga risiko hanya pada penguncian kuota sementara |
+| R19 | Tokenizer initialization cost: `tiktoken` (WASM) loads tens of MBs of encodings and takes tens of ms on cold start; Claude tokenizer port loads its BPE table; risk of memory/RSS spikes and first-request latency on a node | Medium | Low | **Lazy `init()` per adapter** (memoized `Promise`, not imported at boot); a single encoding instance is cached per process (keyed by encoding name); WASM is offloaded to a worker thread if observed blocking the event loop on large (~200 KB) contexts; measured as part of Phase 5 load testing |
+| R20 | Claude tokenizer accuracy is approximate (no official encoding published by Anthropic) → input misestimation may increase overshoot or over-reservation | Medium | Medium | `1.10` margin buffer; verification against **actual provider usage** (recorded in structured logs) per model, with per-model margin overrides via `models.config` if deviation is consistent; settlement always uses actual usage so the risk is limited to temporary quota locks |
 
 ## 28. Open Questions
 
@@ -2115,12 +2117,12 @@ Model visibility per division · circuit breaker · provider health page · erro
 
 | Phase | Duration (est., 3–4 engineers) | Deliverables | Exit criteria |
 |---|---|---|---|
-| **0 — Foundations** | 1–1.5 wks | Repo, CI, config validation, DB migrations baseline (including `users_admin_division_check`), Hono skeleton, request IDs, error envelope, logging/metrics, **email/password auth (argon2id, lockout, PostgreSQL sessions), bootstrap-admin CLI (super_admin), two-tier user administration (super admin platform-wide, division-scoped admin with cross-division 404 isolation), password reset, last-super-admin protection**, RBAC, audit writer, FakeProvider | Auth + RBAC tests green; deploy to staging |
+| **0 — Foundations** | 1–1.5 wks | Repo, CI, config validation, DB migrations baseline (including `users_admin_division_check`), Hono skeleton, request IDs, error envelope, Winston JSON logging, **email/password auth (argon2id, lockout, PostgreSQL sessions), bootstrap-admin CLI (super_admin), two-tier user administration (super admin platform-wide, division-scoped admin with cross-division 404 isolation), password reset, last-super-admin protection**, RBAC, audit writer, FakeProvider | Auth + RBAC tests green; deploy to staging |
 | **1 — Registry & conversations** | 1.5 wks | Providers/models registry + super admin APIs, conversations/messages/parts schema, model-lock trigger, list/load APIs, context builder (text), system settings | Create conversation with model; history loads; model immutability enforced |
 | **2 — Generation core** | 2 wks | Orchestrator/runner, adapter interface, **2 adapters** (OpenAI + Anthropic), SSE stream, checkpointing, finalizer, cancel, reaper, idempotent send, retry/timeouts, error translation, contract suite | Streaming works E2E; kill -9 recovery; contract tests green |
 | **3 — Quota & usage** | 2 wks | Policies, periods, reservation/settlement/release, ledger, reaper, estimation + per-provider tokenizer (`tiktoken` / `claude-tokenizer` port) + margins, usage records/rollups, `/me/quota`, super admin quota APIs, reconciliation | Concurrency/property tests green; 14-day staging reconciliation clean (starts here, finishes in Phase 5) |
 | **4 — Files & multimodal** | 2 wks | StorageProvider + Local impl, upload pipeline + hardening, extraction jobs, multimodal context/adapters, download endpoint, cleanup jobs, generated-artifact path (ArtifactSink tested with FakeProvider), **third adapter (Gemini)** | Upload/attach/answer flows work for MVP types; hardening tests green; third adapter needed zero core changes |
-| **5 — Admin, observability, hardening** | 1.5–2 wks | Super admin usage/health/errors/audit APIs, division admin & super admin permission verification, dashboards + alerts, rate limiting, security headers/CORS, pen-test fixes, load/soak tests, runbooks, backup/restore drill | Production readiness checklist (§25) fully checked |
+| **5 — Admin, observability, hardening** | 1.5–2 wks | Super admin usage/health/errors/audit APIs, division admin & super admin permission verification, Winston daily rotation & stack trace logging, log-based alerting, rate limiting, security headers/CORS, pen-test fixes, load/soak tests, runbooks, backup/restore drill | Production readiness checklist (§25) fully checked |
 | **6 — Pilot & launch** | 2 wks | Pilot with one division, calibrate estimation margins & tokenizer per provider, tune limits, fix issues, go-live | SLOs met 2 weeks; no P1 defects |
 | **Post-MVP** | — | P1 items, S3 migration, multi-node streaming, then P2 features (§26.3) | — |
 

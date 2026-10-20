@@ -1,3 +1,8 @@
+/**
+ * Every durable effect of a turn — idempotency claim, sequences, messages, generation row and
+ * quota reservation — commits as one transaction; the provider call starts only after that commit.
+ */
+
 import { createHash } from 'node:crypto';
 import type { Clock, IdGenerator } from '@/clock/index.ts';
 import type { Config } from '@/config/index.ts';
@@ -12,14 +17,27 @@ import type { NormalizedPart } from '@/providers/domain/pal.ts';
 import type { GenerationRepository, GenerationRecord } from '../ports/generation-repository.ts';
 import type { QuotaPort } from '../ports/quota-port.ts';
 import type { GenerationEnqueuer, EnqueueGenerationInput } from '../ports/generation-enqueuer.ts';
+import type { AttachmentService } from '@/attachments/application/attachment-service.ts';
+import type { AttachmentRepository } from '@/attachments/ports/attachment-repository.ts';
+import type { Attachment, ResolvedAttachmentPart } from '@/attachments/domain/attachment.ts';
+import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
 
 /**
- * Transactional, idempotent send service.
- *
- * All durable effects — the idempotency claim, sequence allocation, user message and parts,
- * assistant placeholder, generation record, and quota reservation — commit together in one transaction.
- * The provider call is handed to the orchestrator only after this transaction commits.
+ * Translates attachment-domain parts into PAL parts. Glue lives in the use case, not in
+ * `attachments/`, which must not know provider vocabulary.
  */
+function toPalParts(parts: readonly ResolvedAttachmentPart[]): NormalizedPart[] {
+  return parts.map((part) =>
+    part.type === 'image'
+      ? { type: 'image', file: part.file }
+      : {
+          type: 'document',
+          file: part.file,
+          ...(part.extractedText !== undefined ? { extractedText: part.extractedText } : {}),
+          preferNative: part.preferNative,
+        },
+  );
+}
 
 export interface SendMessageDeps {
   readonly conversations: ConversationRepository;
@@ -30,12 +48,18 @@ export interface SendMessageDeps {
   readonly idGen: IdGenerator;
   readonly config: Config;
   readonly orchestrator?: GenerationEnqueuer | undefined;
+  readonly attachments?: AttachmentService | undefined;
+  readonly attachmentRepo?: AttachmentRepository | undefined;
 }
 
-/** One content block of the new user turn, as it arrives from the wire. */
 export type SendPartInput =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'file'; readonly fileId: string };
+
+export interface GenerationOptions {
+  readonly maxOutputTokens?: number | undefined;
+  readonly tools?: { readonly imageGeneration?: boolean | undefined } | undefined;
+}
 
 export interface SendMessageInput {
   readonly userId: string;
@@ -43,17 +67,17 @@ export interface SendMessageInput {
   readonly idempotencyKey: string;
   readonly requestId: string;
   readonly parts: readonly SendPartInput[];
-  readonly options?: { readonly maxOutputTokens?: number | undefined } | undefined;
+  readonly options?: GenerationOptions | undefined;
 }
 
-/**
- * The wire payload representation stored for idempotent replay.
- */
 export interface SendMessagePayload {
   readonly userMessage: WireMessage;
   readonly assistantMessage: WireMessage;
   readonly generation: { readonly id: string; readonly status: string; readonly streamUrl: string };
-  readonly quota: { readonly reservedTokens: number; readonly remainingTokens: number | null } | null;
+  readonly quota: {
+    readonly reservedTokens: number;
+    readonly remainingTokens: number | null;
+  } | null;
 }
 
 interface WireMessage {
@@ -73,7 +97,7 @@ export interface RetryMessageInput {
   readonly userMessageId: string;
   readonly idempotencyKey: string;
   readonly requestId: string;
-  readonly options?: { readonly maxOutputTokens?: number | undefined } | undefined;
+  readonly options?: GenerationOptions | undefined;
 }
 
 export interface SendOutcome {
@@ -127,14 +151,41 @@ export function createSendService(deps: SendMessageDeps): SendService {
       }
       const { model, provider, runtime } = resolved;
 
-      for (const part of input.parts) {
-        if (part.type === 'file') {
+      const fileParts = input.parts.filter(
+        (part): part is { type: 'file'; fileId: string } => part.type === 'file',
+      );
+      if (fileParts.length > 0 && deps.attachments === undefined) {
+        throw new AppError('unsupported_for_model', 'File attachments are not supported yet.');
+      }
+
+      const wantsImageOutput = input.options?.tools?.imageGeneration === true;
+      if (wantsImageOutput && !model.capabilities.imageGeneration) {
+        throw new AppError('unsupported_for_model', 'The selected model cannot generate images.');
+      }
+
+      let resolvedAttachmentParts: NormalizedPart[] = [];
+      let resolvedAttachments: Attachment[] = [];
+      const fileIds = fileParts.map((p) => p.fileId);
+
+      if (fileIds.length > 0 && deps.attachments !== undefined) {
+        // Pinned to this conversation and to an unbound upload: a file id belonging to another
+        // conversation (or already consumed by another message) is refused, never re-bound.
+        const resolved = await deps.attachments.resolveParts(fileIds, input.userId, {
+          conversationId: input.conversationId,
+          requireUnbound: true,
+        });
+        resolvedAttachmentParts = toPalParts(resolved.parts);
+        resolvedAttachments = resolved.attachments;
+
+        const hasImages = resolvedAttachments.some((a) => a.kind === 'image');
+        if (hasImages && !model.capabilities.vision) {
           throw new AppError(
             'unsupported_for_model',
-            'File attachments are not supported yet.',
+            'The selected model does not support image attachments.',
           );
         }
       }
+
       const textParts = input.parts.filter(
         (part): part is { type: 'text'; text: string } => part.type === 'text',
       );
@@ -147,10 +198,13 @@ export function createSendService(deps: SendMessageDeps): SendService {
       }
 
       const requestHash = canonicalRequestHash(input.conversationId, input.parts, input.options);
-      const newParts: NormalizedPart[] = textParts.map((part) => ({
-        type: 'text',
-        text: part.text,
-      }));
+      const newParts: NormalizedPart[] = [
+        ...textParts.map((part) => ({
+          type: 'text' as const,
+          text: part.text,
+        })),
+        ...resolvedAttachmentParts,
+      ];
 
       if (deps.orchestrator?.isDraining) {
         throw new AppError('service_busy', 'Server is shutting down.', {
@@ -169,7 +223,6 @@ export function createSendService(deps: SendMessageDeps): SendService {
       let enqueuePayload: EnqueueGenerationInput | null = null;
 
       const outcome = await withTransaction(async (tx) => {
-        // Idempotency claim. A replay returns the stored response and writes nothing else.
         const claim = await deps.generations.claimIdempotencyKey(
           {
             userId: input.userId,
@@ -196,7 +249,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           return { replayed: true, payload: claim.stored.responseBody as SendMessagePayload };
         }
 
-        // Build context inside transaction for atomic budgeting.
+        // Inside the transaction so history and budgeting read one consistent snapshot.
         const history = await deps.conversations.listMessagesWithParts(
           { conversationId: conversation.id, limit: 200, before: null },
           tx,
@@ -217,9 +270,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
           history: history.items,
           maxOutputTokensOverride: maxOutputTokens,
           userIdHash,
+          ...(wantsImageOutput ? { imageGeneration: true } : {}),
         });
 
-        // Allocate sequence numbers for user and assistant messages.
         const seqs = await deps.conversations.allocateSeqPair(conversation.id, tx);
         if (seqs === null) {
           throw new AppError('not_found', 'Conversation not found.');
@@ -238,23 +291,45 @@ export function createSendService(deps: SendMessageDeps): SendService {
           createdAt: now,
           completedAt: now,
         };
-        const userParts: MessagePart[] = textParts.map((part, index) => ({
-          id: deps.idGen.uuidv7(),
-          messageId: userMessage.id,
-          position: index,
-          type: 'text',
-          status: 'complete',
-          textContent: part.text,
-          data: {},
-          fileId: null,
-          createdAt: now,
-          updatedAt: now,
-        }));
+        const userParts: MessagePart[] = [];
+        let position = 0;
+        for (const part of input.parts) {
+          if (part.type === 'text') {
+            userParts.push({
+              id: deps.idGen.uuidv7(),
+              messageId: userMessage.id,
+              position: position++,
+              type: 'text',
+              status: 'complete',
+              textContent: part.text,
+              data: {},
+              fileId: null,
+              createdAt: now,
+              updatedAt: now,
+            });
+          } else {
+            const att = resolvedAttachments.find((a) => a.id === part.fileId);
+            userParts.push({
+              id: deps.idGen.uuidv7(),
+              messageId: userMessage.id,
+              position: position++,
+              type: att?.kind === 'image' ? 'image' : 'document',
+              status: 'complete',
+              textContent: null,
+              data: att ? { name: att.displayName, mimeType: att.detectedMime } : {},
+              fileId: part.fileId,
+              createdAt: now,
+              updatedAt: now,
+            });
+          }
+        }
 
         await deps.conversations.insertMessage(userMessage, tx);
         await deps.conversations.insertParts(userParts, tx);
+        if (fileIds.length > 0 && deps.attachmentRepo !== undefined) {
+          await deps.attachmentRepo.attachToMessage(fileIds, userMessage.id, tx);
+        }
 
-        // Assistant streaming placeholder.
         const assistantMessage: Message = {
           id: deps.idGen.uuidv7(),
           conversationId: conversation.id,
@@ -269,7 +344,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
         };
         await deps.conversations.insertMessage(assistantMessage, tx);
 
-        // Insert generation row before quota reservation.
+        // The reservation references the generation row, so it must exist first.
         let generation: GenerationRecord;
         try {
           generation = await deps.generations.insert(
@@ -284,7 +359,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
               estInputTokens: built.estimatedTokens,
               maxOutputTokens,
               modelLock: { modelId: model.id, providerId: provider.id, configVersion: null },
-              options: input.options ?? {},
+              options: toStoredOptions(input.options),
               contextInfo: {
                 truncated: built.truncation.truncated,
                 droppedMessageCount: built.truncation.droppedMessageCount,
@@ -302,7 +377,6 @@ export function createSendService(deps: SendMessageDeps): SendService {
           throw error;
         }
 
-        // Quota reservation. Rejection rolls back the transaction.
         const reservation = await deps.quota.reserve(
           {
             userId: input.userId,
@@ -314,6 +388,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
             modelMaxOutputTokens: model.maxOutputTokens,
             quotaWeight: runtime.model.quotaWeight,
             hasMediaParts: newParts.some((part) => part.type !== 'text'),
+            ...(built.request.responseModalities.includes('image')
+              ? { imageGeneration: true }
+              : {}),
             maxInputTokensForRequest: runtime.model.capabilities.contextWindow,
           },
           tx,
@@ -325,16 +402,38 @@ export function createSendService(deps: SendMessageDeps): SendService {
           reservation.effectiveMaxOutputTokens < maxOutputTokens
             ? reservation.effectiveMaxOutputTokens
             : maxOutputTokens;
-        const chatRequest =
-          effectiveMaxOutput === maxOutputTokens
-            ? built.request
-            : { ...built.request, maxOutputTokens: effectiveMaxOutput };
+
+        const containerConfig =
+          model.capabilities.documentGeneration ||
+          (model.config['container'] as boolean | undefined) === true
+            ? {
+                codeExecution: true,
+                skills: (model.config['containerSkills'] as
+                  ('pdf' | 'docx' | 'xlsx' | 'pptx')[] | undefined) ?? [
+                  'pdf',
+                  'docx',
+                  'xlsx',
+                  'pptx',
+                ],
+              }
+            : undefined;
+
+        const chatRequest: NormalizedChatRequest = {
+          ...built.request,
+          responseModalities: chatResponseModalities(
+            containerConfig !== undefined,
+            built.request.responseModalities.includes('image'),
+          ),
+          ...(effectiveMaxOutput !== maxOutputTokens
+            ? { maxOutputTokens: effectiveMaxOutput }
+            : {}),
+          ...(containerConfig !== undefined ? { container: containerConfig } : {}),
+        };
         if (effectiveMaxOutput !== maxOutputTokens) {
           await deps.generations.updateMaxOutputTokens(generation.id, effectiveMaxOutput, tx);
           generation = { ...generation, maxOutputTokens: effectiveMaxOutput };
         }
 
-        // First-message auto-title, only while the title is still the default.
         const firstText = firstUserText(conversation, textParts);
         if (firstText !== null) {
           await deps.conversations.setTitleIfDefault(
@@ -385,10 +484,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
         return { replayed: false, payload };
       });
 
-      // After commit only: handoff to orchestrator.enqueue() (never inside tx).
-      // `enqueue` re-checks the *in-memory* capacity gate, which the DB count above cannot see, so
-      // it may still refuse a committed generation. Recover instead of leaving an orphan: finalize
-      // the row we just wrote so the conversation is not blocked until the reaper sweeps it.
+      // After commit only. `enqueue` re-checks the in-memory capacity gate that the DB count
+      // cannot see, so it may still refuse a committed generation: finalize that row here instead
+      // of leaving the conversation blocked until the reaper sweeps it.
       const pendingEnqueue: EnqueueGenerationInput | null = enqueuePayload;
       if (!outcome.replayed && deps.orchestrator !== undefined && pendingEnqueue !== null) {
         const pendingGenerationId = outcome.payload.generation.id;
@@ -449,10 +547,19 @@ export function createSendService(deps: SendMessageDeps): SendService {
       }
 
       const resolved = await deps.registry.getRuntimeConfig(conversation.modelId);
-      if (resolved === null || resolved.provider.status !== 'active' || resolved.model.status !== 'active') {
+      if (
+        resolved === null ||
+        resolved.provider.status !== 'active' ||
+        resolved.model.status !== 'active'
+      ) {
         throw new AppError('model_unavailable', 'This model is not available.');
       }
       const { model, provider, runtime } = resolved;
+
+      const wantsImageOutput = input.options?.tools?.imageGeneration === true;
+      if (wantsImageOutput && !model.capabilities.imageGeneration) {
+        throw new AppError('unsupported_for_model', 'The selected model cannot generate images.');
+      }
 
       if (deps.orchestrator?.isDraining) {
         throw new AppError('service_busy', 'Server is shutting down.', {
@@ -466,12 +573,28 @@ export function createSendService(deps: SendMessageDeps): SendService {
         });
       }
 
-      const userParts: NormalizedPart[] = userMsgWithParts.parts
-        .filter((part) => part.type === 'text')
-        .map((part) => ({
-          type: 'text',
-          text: part.textContent ?? '',
-        }));
+      const fileIdsInRetry = userMsgWithParts.parts
+        .map((p) => p.fileId)
+        .filter((id): id is string => typeof id === 'string');
+      let resolvedFileParts: NormalizedPart[] = [];
+      if (fileIdsInRetry.length > 0 && deps.attachments !== undefined) {
+        // Retry re-reads the files the original message already carries, so they stay bound;
+        // only conversation scoping applies.
+        const resolved = await deps.attachments.resolveParts(fileIdsInRetry, input.userId, {
+          conversationId: conversation.id,
+        });
+        resolvedFileParts = toPalParts(resolved.parts);
+      }
+
+      const userParts: NormalizedPart[] = [
+        ...userMsgWithParts.parts
+          .filter((part) => part.type === 'text')
+          .map((part) => ({
+            type: 'text' as const,
+            text: part.textContent ?? '',
+          })),
+        ...resolvedFileParts,
+      ];
 
       const requestHash = createHash('sha256')
         .update(JSON.stringify({ retryUserMessageId: input.userMessageId, options: input.options }))
@@ -509,7 +632,11 @@ export function createSendService(deps: SendMessageDeps): SendService {
         }
 
         const history = await deps.conversations.listMessagesWithParts(
-          { conversationId: conversation.id, limit: 200, before: { seq: userMsgWithParts.message.seq } },
+          {
+            conversationId: conversation.id,
+            limit: 200,
+            before: { seq: userMsgWithParts.message.seq },
+          },
           tx,
         );
         const platformSystemPrompt = await readPlatformSystemPrompt();
@@ -528,9 +655,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
           history: history.items,
           maxOutputTokensOverride: maxOutputTokens,
           userIdHash,
+          ...(wantsImageOutput ? { imageGeneration: true } : {}),
         });
 
-        // Allocate new assistant sequence number.
         const newAssistantSeq = await deps.conversations.allocateSeq(conversation.id, 1, tx);
         if (newAssistantSeq === null) {
           throw new AppError('not_found', 'Conversation not found.');
@@ -571,7 +698,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
               estInputTokens: built.estimatedTokens,
               maxOutputTokens,
               modelLock: { modelId: model.id, providerId: provider.id, configVersion: null },
-              options: input.options ?? {},
+              options: toStoredOptions(input.options),
               contextInfo: {
                 truncated: built.truncation.truncated,
                 droppedMessageCount: built.truncation.droppedMessageCount,
@@ -589,7 +716,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           throw error;
         }
 
-        // Quota reservation. Rejection rolls back the transaction.
+        // Same as above: the reservation references the new generation row.
         const reservation = await deps.quota.reserve(
           {
             userId: input.userId,
@@ -601,6 +728,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
             modelMaxOutputTokens: model.maxOutputTokens,
             quotaWeight: runtime.model.quotaWeight,
             hasMediaParts: userParts.some((part) => part.type !== 'text'),
+            ...(built.request.responseModalities.includes('image')
+              ? { imageGeneration: true }
+              : {}),
             maxInputTokensForRequest: runtime.model.capabilities.contextWindow,
           },
           tx,
@@ -610,10 +740,33 @@ export function createSendService(deps: SendMessageDeps): SendService {
           reservation.effectiveMaxOutputTokens < maxOutputTokens
             ? reservation.effectiveMaxOutputTokens
             : maxOutputTokens;
-        const chatRequest =
-          effectiveMaxOutput === maxOutputTokens
-            ? built.request
-            : { ...built.request, maxOutputTokens: effectiveMaxOutput };
+
+        const containerConfig =
+          model.capabilities.documentGeneration ||
+          (model.config['container'] as boolean | undefined) === true
+            ? {
+                codeExecution: true,
+                skills: (model.config['containerSkills'] as
+                  ('pdf' | 'docx' | 'xlsx' | 'pptx')[] | undefined) ?? [
+                  'pdf',
+                  'docx',
+                  'xlsx',
+                  'pptx',
+                ],
+              }
+            : undefined;
+
+        const chatRequest: NormalizedChatRequest = {
+          ...built.request,
+          responseModalities: chatResponseModalities(
+            containerConfig !== undefined,
+            built.request.responseModalities.includes('image'),
+          ),
+          ...(effectiveMaxOutput !== maxOutputTokens
+            ? { maxOutputTokens: effectiveMaxOutput }
+            : {}),
+          ...(containerConfig !== undefined ? { container: containerConfig } : {}),
+        };
         if (effectiveMaxOutput !== maxOutputTokens) {
           await deps.generations.updateMaxOutputTokens(generation.id, effectiveMaxOutput, tx);
           generation = { ...generation, maxOutputTokens: effectiveMaxOutput };
@@ -695,6 +848,8 @@ function toWireMessage(
       type: part.type,
       format: 'markdown',
       text: part.textContent ?? '',
+      ...(part.fileId !== null ? { fileId: part.fileId } : {}),
+      ...(part.data && Object.keys(part.data).length > 0 ? { data: part.data } : {}),
     })),
   };
 }
@@ -703,16 +858,42 @@ function toWireMessage(
 export function canonicalRequestHash(
   conversationId: string,
   parts: readonly SendPartInput[],
-  options: { readonly maxOutputTokens?: number | undefined } | undefined,
+  options: GenerationOptions | undefined,
 ): string {
   const canonical = JSON.stringify({
     conversationId,
     parts: parts.map((part) =>
-      part.type === 'text' ? { type: 'text', text: part.text } : { type: 'file', fileId: part.fileId },
+      part.type === 'text'
+        ? { type: 'text', text: part.text }
+        : { type: 'file', fileId: part.fileId },
     ),
     maxOutputTokens: options?.maxOutputTokens ?? null,
+    imageGeneration: options?.tools?.imageGeneration === true,
   });
   return createHash('sha256').update(canonical).digest('hex');
+}
+
+/** Text plus any output modality the provider may also return. */
+function chatResponseModalities(
+  hasContainer: boolean,
+  hasImageOutput: boolean,
+): readonly ('text' | 'image' | 'file')[] {
+  return [
+    'text',
+    ...(hasContainer ? (['file'] as const) : []),
+    ...(hasImageOutput ? (['image'] as const) : []),
+  ];
+}
+
+/** `generation_jobs.options` is an open jsonb blob; keep it to the fields we accept. */
+function toStoredOptions(
+  options: GenerationOptions | undefined,
+): Readonly<Record<string, unknown>> {
+  if (options === undefined) return {};
+  return {
+    ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
+    ...(options.tools !== undefined ? { tools: { ...options.tools } } : {}),
+  };
 }
 
 function clampMaxOutputTokens(
@@ -733,9 +914,6 @@ function firstUserText(
   return textParts.map((part) => part.text).join('\n');
 }
 
-/**
- * Reads platform system prompt when configured.
- */
 async function readPlatformSystemPrompt(): Promise<string | undefined> {
   return undefined;
 }

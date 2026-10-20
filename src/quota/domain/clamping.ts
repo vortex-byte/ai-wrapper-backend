@@ -17,6 +17,11 @@ export interface ReservationMathInput {
   readonly reservedTokens: number;
   readonly maxOutputTokensPerRequest: number;
   readonly marginOverride?: number | undefined;
+  /**
+   * Fixed token cost of provider-side work billed outside the token stream (e.g. image
+   * generation). Reserved up front, even if the model then declines to use the tool.
+   */
+  readonly toolTokens?: number | undefined;
 }
 
 export type ReservationDecision =
@@ -31,14 +36,14 @@ export type ReservationDecision =
     };
 
 export function computeReservation(input: ReservationMathInput): ReservationDecision {
-  const margin =
-    input.marginOverride ?? (input.hasMediaParts ? MARGIN_MEDIA : MARGIN_EXACT);
+  const margin = input.marginOverride ?? (input.hasMediaParts ? MARGIN_MEDIA : MARGIN_EXACT);
   const estInputTokens = Math.ceil(input.estimatedInputTokens * margin);
+  const toolTokens = input.toolTokens ?? 0;
 
   const remaining = input.limitTokens - input.usedTokens - input.reservedTokens;
   const maxAffordableRaw = Math.floor(remaining / input.quotaWeight);
 
-  if (maxAffordableRaw < estInputTokens + MIN_USEFUL_OUTPUT) {
+  if (maxAffordableRaw < estInputTokens + toolTokens + MIN_USEFUL_OUTPUT) {
     return { kind: 'quota_exhausted', remainingTokens: Math.max(0, remaining) };
   }
 
@@ -47,10 +52,10 @@ export function computeReservation(input: ReservationMathInput): ReservationDeci
     input.modelMaxOutputTokens,
     input.maxOutputTokensPerRequest,
   );
-  const affordableOutput = Math.max(0, maxAffordableRaw - estInputTokens);
+  const affordableOutput = Math.max(0, maxAffordableRaw - estInputTokens - toolTokens);
   const effectiveMaxOutputTokens = Math.min(requestedOutput, affordableOutput);
 
-  const reserveRaw = estInputTokens + effectiveMaxOutputTokens;
+  const reserveRaw = estInputTokens + effectiveMaxOutputTokens + toolTokens;
   const reservedTokens = Math.ceil(reserveRaw * input.quotaWeight);
 
   return {

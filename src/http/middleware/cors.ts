@@ -3,18 +3,10 @@ import type { Config } from '@/config/index.ts';
 import type { AppEnv } from '../types.ts';
 
 /**
- * CORS for the cross-origin SPA. The SPA and API are different subdomains
- * of the same site, so the browser sends the session cookie but the origin still has to
- * be allowed explicitly.
- *
- * Rules enforced here:
- * - exact origin matching from `ALLOWED_ORIGINS` — never `*`;
- * - `Access-Control-Allow-Credentials: true` so the cookie rides along;
- * - `Vary: Origin` so caches never mix responses across origins;
- * - preflight (`OPTIONS`) answered with the allowed methods/headers and a 600 s cache.
- *
- * A disallowed origin receives no CORS headers (the browser blocks it). It is *not*
- * rejected here — the `Origin` check for CSRF happens in `requireCsrf`.
+ * CORS for the cross-origin SPA: the session cookie rides along, so the origin must be matched
+ * exactly against `ALLOWED_ORIGINS` (never `*`) and `Vary: Origin` keeps caches from mixing
+ * responses. A disallowed origin gets no CORS headers (the browser blocks it) but is not rejected
+ * here — that check belongs to `requireCsrf`.
  */
 
 const ALLOWED_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS';
@@ -51,7 +43,6 @@ export function cors(config: Config): MiddlewareHandler<AppEnv> {
   };
 }
 
-/** True when `origin` is one of the configured SPA origins. */
 export function isAllowedOrigin(config: Config, origin: string | undefined): boolean {
   return resolveOrigin(config, origin) !== null;
 }

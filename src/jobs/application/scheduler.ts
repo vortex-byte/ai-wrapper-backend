@@ -18,6 +18,9 @@ const DEFAULT_TASKS: readonly SchedulerTask[] = [
   { name: 'usage-rollup-nightly', jobType: 'usage.rollup.nightly', intervalMs: 86_400_000 },
   { name: 'quota-reconcile', jobType: 'quota.reconcile', intervalMs: 86_400_000 },
   { name: 'quota-precreate-periods', jobType: 'quota.precreate_periods', intervalMs: 86_400_000 },
+  { name: 'attachments-expiry', jobType: 'attachments.expire', intervalMs: 3_600_000 },
+  { name: 'attachments-orphans', jobType: 'attachments.purge_orphans', intervalMs: 3_600_000 },
+  { name: 'storage-reconcile', jobType: 'storage.reconcile', intervalMs: 604_800_000 },
 ];
 
 export class Scheduler {

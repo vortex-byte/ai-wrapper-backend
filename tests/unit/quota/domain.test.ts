@@ -7,7 +7,11 @@ import {
   overshootTokens,
   toQuotaTokens,
 } from '@/quota/domain/clamping.ts';
-import { resolvePolicy, PLATFORM_DEFAULT_POLICY, type QuotaPolicyRow } from '@/quota/domain/policy.ts';
+import {
+  resolvePolicy,
+  PLATFORM_DEFAULT_POLICY,
+  type QuotaPolicyRow,
+} from '@/quota/domain/policy.ts';
 import { checkToolQuota, toolTariff } from '@/quota/domain/tariffs.ts';
 import { costMicros, effectivePriceAt, type ModelPriceRow } from '@/quota/domain/pricing.ts';
 
@@ -32,6 +36,27 @@ describe('computeReservation', () => {
       expect(decision.effectiveMaxOutputTokens).toBe(8_000);
       expect(decision.reservedTokens).toBe(9_000);
     }
+  });
+
+  it('adds the image-generation tariff to the reservation', () => {
+    const tariff = toolTariff('image_generation')?.tokens ?? 0;
+    const decision = computeReservation({ ...baseReservation, toolTokens: tariff });
+
+    expect(decision.kind).toBe('reserve');
+    if (decision.kind === 'reserve') {
+      expect(decision.reservedTokens).toBe(9_000 + tariff);
+    }
+  });
+
+  it('rejects an image turn when the remaining quota cannot cover the tariff', () => {
+    const tariff = toolTariff('image_generation')?.tokens ?? 0;
+    const decision = computeReservation({
+      ...baseReservation,
+      limitTokens: 1_000 + tariff + MIN_USEFUL_OUTPUT - 1,
+      toolTokens: tariff,
+    });
+
+    expect(decision.kind).toBe('quota_exhausted');
   });
 
   it('applies the media margin when image/document parts are present', () => {

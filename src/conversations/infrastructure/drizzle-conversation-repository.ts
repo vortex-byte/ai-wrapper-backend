@@ -385,6 +385,17 @@ export class DrizzleConversationRepository implements ConversationRepository {
       .where(eq(messageParts.id, id));
   }
 
+  async attachPartFile(
+    partId: string,
+    fileId: string,
+    tx?: TransactionContext,
+  ): Promise<void> {
+    await runDb(tx)
+      .update(messageParts)
+      .set({ fileId, status: 'complete', updatedAt: new Date() })
+      .where(eq(messageParts.id, partId));
+  }
+
   async appendPartText(
     partId: string,
     chunk: string,

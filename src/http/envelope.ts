@@ -25,12 +25,10 @@ export interface ErrorEnvelope {
   readonly trace?: string;
 }
 
-/** Success with a payload. */
 export function ok<T>(data: T, message = ''): SuccessEnvelope<T> {
   return { status: 'ok', message, data };
 }
 
-/** Success for operations that return nothing — the `data` key is omitted. */
 export function okEmpty(message = ''): SuccessEnvelopeEmpty {
   return { status: 'ok', message };
 }

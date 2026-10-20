@@ -7,10 +7,7 @@ import type { GenerationStatus } from '@/generations/domain/generation.ts';
 import { RingBuffer } from './ring-buffer.ts';
 import { Subscriber } from './subscriber.ts';
 import { TextCoalescer } from './text-coalescer.ts';
-import type {
-  SSEFrame,
-  GenerationCompletedPayload,
-} from './events.ts';
+import type { SSEFrame, GenerationCompletedPayload } from './events.ts';
 
 export interface GenerationRunConfig {
   readonly detachTimeoutSeconds: number;
@@ -20,11 +17,38 @@ export interface GenerationRunConfig {
   readonly maxBufferBytes?: number;
 }
 
+export interface GenerationRunPartStartedInput {
+  readonly partId: string;
+  readonly position: number;
+  readonly type: 'text' | 'image' | 'file';
+  readonly name?: string | undefined;
+  readonly mimeType?: string | undefined;
+}
+
+/**
+ * A provider-emitted binary awaiting hydration (`ArtifactSink`). The hook is expected to
+ * download, persist (persist-before-expose), and link the attachment to `partId`, returning
+ * the new attachment id — or `null` when hydration failed (the part is then marked failed and
+ * the generation continues normally).
+ */
+export interface GenerationRunArtifactInput {
+  readonly partId: string;
+  readonly providerFileId: string;
+  readonly filename: string;
+  readonly mimeType?: string | undefined;
+  readonly sizeBytes?: number | undefined;
+  /** Provider-returned bytes (image tool base64); when set there is nothing to download. */
+  readonly bytes?: Uint8Array | undefined;
+}
+
 export interface GenerationRunHooks {
   readonly onStart?: ((generationId: string) => Promise<void>) | undefined;
-  readonly onPartStarted?: ((input: { partId: string; position: number; type: 'text' }) => Promise<void>) | undefined;
+  readonly onPartStarted?: ((input: GenerationRunPartStartedInput) => Promise<void>) | undefined;
   readonly onPartDone?: ((partId: string, text: string) => Promise<void>) | undefined;
-  readonly onTextChunk?: ((partId: string, chunk: string, lastEventSeq: number) => void) | undefined;
+  readonly onArtifact?:
+    ((input: GenerationRunArtifactInput) => Promise<{ attachmentId: string } | null>) | undefined;
+  readonly onTextChunk?:
+    ((partId: string, chunk: string, lastEventSeq: number) => void) | undefined;
   readonly onHeartbeat?: ((generationId: string) => Promise<void>) | undefined;
   readonly onFinalize?: ((input: RunFinalizeInput) => Promise<void>) | undefined;
 }
@@ -33,7 +57,8 @@ export interface RunFinalizeInput {
   readonly generationId: string;
   readonly status: GenerationStatus;
   readonly finishReason: string;
-  readonly error?: { readonly code: string; readonly message: string; readonly retryable: boolean } | undefined;
+  readonly error?:
+    { readonly code: string; readonly message: string; readonly retryable: boolean } | undefined;
   readonly accumulatedText: string;
   readonly usage?: TokenUsage | undefined;
   /** Abort reason for a cancelled run (`user_cancel` | `detached`) — the DB `cancel_reason` value. */
@@ -99,6 +124,21 @@ async function nextWithAbort<T>(
   }
 }
 
+/** Extracts the `command` field from a container tool's input, when present and string-typed. */
+function commandFromToolInput(input: unknown): string | undefined {
+  if (typeof input !== 'object' || input === null || !('command' in input)) return undefined;
+  return typeof input.command === 'string' ? input.command : undefined;
+}
+
+/** A file part's kind follows its MIME type; documents and unknown types render as `file`. */
+function mimeForArtifact(mimeType: string | undefined, filename: string): 'image' | 'file' {
+  const mime = mimeType ?? '';
+  if (mime.startsWith('image/')) return 'image';
+  // Fall back to the extension when the provider omits a MIME type.
+  if (mime === '' && /\.(png|jpe?g|webp|gif)$/i.test(filename)) return 'image';
+  return 'file';
+}
+
 /**
  * Owns the execution lifecycle, ring buffer, subscriber fan-out, and coalescing
  * for a single live generation run.
@@ -129,6 +169,13 @@ export class GenerationRun {
   private readonly textCoalescer: TextCoalescer;
   private currentPartId: string | null = null;
   private accumulatedText = '';
+  /** Next `message_parts.position` — one allocator per assistant message, emission order. */
+  private nextPartPosition = 0;
+  /** File/image parts by adapter block index — `artifact_emitted` associates by index when given. */
+  private readonly filePartIdsByIndex = new Map<number, string>();
+  /** File parts opened in order — the fallback association for an index-less `artifact_emitted`. */
+  private readonly openFilePartIds: string[] = [];
+  private readonly completedFilePartIds = new Set<string>();
   private providerRequestId: string | null = null;
   private capturedUsage?: TokenUsage | undefined;
   /** Wall-clock start of the provider call and the first text delta, for the TTFT histogram. */
@@ -344,10 +391,8 @@ export class GenerationRun {
       };
     } finally {
       clearTimeout(timeoutTimer);
-      /**
-       * Close the provider's async generator so its HTTP socket/buffers are released promptly instead of lingering until the SDK timeout (abort, timeout or early break). 
-       * This is best-effort and *bounded*: a generator that is suspended inside an `await` ignores `return()` until it resumes, and that must never delay the terminal transition.
-       */
+      // Release the provider's socket promptly. Bounded: a generator suspended inside an
+      // `await` ignores `return()` until it resumes, and that must not delay the terminal state.
       try {
         const closed = await Promise.race([
           Promise.resolve(iterator.return?.(undefined)).then(
@@ -375,43 +420,44 @@ export class GenerationRun {
         break;
 
       case 'part_started':
-        if (event.partType !== 'text') {
-          this.abortController.abort('unsupported_modality');
-          throw new Error('Adapter emitted unsupported non-text part');
-        }
-        this.currentPartId = this.idGen.uuidv7();
-        if (this.hooks?.onPartStarted !== undefined) {
-          await this.hooks.onPartStarted({
-            partId: this.currentPartId,
-            position: event.index,
-            type: 'text',
-          });
-        }
-        this.emitFrame('part.started', {
-          partId: this.currentPartId,
-          position: event.index,
-          type: 'text',
-          mimeType: event.mimeType,
-          name: event.name,
-        });
-        break;
-
-      case 'text_delta':
-        /**
-         * Some adapters stream text without a preceding `part_started`. Create the part exactly like a real `part_started` would — including the persistence hook — otherwise the part row is never inserted and every checkpoint/final write silently updates 0 rows.
-         */
-        if (this.currentPartId === null) {
+        if (event.partType === 'text') {
           this.currentPartId = this.idGen.uuidv7();
+          const position = this.nextPartPosition++;
           if (this.hooks?.onPartStarted !== undefined) {
             await this.hooks.onPartStarted({
               partId: this.currentPartId,
-              position: event.index,
+              position,
               type: 'text',
             });
           }
           this.emitFrame('part.started', {
             partId: this.currentPartId,
-            position: event.index,
+            position,
+            type: 'text',
+            mimeType: event.mimeType,
+            name: event.name,
+          });
+          break;
+        }
+        await this.openFilePart(event.index, event.partType, event.name, event.mimeType);
+        break;
+
+      case 'text_delta': {
+        // Some adapters stream text without `part_started`; without the row every checkpoint
+        // and the final write silently update 0 rows.
+        if (this.currentPartId === null) {
+          this.currentPartId = this.idGen.uuidv7();
+          const createdPosition = this.nextPartPosition++;
+          if (this.hooks?.onPartStarted !== undefined) {
+            await this.hooks.onPartStarted({
+              partId: this.currentPartId,
+              position: createdPosition,
+              type: 'text',
+            });
+          }
+          this.emitFrame('part.started', {
+            partId: this.currentPartId,
+            position: createdPosition,
             type: 'text',
           });
         }
@@ -422,13 +468,58 @@ export class GenerationRun {
           this.hooks.onTextChunk(this.currentPartId, event.text, this.ringBuffer.lastSeq ?? 0);
         }
         break;
+      }
 
       case 'artifact_chunk':
         this.abortController.abort('unsupported_modality');
         throw new Error('Adapter emitted unsupported artifact_chunk');
 
+      case 'tool_started': {
+        const command = commandFromToolInput(event.input);
+        this.emitFrame('tool.started', {
+          partId: this.currentPartId ?? '',
+          toolCallId: event.toolCallId,
+          tool: event.name,
+          ...(command !== undefined ? { command } : {}),
+        });
+        break;
+      }
+
+      case 'tool_delta':
+        this.emitFrame('tool.delta', {
+          partId: this.currentPartId ?? '',
+          toolCallId: event.toolCallId,
+          delta: event.delta,
+        });
+        break;
+
+      case 'tool_completed':
+        this.emitFrame('tool.completed', {
+          partId: this.currentPartId ?? '',
+          toolCallId: event.toolCallId,
+          status: event.status,
+        });
+        break;
+
+      case 'artifact_emitted':
+        await this.hydrateArtifact(event);
+        break;
+
       case 'part_done':
         this.textCoalescer.flush();
+        if (event.fileId !== undefined) {
+          const filePartId = this.filePartIdForIndex(event.index) ?? this.currentPartId ?? '';
+          // Hydration already resolved (or failed) this part; a duplicate must not flip a
+          // failed part back to complete.
+          if (filePartId === '' || this.completedFilePartIds.has(filePartId)) break;
+          this.emitFrame('part.completed', {
+            partId: filePartId,
+            status: 'complete',
+            fileId: event.fileId,
+            downloadUrl: `/api/files/${event.fileId}/content`,
+          });
+          break;
+        }
         if (this.currentPartId !== null) {
           if (this.hooks?.onPartDone !== undefined) {
             await this.hooks.onPartDone(this.currentPartId, this.accumulatedText);
@@ -460,6 +551,106 @@ export class GenerationRun {
         // Terminal markers handled in start() loop
         break;
     }
+  }
+
+  /**
+   * Opens a non-text (file/image) part. The part is persisted with status `streaming` so the
+   * ArtifactSink can set `file_id` + `complete` atomically once the bytes are stored
+   * (persist-before-expose: the client only sees a `downloadUrl` after hydration).
+   */
+  private async openFilePart(
+    index: number,
+    partType: 'image' | 'file',
+    name?: string,
+    mimeType?: string,
+  ): Promise<void> {
+    const partId = this.idGen.uuidv7();
+    const position = this.nextPartPosition++;
+    this.filePartIdsByIndex.set(index, partId);
+    this.openFilePartIds.push(partId);
+
+    if (this.hooks?.onPartStarted !== undefined) {
+      await this.hooks.onPartStarted({
+        partId,
+        position,
+        type: partType,
+        ...(name !== undefined ? { name } : {}),
+        ...(mimeType !== undefined ? { mimeType } : {}),
+      });
+    }
+
+    this.emitFrame('part.started', {
+      partId,
+      position,
+      type: partType,
+      name,
+      mimeType,
+    });
+  }
+
+  /** Association order: explicit index first, else the oldest still-open file part. */
+  private filePartIdForIndex(index: number | undefined): string | null {
+    if (index !== undefined) {
+      const byIndex = this.filePartIdsByIndex.get(index);
+      if (byIndex !== undefined) return byIndex;
+    }
+    return this.openFilePartIds.find((id) => !this.completedFilePartIds.has(id)) ?? null;
+  }
+
+  /**
+   * Hydrates a provider-emitted artifact: the hook downloads + stores + links it, and only
+   * then is `part.completed` (with a `downloadUrl`) emitted. On failure the part is marked
+   * `failed`; the generation itself is unaffected.
+   */
+  private async hydrateArtifact(event: {
+    readonly providerFileId: string;
+    readonly filename: string;
+    readonly mimeType?: string | undefined;
+    readonly sizeBytes?: number | undefined;
+    readonly bytes?: Uint8Array | undefined;
+    readonly index?: number | undefined;
+  }): Promise<void> {
+    let partId = this.filePartIdForIndex(event.index);
+    if (partId === null) {
+      await this.openFilePart(
+        event.index ?? this.filePartIdsByIndex.size,
+        mimeForArtifact(event.mimeType, event.filename),
+        event.filename,
+        event.mimeType,
+      );
+      partId = this.filePartIdForIndex(event.index);
+    }
+    if (partId === null) return;
+
+    let attachmentId: string | null = null;
+    if (this.hooks?.onArtifact !== undefined) {
+      try {
+        const result = await this.hooks.onArtifact({
+          partId,
+          providerFileId: event.providerFileId,
+          filename: event.filename,
+          ...(event.mimeType !== undefined ? { mimeType: event.mimeType } : {}),
+          ...(event.sizeBytes !== undefined ? { sizeBytes: event.sizeBytes } : {}),
+          ...(event.bytes !== undefined ? { bytes: event.bytes } : {}),
+        });
+        attachmentId = result?.attachmentId ?? null;
+      } catch {
+        attachmentId = null;
+      }
+    }
+
+    this.completedFilePartIds.add(partId);
+    this.emitFrame(
+      'part.completed',
+      attachmentId !== null
+        ? {
+            partId,
+            status: 'complete',
+            fileId: attachmentId,
+            downloadUrl: `/api/files/${attachmentId}/content`,
+          }
+        : { partId, status: 'failed' },
+    );
   }
 
   private async finalizeRun(
@@ -511,7 +702,8 @@ export class GenerationRun {
         usage: {
           input: this.capturedUsage?.inputTokens ?? 0,
           output: this.capturedUsage?.outputTokens ?? Math.ceil(this.accumulatedText.length / 4),
-          quotaTokens: this.capturedUsage?.outputTokens ?? Math.ceil(this.accumulatedText.length / 4),
+          quotaTokens:
+            this.capturedUsage?.outputTokens ?? Math.ceil(this.accumulatedText.length / 4),
         },
         remainingQuota: null,
       };

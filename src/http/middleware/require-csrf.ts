@@ -18,9 +18,6 @@ import { isAllowedOrigin } from './cors.ts';
  * uses `enforceOrigin` only — a deliberate "login CSRF" trade-off bounded by the
  * same-site `SameSite=Lax` cookie and the strict origin allow-list. Because that is the
  * sole defense there, an *absent* `Origin` is rejected on the login path too.
- *
- * Safe methods (GET/HEAD/OPTIONS) are always exempt. Failures are `403 forbidden` and
- * never reveal which check failed.
  */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 

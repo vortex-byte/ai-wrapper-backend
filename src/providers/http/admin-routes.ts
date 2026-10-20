@@ -29,9 +29,7 @@ export interface RegistryAdminRoutesDeps {
 }
 
 /**
- * Admin registry endpoints. Thin: validate → call the application
- * service → shape the response. The `secretRef` is echoed back (it is an env-var NAME),
- * never any key material.
+ * `secretRef` is echoed back (it is an env-var name), never any key material.
  */
 export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv> {
   const { registryAdmin, auth, config } = deps;

@@ -34,6 +34,39 @@ const mockProvider: ProviderRuntimeConfig = {
 };
 
 describe('Context Builder', () => {
+  it('requests the image output modality only when the client opts in', () => {
+    const base = {
+      requestId: 'req-img',
+      generationId: 'gen-img',
+      model: { ...mockModel, capabilities: { ...mockModel.capabilities, imageGeneration: true } },
+      provider: mockProvider,
+      newParts: [{ type: 'text' as const, text: 'draw a cat' }],
+      history: [],
+      userIdHash: 'hash-1',
+    };
+
+    expect(buildContext(base).request.responseModalities).toEqual(['text']);
+    expect(buildContext({ ...base, imageGeneration: true }).request.responseModalities).toEqual([
+      'text',
+      'image',
+    ]);
+  });
+
+  it('ignores the opt-in when the model cannot generate images', () => {
+    const result = buildContext({
+      requestId: 'req-img',
+      generationId: 'gen-img',
+      model: mockModel,
+      provider: mockProvider,
+      newParts: [{ type: 'text', text: 'draw a cat' }],
+      history: [],
+      userIdHash: 'hash-1',
+      imageGeneration: true,
+    });
+
+    expect(result.request.responseModalities).toEqual(['text']);
+  });
+
   it('concatenates system prompts and calculates remaining budget', () => {
     const result = buildContext({
       requestId: 'req-1',

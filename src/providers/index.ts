@@ -65,6 +65,7 @@ export { CachedModelRegistry } from './infrastructure/cached-registry.ts';
 export { EnvSecretResolver } from './ports/secret-resolver.ts';
 export { OpenAIAdapter } from './infrastructure/adapters/openai/adapter.ts';
 export { AnthropicAdapter } from './infrastructure/adapters/anthropic/adapter.ts';
+export { GeminiAdapter } from './infrastructure/adapters/gemini/adapter.ts';
 export {
   FakeProvider,
   makeChatRequest,

@@ -9,6 +9,7 @@ import { modelRoutes } from '../providers/http/model-routes.ts';
 import { conversationRoutes } from '../conversations/http/routes.ts';
 import { generationRoutes } from '../generations/http/routes.ts';
 import { quotaRoutes } from '../quota/http/routes.ts';
+import { attachmentRoutes } from '../attachments/http/routes.ts';
 import type { AppEnv } from './types.ts';
 
 export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
@@ -47,6 +48,14 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
     }),
   );
   api.route('/admin', adminRoutes({ admin: services.admin, auth: services.auth, config }));
+  api.route(
+    '/',
+    attachmentRoutes({
+      service: services.attachments,
+      auth: services.auth,
+      config,
+    }),
+  );
   api.route(
     '/',
     quotaRoutes({

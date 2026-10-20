@@ -5,9 +5,7 @@ export interface CheckpointerOptions {
   readonly generationId: string;
   readonly generationRepo: GenerationRepository;
   readonly clock: Clock;
-  /** Flush interval in milliseconds (default: 1,000 ms = 1 s). */
   readonly intervalMs?: number | undefined;
-  /** Maximum buffered bytes before an immediate flush (default: 2,048 = 2 KB). */
   readonly maxBufferBytes?: number | undefined;
 }
 
@@ -15,10 +13,8 @@ const DEFAULT_INTERVAL_MS = 1000;
 const DEFAULT_MAX_BUFFER_BYTES = 2048;
 
 /**
- * Checkpointer for live generation streaming.
- * Buffers text deltas and periodically flushes them to `message_parts` in short transactions
- * while updating heartbeat and sequence markers.
- * Streams hold no database connection between flushes.
+ * Buffers text deltas and flushes them to `message_parts` in short transactions while touching
+ * heartbeat and sequence markers; streams hold no DB connection between flushes.
  */
 export class Checkpointer {
   private readonly generationId: string;
@@ -46,10 +42,6 @@ export class Checkpointer {
     }, this.intervalMs);
   }
 
-  /**
-   * Appends text from a stream delta.
-   * If buffered bytes reach the threshold (2 KB), an immediate flush is triggered.
-   */
   append(partId: string, text: string, eventSeq: number): void {
     if (this.disposed || text.length === 0) return;
 
@@ -64,9 +56,8 @@ export class Checkpointer {
   }
 
   /**
-   * Flushes buffered text to the database and touches heartbeat_at.
-   * Concurrent callers coalesce onto the single in-flight flush, so a caller that needs a
-   * *guaranteed* post-condition (see {@link dispose}) must await the returned promise.
+   * Flushes buffered text and touches `heartbeat_at`. Concurrent callers coalesce onto the single
+   * in-flight flush, so only a caller that needs the post-condition must await the promise.
    */
   flush(): Promise<void> {
     if (this.inFlight !== null) return this.inFlight;

@@ -454,11 +454,13 @@ Submits a new user message turn, reserves quota tokens, and queues assistant gen
 | `options` | object | No | Generation execution options. |
 | `options.maxOutputTokens` | integer | No | Maximum token ceiling requested for output generation. |
 | `options.tools` | object | No | Built-in provider tool toggles. |
-| `options.tools.webSearch` | boolean | No | Enable built-in web search grounding (default `false`). |
-| `options.tools.webFetch` | boolean | No | Enable built-in web fetch tool (default `false`). |
-| `options.tools.codeExecution` | boolean | No | Enable cloud code execution sandbox (default `false`). |
-| `options.tools.skills` | array of strings | No | Specific built-in skills to activate (e.g. `["xlsx", "docx", "pptx", "pdf"]`). |
-| `options.tools.imageGeneration` | boolean | No | Enable prompt-to-image creation tool (default `false`). |
+| `options.tools.imageGeneration` | boolean | No | Request-scoped opt-in to provider-hosted image generation (default `false`). Only honoured when the model declares `capabilities.imageGeneration`; otherwise the request fails `422 unsupported_for_model`. Adds the image-generation token tariff to the quota reservation for that turn. |
+
+> **Document generation stays registry-level; image generation is per request.** Container skills and
+> code execution are enabled on the model record (`capabilities.documentGeneration` plus
+> `model.config.container` / `model.config.containerSkills`) so a client never has to opt in and cannot
+> escalate container cost. Image generation is the exception: it is opt-in per turn because it is
+> billed separately from the token stream, and the registry flag only says the model *can* do it.
 
 ```json
 {
@@ -468,10 +470,7 @@ Submits a new user message turn, reserves quota tokens, and queues assistant gen
   ],
   "options": {
     "maxOutputTokens": 4000,
-    "tools": {
-      "codeExecution": true,
-      "skills": ["xlsx"]
-    }
+    "tools": { "imageGeneration": true }
   }
 }
 ```
@@ -599,11 +598,11 @@ data: {"finishReason":"stop","usage":{"inputTokens":18250,"outputTokens":1190,"q
 | `generation.state` | `{state}` | `pending \| generating \| …` |
 | `message.created` | `{userMessageId, assistantMessageId}` | first frame |
 | `context.truncated` | `{droppedMessages, droppedAttachments}` | UI notice |
-| `part.started` | `{partId, position, type, mimeType?, name?}` | new part (`text \| tool_call \| tool_result \| generated_file \| reasoning`) |
+| `part.started` | `{partId, position, type, mimeType?, name?}` | new part (`text \| image \| document \| generated_file`); `position` is monotonic across all part types in the message |
 | `text.delta` | `{partId, delta}` | text chunk (coalesced ≤ 20/s) |
-| `tool.started` | `{partId, position, tool, id?}` | tool execution starting (e.g. `bash_code_execution`, `web_search`) |
-| `tool.delta` | `{partId, delta}` | streaming tool input/command payload |
-| `tool.completed` | `{partId, status, output?, returnCode?}` | tool result / command completion |
+| `tool.started` | `{partId, toolCallId, tool, command?}` | tool execution starting (e.g. `bash_code_execution`, `web_search`); `command` is present when the tool input carries one |
+| `tool.delta` | `{partId, toolCallId, delta}` | streaming tool output (stdout/stderr) |
+| `tool.completed` | `{partId, toolCallId, status}` | tool finished (`success \| error`) |
 | `part.completed` | `{partId, status, fileId?, downloadUrl?}` | binary frames (images, generated files) only after ArtifactSink stores the file |
 | `progress` | `{stage, percent?}` | job-style generations |
 | `usage.updated` | `{inputTokens, outputTokens}` | optional live meter |
@@ -712,28 +711,33 @@ Streams the blob (uploaded or generated). Owner-only — admins are **not** exem
 
 ## 9. Admin — users & divisions
 
-All admin routes require `role=admin`. Every mutation writes an `audit_logs` row in the same transaction.
+Administrative routes implement a two-tier model:
+- **User management (`/api/admin/users*`):** accessible by `super_admin` (system-wide) and `admin` (division administrator). When invoked by a division `admin`, operations are strictly isolated to users within the administrator's assigned division (`caller.division_id`). Attempted access to users outside that division returns **404** (preventing account existence leakage). Division admins can only provision and manage accounts with `role: "user"`.
+- **System-level admin (`/api/admin/divisions*`, and sections 10–13):** accessible strictly by `super_admin`.
 
-| Method & path | Description |
-|---|---|
-| `GET /api/admin/users?query&divisionId&status&limit&cursor` | List/search users |
-| `POST /api/admin/users` | Create/pre-provision a user (email, displayName, role, divisionId; initial password or `generatePassword: true`) |
-| `GET /api/admin/users/:id` | Detail |
-| `PATCH /api/admin/users/:id` | Update role / division / status (`status: disabled` revokes all sessions) |
-| `POST /api/admin/users/:id/password/reset` | Reset password |
-| `GET /api/admin/divisions` · `POST /api/admin/divisions` · `PATCH /api/admin/divisions/:id` | Divisions |
+Every mutation writes an `audit_logs` row in the same transaction.
+
+| Method & path | Role requirement | Description |
+|---|---|---|
+| `GET /api/admin/users?query&divisionId&status&limit&cursor` | `admin`, `super_admin` | List/search users (`admin` scoped to own division; `super_admin` all) |
+| `POST /api/admin/users` | `admin`, `super_admin` | Create/pre-provision user (`admin` in own division with `role=user`; `super_admin` any role/division) |
+| `GET /api/admin/users/:id` | `admin`, `super_admin` | Detail (`admin` own division only, 404 otherwise; `super_admin` any) |
+| `PATCH /api/admin/users/:id` | `admin`, `super_admin` | Update user (`admin` displayName/status in own division; `super_admin` role/division/status/profile) |
+| `POST /api/admin/users/:id/password/reset` | `admin`, `super_admin` | Reset password (`admin` own division only, 404 otherwise; `super_admin` any) |
+| `GET /api/admin/divisions` · `POST /api/admin/divisions` · `PATCH /api/admin/divisions/:id` | `super_admin` | Divisions |
 
 ---
 
 ### 9.1 `GET /api/admin/users`
 
 Lists and searches registered users with optional filtering by query, division, or status.
+When called by a division `admin`, results are strictly filtered to `division_id = caller.division_id`. Client-provided `divisionId` query parameter targeting any other division is rejected or ignored.
 
 **Query parameters:**
 | Parameter | Value type | Required | Description |
 |---|---|---|---|
 | `query` | string | No | Search query string matching against user email or display name. |
-| `divisionId` | string (UUIDv7) | No | Filter users assigned to a specific division ID. |
+| `divisionId` | string (UUIDv7) | No | Filter users assigned to a specific division ID (`super_admin` only). |
 | `status` | string (`active` \| `disabled`) | No | Filter users by account status. |
 | `limit` | integer | No | Maximum number of users to return per page (default `50`, max `100`). |
 | `cursor` | string | No | Opaque pagination cursor string (`nextCursor` value from previous page). |
@@ -755,14 +759,15 @@ Lists and searches registered users with optional filtering by query, division, 
 ### 9.2 `POST /api/admin/users`
 
 Creates and provisions a new user account with specified role, division, and initial or temporary password.
+When called by a division `admin`, `divisionId` is automatically forced to `caller.division_id`, and `role` must be `'user'` (setting `admin` or `super_admin` returns `403 forbidden`). When called by `super_admin`, assigning `role='admin'` requires a non-null `divisionId`.
 
 **Request body:**
 | Field | Value type | Required | Description |
 |---|---|---|---|
 | `email` | string (`citext`) | Yes | User's login email address. |
 | `displayName` | string | Yes | User's display name. |
-| `role` | string (`user` \| `admin`) | Yes | Role assigned to the user. |
-| `divisionId` | string \| null (UUIDv7) | No | Division ID to assign user to. |
+| `role` | string (`user` \| `admin` \| `super_admin`) | Yes | Role assigned to user (`super_admin` may set any role; division `admin` may only set `user`). |
+| `divisionId` | string \| null (UUIDv7) | Conditional | Division ID to assign user to (mandatory if `role='admin'`; forced to `caller.division_id` for division `admin`). |
 | `generatePassword` | boolean | No | If `true`, system auto-generates temporary password returned in `data.temporaryPassword`. |
 | `password` | string | Conditional | Initial password (required if `generatePassword` is `false` or omitted). |
 
@@ -785,6 +790,7 @@ never stored in plaintext.
 ### 9.3 `GET /api/admin/users/:id`
 
 Retrieves account details and profile information for a specific user.
+When called by a division `admin`, returns **404** if the target user belongs to a different division or has no division.
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -806,6 +812,15 @@ Retrieves account details and profile information for a specific user.
 ### 9.4 `PATCH /api/admin/users/:id`
 
 Updates profile attributes, role, division assignment, or account status for a user.
+When called by a division `admin`:
+- Returns **404** if target user is in a different division or unassigned.
+- Can only update `displayName` and `status` (`active` | `disabled`). Supplying `role` or `divisionId` returns `403 forbidden`.
+- Cannot demote or disable their own account.
+
+When called by `super_admin`:
+- Can update `displayName`, `role`, `divisionId`, `status`.
+- Cannot disable or demote the last active `super_admin` (`409 conflict`).
+- Setting `role='admin'` requires a non-null `divisionId`.
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -816,29 +831,30 @@ Updates profile attributes, role, division assignment, or account status for a u
 | Field | Value type | Required | Description |
 |---|---|---|---|
 | `displayName` | string | No | Updated display name. |
-| `role` | string (`user` \| `admin`) | No | Updated user role. |
-| `divisionId` | string \| null (UUIDv7) | No | Updated division ID (`null` to unassign). |
+| `role` | string (`user` \| `admin` \| `super_admin`) | No | Updated user role (`super_admin` only). |
+| `divisionId` | string \| null (UUIDv7) | No | Updated division ID (`super_admin` only; `null` to unassign). |
 | `status` | string (`active` \| `disabled`) | No | Updated status (`disabled` revokes all active sessions immediately). |
 
 Request:
 ```json
-{ "displayName": "Ada Lovelace", "role": "admin" }
+{ "displayName": "Ada Lovelace", "role": "super_admin" }
 ```
 `200`:
 ```json
 { "status": "ok", "message": "User updated.", "data": {
     "id": "0192…", "email": "ada@corp.example", "displayName": "Ada Lovelace",
-    "role": "admin", "status": "active", "divisionId": "0192…",
+    "role": "super_admin", "status": "active", "divisionId": "0192…",
     "mustChangePassword": false, "updatedAt": "2026-10-08T09:30:00Z" } }
 ```
 
-Safeguards: cannot disable/demote the last active admin.
+Safeguards: cannot disable/demote the last active `super_admin` (`409 conflict`).
 
 ---
 
 ### 9.5 `POST /api/admin/users/:id/password/reset`
 
 Resets a user's password, revokes all active sessions, and forces a password update upon next login.
+When called by a division `admin`, returns **404** if the target user belongs to a different division or has no division.
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -864,7 +880,9 @@ Side effects: revokes **all** the user's sessions, sets `mustChangePassword`.
 
 ### 9.6 `GET /api/admin/divisions`
 
-Lists all organizational divisions. Requires no request parameters.
+Lists all organizational divisions. Requires `role=super_admin`.
+
+**Query parameters:** none.
 
 `200`:
 ```json
@@ -879,7 +897,7 @@ Lists all organizational divisions. Requires no request parameters.
 
 ### 9.7 `POST /api/admin/divisions`
 
-Creates a new organizational division for quota and model access management.
+Creates a new organizational division for quota and model access management. Requires `role=super_admin`.
 
 **Request body:**
 | Field | Value type | Required | Description |
@@ -901,7 +919,7 @@ Request:
 
 ### 9.8 `PATCH /api/admin/divisions/:id`
 
-Updates the display name or external reference of an existing division.
+Updates the display name or external reference of an existing division. Requires `role=super_admin`.
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -927,6 +945,8 @@ Request:
 ---
 
 ## 10. Admin — quota & usage
+
+All quota and usage administration endpoints require `role=super_admin`.
 
 ### 10.1 `GET /api/admin/quota-policies/:scope/:id?`
 
@@ -1051,6 +1071,8 @@ Retrieves system-wide usage metrics, token volumes, and estimated costs grouped 
 
 ## 11. Admin — providers & models
 
+All provider and model administration endpoints require `role=super_admin`.
+
 ### 11.1 Providers (`GET /api/admin/providers`, `POST /api/admin/providers`, `PATCH /api/admin/providers/:id`)
 
 Provider registry. **The API key is never accepted or returned** — `secretRef` is the **name of the
@@ -1125,6 +1147,17 @@ environment variable** that holds it (PRD A-16).
 | `defaultMaxOutputTokens` | integer | Conditional | Default max output tokens (required on `POST`, optional on `PATCH`). |
 | `quotaWeight` | number (float) | No | Quota token multiplier weight (default `1.0`). |
 | `config` | object | No | Execution configuration object (e.g. `timeoutMs`, reasoning effort). |
+
+**Provider-hosted tool keys inside `config`:**
+
+| Key | Scope | Meaning |
+|---|---|---|
+| `container` | model | Force the provider container path on even when `capabilities.documentGeneration` is `false`. |
+| `containerSkills` | model | Skills to declare on the container (`["pdf","docx","xlsx","pptx"]`); defaults to all four. |
+| `imageGeneration` | model | `false` opts a model out of the `image_generation` tool even when the capability flag is on. |
+| `imageGenerationOptions` | model | Forwarded provider knobs for the image tool (`output_format` and other allow-listed keys); unknown keys are dropped. |
+| `storeResponses` | model | `true` asks OpenAI to retain the Responses object (default `false`). |
+| `useChatCompletions` | provider | `true` forces Chat Completions, disabling containers and hosted image generation for that provider. |
 | `sortOrder` | integer | No | Display sorting priority index (default `0`). |
 
 ```json
@@ -1194,6 +1227,8 @@ Runs a cheap health check now (must not consume meaningful tokens). `200`:
 ---
 
 ## 12. Admin — errors & audit
+
+All error exploration and audit log endpoints require `role=super_admin`.
 
 ### 12.1 `GET /api/admin/errors`
 
@@ -1306,7 +1341,7 @@ Errors after a stream has started cannot change the HTTP status: they arrive as 
 
 | Concept | Values |
 |---|---|
-| User role | `user`, `admin` |
+| User role | `user`, `admin`, `super_admin` |
 | User status | `active`, `disabled` |
 | Model status | `active`, `disabled` |
 | Conversation (derived) | `modelLocked` boolean |

@@ -8,6 +8,7 @@ import type { TransactionContext } from '@/db/tx.ts';
 import { computeReservation, overshootTokens, toQuotaTokens } from '../domain/clamping.ts';
 import { costMicros, effectivePriceAt } from '../domain/pricing.ts';
 import { resolvePolicy, type ResolvedPolicy } from '../domain/policy.ts';
+import { toolTariff } from '../domain/tariffs.ts';
 import { periodEndFor, periodStartFor, resetAtFor } from '../domain/timezone.ts';
 import type { QuotaAccountRepository } from '../ports/quota-account-repository.ts';
 import type { QuotaPolicyRepository } from '../ports/quota-policy-repository.ts';
@@ -52,23 +53,16 @@ export class RealQuota implements QuotaPort {
   }
 
   /** Resolve the effective policy for a user (user → division → global, per field). */
-  async resolvePolicyForUser(
-    userId: string,
-    tx?: TransactionContext,
-  ): Promise<ResolvedPolicy> {
+  async resolvePolicyForUser(userId: string, tx?: TransactionContext): Promise<ResolvedPolicy> {
     const userPolicyRow = await this.policies.findPolicy('user', userId, tx);
     const divisionId = await this.userDivisionId(userId, tx);
-    const divisionPolicy = divisionId !== null
-      ? await this.policies.findPolicy('division', divisionId, tx)
-      : null;
+    const divisionPolicy =
+      divisionId !== null ? await this.policies.findPolicy('division', divisionId, tx) : null;
     const globalPolicy = await this.policies.findPolicy('global', null, tx);
     return resolvePolicy(userPolicyRow, divisionPolicy, globalPolicy);
   }
 
-  private async userDivisionId(
-    userId: string,
-    tx?: TransactionContext,
-  ): Promise<string | null> {
+  private async userDivisionId(userId: string, tx?: TransactionContext): Promise<string | null> {
     // Read-only lookup for policy resolution; inside the caller's transaction when given so
     // concurrent reservations do not check out a second pool connection.
     return this.usage.userDivisionId(userId, tx);
@@ -83,7 +77,10 @@ export class RealQuota implements QuotaPort {
       ctx.maxInputTokensForRequest !== undefined &&
       ctx.estimatedInputTokens > ctx.maxInputTokensForRequest
     ) {
-      throw new AppError('context_too_large', 'The prompt exceeds the per-request input token limit.');
+      throw new AppError(
+        'context_too_large',
+        'The prompt exceeds the per-request input token limit.',
+      );
     }
 
     const account = await this.accounts.getOrCreateAccount(
@@ -102,7 +99,6 @@ export class RealQuota implements QuotaPort {
       tx,
     );
 
-    // Count other live generations for this user; exclude the current generation row.
     const activeCount = await tx.client.query<{ count: string }>(
       `SELECT count(*) AS count FROM generation_jobs
         WHERE user_id = $1 AND id <> $2 AND status IN ('pending','generating')`,
@@ -126,6 +122,10 @@ export class RealQuota implements QuotaPort {
       reservedTokens: account.reservedTokens,
       maxOutputTokensPerRequest: policy.maxOutputTokensPerRequest,
       marginOverride: ctx.marginOverride,
+      // Image generation is billed outside the token stream, so it must be reserved up front.
+      ...(ctx.imageGeneration === true
+        ? { toolTokens: toolTariff('image_generation')?.tokens ?? 0 }
+        : {}),
     });
 
     if (decision.kind === 'exceeds_input_cap') {
@@ -140,21 +140,16 @@ export class RealQuota implements QuotaPort {
       });
     }
 
-    // Atomic conditional UPDATE. 0 rows indicates over limit.
     const result = await this.accounts.reserveAtomic(account.id, decision.reservedTokens, tx);
     if (!result.reserved) {
       throw new AppError('quota_exceeded', 'Your monthly token quota is exhausted.', {
         details: {
-          remainingTokens: Math.max(
-            0,
-            limitTokens - account.usedTokens - account.reservedTokens,
-          ),
+          remainingTokens: Math.max(0, limitTokens - account.usedTokens - account.reservedTokens),
           resetAt: resetAtFor(now, this.quotaTimezone),
         },
       });
     }
 
-    // Reservation row and ledger entry in the same transaction.
     await this.accounts.insertReservation(
       {
         id: this.idGen.uuidv7(),
@@ -225,7 +220,6 @@ export class RealQuota implements QuotaPort {
     const usedAfter = account.usedTokens;
     const reservedAfter = account.reservedTokens;
 
-    // Record usage event on settle path.
     const generation = await this.findGeneration(settlement.generationId, tx);
     if (!isRelease && generation !== null) {
       const usage = settlement.usage ?? {
@@ -277,7 +271,6 @@ export class RealQuota implements QuotaPort {
       );
     }
 
-    // Finalize reservation and record ledger entry.
     await this.accounts.finalizeReservation(
       settlement.generationId,
       isRelease ? 'released' : 'settled',
@@ -291,7 +284,9 @@ export class RealQuota implements QuotaPort {
         accountId: reservation.accountId,
         generationId: settlement.generationId,
         entryType: isRelease ? 'release' : 'settle',
-        tokensDelta: isRelease ? -reservation.reservedTokens : actualQuotaTokens - reservation.reservedTokens,
+        tokensDelta: isRelease
+          ? -reservation.reservedTokens
+          : actualQuotaTokens - reservation.reservedTokens,
         usedAfter,
         reservedAfter,
       },
@@ -326,15 +321,12 @@ export class RealQuota implements QuotaPort {
   private async findGeneration(
     generationId: string,
     tx: TransactionContext,
-  ): Promise<
-    | {
-        readonly userId: string;
-        readonly providerId: string;
-        readonly modelId: string;
-        readonly createdAt: Date;
-      }
-    | null
-  > {
+  ): Promise<{
+    readonly userId: string;
+    readonly providerId: string;
+    readonly modelId: string;
+    readonly createdAt: Date;
+  } | null> {
     const rows = await runDb(tx)
       .select({
         userId: generationJobs.userId,

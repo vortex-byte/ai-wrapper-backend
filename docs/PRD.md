@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Document status** | Draft v1.3 for engineering review |
-| **Date** | 2026-10-08 |
+| **Document status** | Draft v1.4 for engineering review |
+| **Date** | 2026-10-20 |
 | **Scope** | Backend (Hono / TypeScript / PostgreSQL). Frontend is out of scope except for API contracts. |
 | **Audience** | Backend engineers, tech lead, security reviewer, product owner, platform/infra |
 
@@ -17,12 +17,13 @@
 - **Revision v1.1** (2026-10-08): authentication is email + password with a server-backed session (no OIDC); provider API keys come from the environment/`.env` (no secret manager); the quota period timezone defaults to UTC+7. Open Questions **Q-1, Q-7, Q-8, Q-9 are closed**; **Q-2, Q-5, Q-11** updated; **Q-14** added.
 - **Revision v1.2** (2026-10-08): the product owner **approved the documented default assumption for every remaining Open Question**, so **Q-2 through Q-14 are all closed**. No behavioural changes — the assumptions already described in §11, §12, §15 and elsewhere are now decisions. Section 28 is retained as a record of the resolution.
 - **Revision v1.3** (2026-10-08): the API is **unversioned** (the `/api` prefix carries no version; the SPA and API deploy atomically) and every JSON response uses a **uniform envelope** — success `{status,message,data}` and error `{status,code,message,retryable,details,trace?}` (see `docs/API_CONTRACTS.md` §1). A stack `trace` is returned in error envelopes **only when `NODE_ENV=development`** and is never present in staging or production (§15.10).
+- **Revision v1.4** (2026-10-20): administrative role hierarchy revamp. The former `admin` role is revamped into `super_admin` (system-wide administrator with full control over all divisions, users, quotas, models, providers, system settings, and audit logs). The `admin` role is repurposed as a **division administrator** (admin per division), strictly bound to a single division (`division_id NOT NULL`) and restricted to CRUD user operations solely for their assigned division.
 
 ## Assumptions register
 
 | ID | Assumption | Affects |
 |---|---|---|
-| A-1 | Single organization (single tenant). Employees sign in with **locally managed email + password accounts** (A-15). "Workspaces" are not built; **divisions** (org units) are the grouping used for quota and model access. Multi-tenant `organization_id` can be added later by migration. | §10, §11, §15, §17 |
+| A-1 | Single organization (single tenant). Employees sign in with **locally managed email + password accounts** (A-15). "Workspaces" are not built; **divisions** (org units) are the grouping used for quota, model access, and delegated division administration (`admin`). Multi-tenant `organization_id` can be added later by migration. | §10, §11, §15, §17, §20 |
 | A-2 | Scale target: ≤ 1,000 registered users, ≤ 150 concurrent generations at peak, ≤ 30 API req/s average. | §7, §23 |
 | A-3 | Runtime is Bun.js LTS. One container image runs in `api`, `worker`, or `all` role. | §8, §24 |
 | A-4 | MVP runs **one active API node** (plus a standby for rolling deploys) with a shared persistent volume for local files. Generations are owned by a single process. Horizontal scale-out of streaming needs sticky routing or a Redis stream relay (Phase 4). | §8, §14, §24 |
@@ -32,11 +33,11 @@
 | A-8 | PostgreSQL 15+. Query layer Drizzle and Zod validation are recommendations, not requirements. | §8, §17 |
 | A-9 | Image/document **generation** is post-MVP as a user feature, but persistence, streaming, and storage are designed so enabling it needs only adapter work. | §13, §14 |
 | A-10 | A separate SPA is the only client and talks only to this API. | §16 |
-| A-11 | Admins enter model IDs, capabilities, limits, and prices through the admin API/UI. Nothing is seeded in code except a documented example seed file. | §6, §17 |
+| A-11 | Super Admins enter model IDs, capabilities, limits, and prices through the admin API/UI. Nothing is seeded in code except a documented example seed file. | §6, §17, §20 |
 | A-12 | **Client-disconnect policy:** generation continues server-side after the SSE connection drops; if no subscriber re-attaches within a 60 s grace period, it is cancelled and partial output is persisted. Explicit user "Stop" cancels immediately. | §14, §19 |
-| A-13 | Admins **cannot read conversation content or file contents** by default. Break-glass access is a post-MVP, separately approved capability. | §15, §20 |
+| A-13 | Super Admins and Division Admins **cannot read conversation content or file contents** by default. Break-glass access is a post-MVP, separately approved capability. | §15, §20 |
 | A-14 | Extracted document text is retained with the conversation after the binary expires, so long conversations keep working (flag `RETAIN_EXTRACTIONS=true`). Confirmed by Q-4 (closed, v1.2). | §12 |
-| A-15 | Authentication is **email + password with a server-backed, stateful session stored in PostgreSQL** (no OIDC/SSO in MVP; MFA is out of scope). Accounts are created by admins; there is no self-registration. `users.idp_subject` is kept (nullable) so OIDC can be re-attached later without a migration. | §6, §15, §17, §28 |
+| A-15 | Authentication is **email + password with a server-backed, stateful session stored in PostgreSQL** (no OIDC/SSO in MVP; MFA is out of scope). Accounts are created by Super Admins (any division/role) or Division Admins (strictly `user` role within assigned division); there is no self-registration. `users.idp_subject` is kept (nullable) so OIDC can be re-attached later without a migration. | §6, §15, §17, §20, §28 |
 | A-16 | Provider API keys are supplied through the **process environment / `.env` secret file** (never stored in the database, never in code or images). `providers.secret_ref` holds the **environment variable name**, not the key. Rotation is an operator action — update the env/secret file and restart the process (rolling restart; no code deploy). No secret manager in MVP. | §9, §15, §20, §24 |
 
 ---
@@ -128,8 +129,8 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 | Persona | Needs | Notes |
 |---|---|---|
 | **Employee (user)** | Chat with a chosen model, attach documents/images, see history, see own remaining quota | ~95 % of users; mostly non-technical |
-| **Division manager** *(P2 — view only via admin)* | See division consumption | In MVP handled by admins |
-| **Administrator** | Provision users, set quotas, enable/disable models, investigate errors/usage, review audit logs | 2–5 people; cannot read chat content (A-13) |
+| **Division administrator (admin)** | Manage user accounts within assigned division only (CRUD user, reset passwords, enable/disable) | Scoped strictly to assigned division (`division_id NOT NULL`); cannot access other divisions, models, providers, quotas, or platform settings |
+| **Super administrator (super_admin)** | System-wide control: provision divisions, set quotas, enable/disable models, configure providers, manage all users/admins, investigate errors/usage, review audit logs | 2–5 people; cannot read chat content (A-13) |
 | **Platform engineer** | Deploy, monitor, back up, rotate keys | Needs health checks, metrics, runbooks |
 
 ## 5. User Stories
@@ -146,30 +147,36 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 | US-8 | Employee | to click Send twice or have my network drop without duplicate answers or double charges | I'm not penalized for flaky connections | P0 |
 | US-9 | Employee | to retry a failed generation | one provider hiccup doesn't ruin my conversation | P0 |
 | US-10 | Employee | to download files and images the AI generated | I can use the output directly | P0 |
-| US-11 | Admin | to set quotas per user or per division | I can control spend | P0 |
-| US-12 | Admin | to disable a model or user instantly | I can respond to incidents/cost spikes | P0 |
-| US-13 | Admin | to see usage by user/model/provider/day | I can report and forecast | P0 |
-| US-14 | Admin | to see provider health and recent errors | I can diagnose problems quickly | P1 |
-| US-15 | Admin | to review who changed what | I can satisfy compliance | P0 |
+| US-11 | Super Admin | to set quotas per user, per division, or globally | I can control spend across the organization | P0 |
+| US-12 | Super Admin | to disable a model or user instantly across the platform | I can respond to incidents/cost spikes | P0 |
+| US-13 | Super Admin | to see usage by user/model/provider/day/division | I can report and forecast | P0 |
+| US-14 | Super Admin | to see provider health and recent errors | I can diagnose problems quickly | P1 |
+| US-15 | Super Admin | to review who changed what across the platform | I can satisfy compliance | P0 |
 | US-16 | Platform engineer | traceable request IDs and metrics | I can debug production | P0 |
 | US-17 | Employee | to toggle web search, web fetch, and cloud code/skills execution | I can access up-to-date facts and perform data calculations | P0 |
 | US-18 | Employee | to prompt the model to generate images and office documents (XLSX, DOCX, charts) | I can produce visual and tabular artifacts directly in chat | P0 |
+| US-19 | Division Admin | to create, list, view, and update user accounts within my assigned division | I can onboard and manage team members without waiting for super admins | P0 |
+| US-20 | Division Admin | to reset passwords and disable accounts for users in my division | I can resolve access issues and offboard departing team members quickly | P0 |
 
 ## 6. Functional Requirements
 
 ### 6.1 Authentication & users
 - **FR-AUTH-1 (P0)** Email + password authentication (locally managed credentials) with a **server-backed, stateful session stored in PostgreSQL**, delivered as an opaque `__Host-session` cookie. Passwords are hashed with **argon2id**.
-- **FR-AUTH-2 (P0)** Accounts are **provisioned by admins** (single create P0; CSV bulk import P1); the division is assigned by an admin. There is **no just-in-time provisioning and no self-registration**. The initial password is set by the admin and must be changed on first login.
-- **FR-AUTH-3 (P0)** Admin can disable a user; disabled users lose access on the next request and active sessions are revoked immediately.
-- **FR-AUTH-4 (P0)** Roles: `user`, `admin`.
+- **FR-AUTH-2 (P0)** Accounts are **provisioned by administrators** (single create P0; CSV bulk import P1). A `super_admin` can provision accounts with any role (`user`, `admin`, `super_admin`) and assign any division (or leave unassigned). A division `admin` can provision accounts with role `user` strictly within their own assigned division. There is **no just-in-time provisioning and no self-registration**. The initial password is set by the admin (or auto-generated) and must be changed on first login.
+- **FR-AUTH-3 (P0)** A `super_admin` can disable any user; a division `admin` can disable users strictly within their own division. Disabled users lose access on the next request and active sessions are revoked immediately.
+- **FR-AUTH-4 (P0)** Roles: `user`, `admin`, `super_admin`.
+  - `user`: standard employee; uses chat, attachments, history, quota self-view.
+  - `admin`: division administrator; strictly bound to an assigned division (`division_id NOT NULL`), restricted to CRUD user operations solely for users within that division. Cannot manage divisions, quotas, models, providers, settings, or audit logs, and cannot view or mutate users of other divisions.
+  - `super_admin`: system-wide administrator (revamped from former `admin` role); full administrative authority across all divisions, users, quotas, models, providers, system settings, and audit logs.
 - **FR-AUTH-5 (P0)** Password policy and protection: minimum length 12, argon2id hashing, per-account lockout after 8 consecutive failures (15 min) plus a per-IP limit on the login route (§15.4); failures return a generic error (no user enumeration) and are audited.
 - **FR-AUTH-6 (P0)** A signed-in user can change their own password; the change revokes all **other** sessions.
-- **FR-AUTH-7 (P0)** An admin can reset a user's password (reason required); the reset revokes **all** of the user's sessions, forces a change at next login, and is audited.
-- **FR-AUTH-8 (P0)** The first admin is created by a `bootstrap-admin` CLI/migration (one-time password, `must_change_password = true`); there is no break-glass path beyond this.
-- **FR-AUTH-9 (P1)** CSV bulk provisioning of users.
+- **FR-AUTH-7 (P0)** Password reset: A `super_admin` can reset any user's password; a division `admin` can reset passwords solely for users within their own division (reason required). The reset revokes **all** of the target user's sessions, forces a change at next login, and is audited.
+- **FR-AUTH-8 (P0)** The first super admin is created by a `bootstrap-admin` CLI/migration (`role = super_admin`, one-time password, `must_change_password = true`); there is no break-glass path beyond this.
+- **FR-AUTH-9 (P1)** CSV bulk provisioning of users (super admin across any division; division admin within own division).
+- **FR-AUTH-10 (P0)** Safeguards: The system prevents demoting or disabling the last active `super_admin`. Division admins cannot change their own division, escalate their own or others' roles, or access/modify accounts in other divisions.
 
 ### 6.2 Model & provider registry
-- **FR-MODEL-1 (P0)** Providers and models are rows, editable at runtime by admins (no deploy).
+- **FR-MODEL-1 (P0)** Providers and models are rows, editable at runtime by super admins (no deploy).
 - **FR-MODEL-2 (P0)** Each model declares capabilities: streaming, vision, document types, image generation, document generation, system prompt support, tools (reserved), context window, max output tokens.
 - **FR-MODEL-3 (P0)** Model states: `active`, `disabled`.
 - **FR-MODEL-4 (P1)** Model visibility per division (allow-list rules).
@@ -202,13 +209,15 @@ For users it should feel like a modern AI chat app: pick a model, chat, attach f
 - **FR-QUOTA-1 (P0)** Monthly token quota per user, resolved from user override → division policy → global default.
 - **FR-QUOTA-2 (P0)** Atomic reservation before provider call; settlement with actual usage; release on failure.
 - **FR-QUOTA-3 (P0)** Per-request max input / max output limits; optional concurrent-generation limit.
-- **FR-QUOTA-4 (P0)** Append-only usage ledger; admin adjustments are ledger entries.
-- **FR-QUOTA-5 (P0)** Users can view their quota and usage; admins can view everyone's.
+- **FR-QUOTA-4 (P0)** Append-only usage ledger; super admin adjustments are ledger entries.
+- **FR-QUOTA-5 (P0)** Users can view their quota and usage; super admins can view everyone's usage across all divisions.
 - **FR-QUOTA-6 (P2)** Provider- and model-specific token caps (schema-ready, §11.9).
 - **FR-QUOTA-7 (P0)** Token estimation uses the tokenizer designated for each provider: `tiktoken` for OpenAI-compatible adapters, a local port of `dhamaniasad/claude-tokenizer` for Anthropic, and the adapter's own local tokenizer/BPE heuristic (with safety margin) elsewhere. Estimation is offline by default and never blocks request intake on network I/O.
 
 ### 6.7 Admin
-See §20. Users, quotas, models, providers, usage analytics, provider health, errors, audit log.
+See §20. Two administrative roles:
+1. **Division Admin (`admin`):** Delegated user administration strictly within their assigned division (CRUD user in own division, password reset, account status).
+2. **Super Admin (`super_admin`):** System-wide administration: divisions, all users/admins, quota policies and adjustments, models, providers, provider health, usage reporting, system error explorer, audit logs, platform settings.
 
 ### 6.8 Operations
 - **FR-OPS-1 (P0)** Request IDs on every request/generation; structured logs; Prometheus metrics; health endpoints.
@@ -672,12 +681,12 @@ Max output is capped via the provider's `max_tokens`, so output cannot exceed re
 `quota_periods` is keyed by `(user_id, scope_type, scope_id, period_start)` with `scope_type ∈ {total, provider, model}`. MVP only creates `total`. To enable model caps later: reservation locks every applicable period row **in a fixed order** (total first, then provider, then model, to avoid deadlocks) and applies the same conditional `UPDATE` to each.
 
 ### 11.10 Usage ledger
-- `quota_ledger` is **append-only** (DB role has INSERT but no UPDATE/DELETE). Entry types: `reserve`, `settle`, `release`, `expire_release`, `adjust` (admin ±), `grant`, `period_open`.
-- Every entry stores `tokens` (signed delta semantic by type), `generation_id?`, `actor_user_id?` (admin adjustments), `reason`, balances after. Corrections are new entries, never edits.
+- `quota_ledger` is **append-only** (DB role has INSERT but no UPDATE/DELETE). Entry types: `reserve`, `settle`, `release`, `expire_release`, `adjust` (super admin ±), `grant`, `period_open`.
+- Every entry stores `tokens` (signed delta semantic by type), `generation_id?`, `actor_user_id?` (super admin adjustments), `reason`, balances after. Corrections are new entries, never edits.
 - **Nightly reconciliation job:** recompute `used`/`reserved`/`adjustment` per period from the ledger and compare to counters; any mismatch pages the on-call and writes an audit event.
 
 ### 11.11 Admin quota adjustment
-Admin endpoints (§16.9) can: change policy (division/user), grant extra tokens for the current period (`adjust +N`, reason required), or claw back (`adjust −N`). Never "reset used to zero" — use a compensating ledger entry so history stays truthful. Every action also writes `audit_logs`.
+Super admin endpoints (§16.9) can: change policy (global/division/user), grant extra tokens for the current period (`adjust +N`, reason required), or claw back (`adjust −N`). Never "reset used to zero" — use a compensating ledger entry so history stays truthful. Every action also writes `audit_logs`.
 
 ### 11.12 Idempotency & retries interplay
 `quota_reservations.generation_id` is unique and the generation is created under an idempotency key (§16.5), so a retried request returns the existing generation and cannot reserve twice. Provider-level retries (§19) reuse the same reservation.
@@ -686,7 +695,7 @@ Admin endpoints (§16.9) can: change policy (division/user), grant extra tokens 
 - **Source of truth:** `usage_records` (one per settled generation) + ledger.
 - **Rollups:** `usage_daily(date, user_id, division_id, provider_id, model_id, requests, failed_requests, input_tokens, output_tokens, quota_tokens, est_cost_micros)` maintained incrementally every 5 min and rebuilt for the previous day nightly (rollups are disposable and reproducible).
 - **Cost:** `cost_micros = tokens × price_at(created_at)` from `model_pricing` (effective-dated), stored at write time with `cost_source = 'estimated'` (platform price list) — "actual provider invoice" reconciliation is a manual/CSV import post-MVP.
-- Users see: remaining tokens, used this period, reset date (in the configured quota timezone — A-5), last-30-day daily usage. Admins see all dimensions in §20.
+- Users see: remaining tokens, used this period, reset date (in the configured quota timezone — A-5), last-30-day daily usage. Super admins see all dimensions in §20.
 
 > **Decision D-6 — Reserve worst case, settle actual**
 > - *Why:* Output length is unknowable in advance; checking "remaining ≥ 0" before the call allows concurrent overspend.
@@ -820,7 +829,7 @@ A crash between steps is repaired by the next run (step 2 is idempotent). A **we
 
 ### 12.9 Secure exposure
 - Clients never receive paths. API returns `downloadUrl: /api/files/{id}/content`.
-- `GET /files/:id/content` authenticates the session, checks `owner_user_id = caller` (admins **not** exempt, A-13), `status = ready`, not expired; streams with `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment` for everything except validated images (`inline`), and `Content-Security-Policy: sandbox; default-src 'none'`. Supports `Range` for large files.
+- `GET /files/:id/content` authenticates the session, checks `owner_user_id = caller` (super admins and division admins **not** exempt, A-13), `status = ready`, not expired; streams with `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment` for everything except validated images (`inline`), and `Content-Security-Policy: sandbox; default-src 'none'`. Supports `Range` for large files.
 - Access to files in a soft-deleted conversation → `404`.
 - `FileAccessService.getDownloadTarget()` returns `{kind:'stream'}` (local) or `{kind:'redirect', url}` (S3 signed URL, 60 s). Route code handles both, so the S3 migration doesn't alter the API contract.
 
@@ -990,26 +999,51 @@ No second job system is needed: the generation record **is** the job record.
 - Session: opaque random ID in a `__Host-session` cookie (`HttpOnly; Secure; SameSite=Lax; Path=/`), stored **server-side in PostgreSQL** (`sessions`, keyed by `sha256(cookie value)`) — idle timeout 8 h, absolute 24 h, **rotated on login and on password change**. Revocation = delete/mark row.
 - **Disabled/deleted users:** every request joins `sessions → users`; `status != 'active'` → `401` and the session is revoked (effective immediately, no cache).
 - **Account protection:** per-account lockout after 8 consecutive failures (15 min) plus a per-IP limit on the login route (§15.4). `login`, `logout`, `failed_login`, `password_change`, and admin `password_reset` are audit events.
-- **Provisioning:** admins create accounts (FR-AUTH-2); first login forces a password change via `must_change_password`. While that flag is set, every endpoint except `GET /me`, `POST /me/password`, and `DELETE /auth/session` returns `403 password_change_required`. No self-registration and no email delivery in MVP (self-service reset is P2).
-- **Bootstrap:** the first admin is created by a `bootstrap-admin` CLI/migration with a one-time password (FR-AUTH-8) — this replaces the break-glass question (Q-7, closed).
+- **Provisioning:** administrators create accounts (FR-AUTH-2). A `super_admin` can provision accounts for any role and any division; a division `admin` can provision accounts with role `user` strictly within their assigned division. First login forces a password change via `must_change_password`. While that flag is set, every endpoint except `GET /me`, `POST /me/password`, and `DELETE /auth/session` returns `403 password_change_required`. No self-registration and no email delivery in MVP (self-service reset is P2).
+- **Bootstrap:** the first super admin is created by a `bootstrap-admin` CLI/migration with a one-time password and `role = super_admin` (FR-AUTH-8) — this replaces the break-glass question (Q-7, closed).
 - **CSRF:** SameSite=Lax cookie **plus** a signed CSRF token. The SPA and API are served from **different subdomains of the same registrable site** (e.g. `app.corp.example` + `api.corp.example`), so the session cookie is still sent by the browser on same-site requests. `POST /auth/login` (and every session rotation) returns a `csrfToken` in the response body: `nonce . base64url(HMAC-SHA256(SESSION_SECRET, nonce + ":" + issuedAt))`, verified statelessly with a **12 h** max age. The SPA keeps it in memory and sends it as `X-CSRF-Token` on every non-GET `/api` request; the server also validates `Origin` against `ALLOWED_ORIGINS`. A missing/invalid token or origin → `403 forbidden`. `POST /auth/login` itself is the exception — it is validated by `Origin` alone, because it is the call that issues the token; the `SameSite=Lax` cookie and the strict origin allow-list bound the resulting login-CSRF risk.
 - **SSO/OIDC is P2** (extension point: `users.idp_subject`, retained nullable). MFA is out of MVP scope (Q-14, closed v1.2).
 
 ### 15.2 Authorization & RBAC
 
-| Capability | user | admin |
-|---|---|---|
-| Own conversations/files/usage | ✅ | ✅ (own) |
-| Other users' conversation content / files | ❌ | ❌ (A-13) |
-| View all usage, quotas, models, provider health | ❌ | ✅ |
-| View audit logs, system errors | ❌ | ✅ |
-| Manage users, quotas, models, providers | ❌ | ✅ |
+| Capability | user | admin (division) | super_admin |
+|---|---|---|---|
+| Own conversations, messages, files, quota usage | ✅ | ✅ (own) | ✅ (own) |
+| Other users' conversation content or file contents | ❌ (A-13) | ❌ (A-13) | ❌ (A-13) |
+| List / search users | ❌ | ✅ (own division only) | ✅ (all / any division) |
+| Create user (`role = 'user'`) | ❌ | ✅ (in own division only) | ✅ (any division) |
+| Create admin / super_admin | ❌ | ❌ | ✅ |
+| View user detail / profile | ❌ | ✅ (own division only) | ✅ (all) |
+| Update user `displayName`, `status` (`active`/`disabled`) | ❌ | ✅ (own division only) | ✅ (all) |
+| Update user `role` or `division_id` | ❌ | ❌ | ✅ |
+| Reset user password (`/admin/users/:id/password/reset`) | ❌ | ✅ (own division only) | ✅ (all) |
+| Manage divisions (`/admin/divisions`) | ❌ | ❌ | ✅ |
+| Manage quota policies & user quota adjustments | ❌ | ❌ | ✅ |
+| Manage models, providers, and pricing | ❌ | ❌ | ✅ |
+| View provider health, circuit state, and run tests | ❌ | ❌ | ✅ |
+| View aggregated usage analytics across all divisions | ❌ | ❌ | ✅ |
+| View system error explorer (`error_events`) | ❌ | ❌ | ✅ |
+| Search system-wide audit logs (`audit_logs`) | ❌ | ❌ | ✅ |
+| Manage platform system settings | ❌ | ❌ | ✅ |
 
-**Object-level authorization is structural:** repositories require an `AuthContext` and always filter on `user_id`; accessing another user's resource returns **404** (not 403) to avoid existence leaks. A lint/test asserts no repository method for user-owned entities is callable without an `AuthContext`.
+**Division-scoped authorization rules (`admin` role):**
+1. **Division binding:** A user with `role = 'admin'` must have `division_id IS NOT NULL` (enforced at both DB schema and application layer).
+2. **User CRUD isolation:** When a division admin interacts with `/api/admin/users*`:
+   - `GET /api/admin/users`: Query results are strictly filtered to `division_id = caller.division_id`. Any client-supplied `divisionId` filter that does not match the caller's division is rejected or overridden.
+   - `POST /api/admin/users`: The new user's `divisionId` is forced to `caller.division_id`. The requested `role` must be `'user'`; any attempt to set `admin` or `super_admin` returns `403 forbidden`.
+   - `GET /api/admin/users/:id` & `PATCH /api/admin/users/:id`: The target user is checked for `target.division_id === caller.division_id`. If the target user belongs to a different division (or has no division), the repository returns **404** (not 403) to prevent leaking account existence across divisions.
+   - `PATCH /api/admin/users/:id`: Division admins can only modify `displayName` and `status` (`active` | `disabled`). Attempts to supply `role` or `divisionId` return `403 forbidden`.
+   - `POST /api/admin/users/:id/password/reset`: Permitted only if `target.division_id === caller.division_id`; otherwise returns `404`.
+3. **Privilege escalation prevention:** Division admins cannot modify their own role, cannot reassign their own division, and cannot demote or disable themselves.
+4. **Super Admin privileges:** Callers with `role = 'super_admin'` have unrestricted platform-wide access. The system enforces **last-super-admin protection**: an update or deactivation that would leave zero active `super_admin` accounts is rejected with `409 conflict`.
+
+**Object-level authorization is structural:** repositories require an `AuthContext` and always filter on `user_id` (or `division_id` for division admin user queries); accessing another user's resource returns **404** (not 403) to avoid existence leaks. A lint/test asserts no repository method for user-owned entities is callable without an `AuthContext`.
 
 ### 15.3 Isolation
 - User isolation as above (conversations, messages, parts, files, generations, usage self-view).
-- Divisions affect *quota and model visibility only*, never data visibility.
+- Divisions serve two distinct purposes:
+  1. Quota policy resolution and model access visibility.
+  2. Administrative boundary for delegated division administrators (`admin`).
 - Org/workspace isolation: not applicable in single-tenant MVP (A-1); `organization_id` would be added to root tables with row-level security later.
 - Defense in depth: PostgreSQL **RLS** on `conversations/messages/message_parts/files` keyed on `current_setting('app.user_id')` is a **P1 hardening** step (set per transaction); application filters remain primary.
 
@@ -1110,19 +1144,23 @@ Zod schemas on every route (params, query, body, headers); reject unknown fields
 | | `GET /attachments/:id` | Status (processing/ready/…) | user |
 | | `DELETE /attachments/:id` | Delete unattached upload | user |
 | | `GET /files/:id/content` | Download/inline view | user (owner) |
-| **Admin – users** | `GET/POST /admin/users`, `GET/PATCH /admin/users/:id` | List, create/pre-provision, update role/division/status | admin |
-| | `POST /admin/users/:id/password/reset` | Reset a user's password (revokes all sessions; forces change) | admin |
-| | `GET/PUT /admin/divisions…` | Divisions | admin |
-| **Admin – quota** | `GET/PUT /admin/quota-policies/:scope/:id?` | Policy by `global`/`division`/`user` | admin |
-| | `POST /admin/users/:id/quota/adjustments` | Grant/claw back with reason | admin |
-| | `GET /admin/users/:id/quota` | Period state + ledger | admin |
-| **Admin – models** | `GET/POST /admin/providers`, `PATCH /admin/providers/:id` | Provider config including `secretRef` (the env var name; the key itself is never accepted or returned — A-16) | admin |
-| | `GET/POST /admin/models`, `PATCH /admin/models/:id` | Registry, capabilities, status, pricing | admin |
-| | `GET /admin/providers/health` | Latest health + circuit state | admin |
-| | `POST /admin/providers/:id/test` | Run health check now | admin |
-| **Admin – reporting** | `GET /admin/usage?from&to&groupBy=user\|model\|provider\|day\|month\|division` | Aggregated usage | admin |
-| | `GET /admin/errors?from&to&category` | Sanitized system errors | admin |
-| | `GET /admin/audit-logs?…` | Audit log search | admin |
+| **Admin – users** | `GET /admin/users` | List/search users (`admin` scoped to own division; `super_admin` all) | admin, super_admin |
+| | `POST /admin/users` | Create/pre-provision user (`admin` in own division with `role=user`; `super_admin` any role/division) | admin, super_admin |
+| | `GET /admin/users/:id` | Detail (`admin` own division only; `super_admin` any) | admin, super_admin |
+| | `PATCH /admin/users/:id` | Update profile / status (`admin` displayName/status in own division; `super_admin` role/division/status/profile) | admin, super_admin |
+| | `POST /admin/users/:id/password/reset` | Reset a user's password (`admin` own division only; `super_admin` any) | admin, super_admin |
+| **Admin – divisions** | `GET/POST /admin/divisions`, `PATCH /admin/divisions/:id` | Manage divisions | super_admin |
+| **Admin – quota** | `GET/PUT /admin/quota-policies/:scope/:id?` | Policy by `global`/`division`/`user` | super_admin |
+| | `POST /admin/users/:id/quota/adjustments` | Grant/claw back with reason | super_admin |
+| | `GET /admin/users/:id/quota` | Period state + ledger | super_admin |
+| **Admin – models** | `GET/POST /admin/providers`, `PATCH /admin/providers/:id` | Provider config including `secretRef` (the env var name; the key itself is never accepted or returned — A-16) | super_admin |
+| | `GET/POST /admin/models`, `PATCH /admin/models/:id` | Registry, capabilities, status, pricing | super_admin |
+| | `GET /admin/providers/health` | Latest health + circuit state | super_admin |
+| | `POST /admin/providers/:id/test` | Run health check now | super_admin |
+| **Admin – reporting** | `GET /admin/usage?from&to&groupBy=user\|model\|provider\|day\|month\|division` | Aggregated usage | super_admin |
+| | `GET /admin/errors?from&to&category` | Sanitized system errors | super_admin |
+| | `GET /admin/audit-logs?…` | Audit log search | super_admin |
+| **Admin – settings** | `GET/PUT /admin/system-settings/:key` | Platform system settings | super_admin |
 | **Ops** | `GET /healthz`, `GET /readyz`, `GET /metrics` | Liveness, readiness, Prometheus (network-restricted) | internal |
 
 ### 16.3 Models
@@ -1240,7 +1278,7 @@ data: {"finishReason":"stop","usage":{"inputTokens":18250,"outputTokens":1190,"q
 ```
 Per-file failures are reported per item (`status:"rejected", error:{code:"unsupported_file_type"}`) with overall `207`-style semantics expressed in the body (HTTP `201` if at least one accepted, `4xx` if all failed).
 
-### 16.9 Quota & usage (user and admin)
+### 16.9 Quota & usage (user and super admin)
 
 `GET /api/me/quota`
 ```json
@@ -1254,12 +1292,13 @@ Per-file failures are reported per item (`status:"rejected", error:{code:"unsupp
 { "monthlyTokens": 1000000, "maxInputTokensPerRequest": 150000, "maxOutputTokensPerRequest": 16000,
   "maxConcurrentGenerations": 3, "applyToCurrentPeriod": true, "reason": "Legal team pilot" }
 ```
-Fields set to `null` inherit from division/global.
+Fields set to `null` inherit from division/global. Requires `role = 'super_admin'`.
 
 `POST /api/admin/users/:id/quota/adjustments`
 ```json
 { "tokens": 200000, "reason": "Incident follow-up", "expiresAtPeriodEnd": true }
 ```
+Requires `role = 'super_admin'`.
 
 `GET /api/admin/usage?from=2026-10-01&to=2026-10-08&groupBy=model` →
 ```json
@@ -1267,8 +1306,9 @@ Fields set to `null` inherit from division/global.
               "requests":1523,"failedRequests":12,"inputTokens":8123412,"outputTokens":912331,
               "quotaTokens":9035743,"estimatedCostUsd":41.27,"usageSource":{"provider":0.998,"estimated":0.002} } ] }
 ```
+Requires `role = 'super_admin'`.
 
-### 16.10 Admin: models/providers
+### 16.10 Super Admin: models/providers
 
 `PATCH /api/admin/models/:id`
 ```json
@@ -1276,7 +1316,7 @@ Fields set to `null` inherit from division/global.
   "capabilities": { "vision": true, "documents": { "pdf": true }, "contextWindow": 200000, "maxOutputTokens": 8192 },
   "defaultMaxOutputTokens": 4096, "quotaWeight": 1.0 }
 ```
-Every admin mutation returns the updated resource and writes `audit_logs`.
+Requires `role = 'super_admin'`. Every admin mutation returns the updated resource and writes `audit_logs`.
 
 ## 17. PostgreSQL Data Model
 
@@ -1315,11 +1355,12 @@ CREATE TABLE users (
   must_change_password boolean NOT NULL DEFAULT true,
   failed_login_attempts int NOT NULL DEFAULT 0,
   locked_until timestamptz,
-  role text NOT NULL DEFAULT 'user' CHECK (role IN ('user','admin')),
+  role text NOT NULL DEFAULT 'user' CHECK (role IN ('user','admin','super_admin')),
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   division_id uuid REFERENCES divisions(id),
   created_at timestamptz NOT NULL DEFAULT now(),
-  last_login_at timestamptz
+  last_login_at timestamptz,
+  CONSTRAINT users_admin_division_check CHECK (role <> 'admin' OR division_id IS NOT NULL)
 );
 
 CREATE TABLE sessions (
@@ -1715,22 +1756,40 @@ Subscriber removed → detach timer (60 s) → continue or cancel. Reconnect wit
 
 ## 20. Admin Requirements
 
-### 20.1 Capabilities (MVP = backend API + minimal UI; UI may be a thin SPA section)
+### 20.1 Administrative roles & capabilities (MVP = backend API + minimal UI; UI may be a thin SPA section)
 
-| Area | Admin can… | Pri |
-|---|---|---|
-| Users | List/search; view role, division, status, last login; create/pre-provision; change role/division; **reset password** (revokes all sessions, forces change); **enable/disable** (revokes sessions) | P0 |
-| Divisions | Create/rename; assign users to a division (no IdP group mapping in MVP) | P0 |
-| Quotas | Set global/division/user policies; grant/claw back with reason; view current period & ledger; set reset date (on specific day/date) | P0 |
-| Models | Create/edit registry rows; enable/disable (global/divisions); edit capabilities, context window, max output, quota weight, pricing, provider-specific config | P0 |
-| Providers | Create/edit; set `secretRef` (the env var name; the key itself is configured in the deployment environment — A-16); enable/disable; set concurrency/timeouts; run health check | P0 |
-| Provider health | See last health-check result, latency, error rate (5/60 min), circuit state; run test | P1 |
-| Usage | Dashboards/queries below | P0 |
-| Errors | List sanitized `error_events` by category/provider/model/time | P1 |
-| Audit | Search `audit_logs` (admin) | P0 |
-| Settings | Edit platform system prompt, file limits, retention values (versioned, audited) | P1 |
+The platform implements a **two-tier administrative model**:
+1. **Super Administrator (`super_admin`):** Full, system-wide governance over all platform resources, divisions, models, providers, quotas, audit logs, and user accounts.
+2. **Division Administrator (`admin`):** Scoped administrator bound to a specific division (`division_id NOT NULL`), restricted to CRUD user operations strictly for employees within their assigned division.
 
-Safeguards: cannot disable/demote the last active admin; admins cannot access others' conversation/file content (A-13); every mutation is audited with before/after; destructive actions require a `reason`.
+| Area | Scope & capabilities | Division Admin (`admin`) | Super Admin (`super_admin`) | Pri |
+|---|---|---|---|---|
+| **Users (own division)** | List/search users within caller's division | ✅ (own division only) | ✅ (all / any division) | P0 |
+| | Create/provision user with `role = 'user'` in division | ✅ (own division only) | ✅ (any division) | P0 |
+| | View user detail, update `displayName` and `status` (`active`/`disabled`) | ✅ (own division only) | ✅ (all) | P0 |
+| | **Reset password** (revokes all sessions, forces change on next login) | ✅ (own division only) | ✅ (all) | P0 |
+| **Users (platform-wide)** | Manage users across all divisions or unassigned | ❌ | ✅ | P0 |
+| | Assign or change user `role` (`user`, `admin`, `super_admin`) | ❌ | ✅ | P0 |
+| | Assign or change user `division_id` | ❌ | ✅ | P0 |
+| **Divisions** | Create/rename divisions; assign external references | ❌ | ✅ | P0 |
+| **Quotas** | Set global, division, or user policies; grant/claw back quota with reason; view ledger | ❌ | ✅ | P0 |
+| **Models** | Create/edit registry rows; enable/disable; edit capabilities, limits, pricing, config | ❌ | ✅ | P0 |
+| **Providers** | Create/edit; set `secretRef` (env var name — A-16); enable/disable; set concurrency/timeouts | ❌ | ✅ | P0 |
+| **Provider health** | View health checks, latency, error rate, circuit state; execute on-demand test | ❌ | ✅ | P1 |
+| **Usage** | Aggregated usage analytics across users, divisions, models, providers | ❌ | ✅ | P0 |
+| **Errors** | View sanitized system `error_events` across all providers and components | ❌ | ✅ | P1 |
+| **Audit** | Search platform-wide `audit_logs` | ❌ | ✅ | P0 |
+| **Settings** | Edit system prompt, file limits, retention windows, `quota.timezone` (versioned) | ❌ | ✅ | P1 |
+
+**Safeguards & privilege boundaries:**
+- **Last super admin protection:** The system strictly blocks disabling, demoting, or soft-deleting the last active `super_admin` (`409 conflict`).
+- **Division admin isolation:**
+  - A user with `role = 'admin'` must have `division_id IS NOT NULL` (enforced by DB check constraint `users_admin_division_check`).
+  - Division admins cannot view, create, edit, or reset passwords for users in other divisions or unassigned users; attempting to access a user outside the caller's division returns **404** (not 403, preventing account existence discovery).
+  - Division admins cannot escalate their own or others' roles, cannot modify user roles, and cannot reassign user divisions.
+  - Division admins cannot access division management, quota policies, model/provider registry, usage reporting, system error explorer, audit logs, or platform settings (`403 forbidden`).
+- **Content privacy:** Neither super admins nor division admins can access conversation contents or file contents (A-13).
+- **Auditability:** Every administrative mutation produces an `audit_logs` entry in the same transaction with before/after snapshots (secrets redacted); destructive actions require an operational `reason`.
 
 ### 20.2 Usage analytics (from `usage_records` / `usage_daily`)
 - **Dimensions:** user, division, model, provider, day, month, outcome.
@@ -1841,7 +1900,7 @@ Vitest (unit/integration), Testcontainers for real PostgreSQL (and Redis if used
 | Streaming | SSE | Ordering, replay from `Last-Event-ID`, snapshot fallback, heartbeats, backpressure | PR |
 | File upload | Multipart | Size/count limits, spoofed MIME, polyglot, zip bomb, macro docx, encrypted PDF, huge image, traversal names | PR |
 | Security | Negative tests | IDOR on every ID route, CSRF, CORS, header presence, secret-/password-leak scan of responses/logs, rate limits, login lockout, password hashing round-trip, session rotation & revocation | PR + pre-release pentest |
-| Auth & sessions | Integration + API | Login success/failure (generic error), lockout after N failures, session rotation on login and password change, disabled-user immediate revocation, admin reset revokes all sessions, `must_change_password` gate | PR |
+| Auth & sessions | Integration + API | Login success/failure (generic error), lockout after N failures, session rotation on login and password change, disabled-user immediate revocation, admin/super admin reset revokes all sessions, division-scoped admin isolation (cross-division 404), last-super-admin protection, `must_change_password` gate | PR |
 | Idempotency | Duplicate requests | See §23.4 | PR |
 | Load | k6 | 150 concurrent SSE streams on `FakeProvider`; 20 uploads/s; sustained 30 min | Pre-release |
 | E2E | Browser | Login → select model → chat → attach → stream → reload → quota display | Pre-release |
@@ -1933,11 +1992,11 @@ dev/staging/prod; CI: lint (incl. provider-import rule), typecheck, unit/integra
 - [ ] Log redaction verified (keys, passwords, cookies, content off)
 
 **Authentication & authorization**
-- [ ] Disabled-user immediate lockout tested · session revocation on disable and on password reset tested · `must_change_password` gate tested · admin-only routes enforced · last-admin protection
-- [ ] Bootstrap-admin procedure documented and rehearsed on a fresh database
+- [ ] Disabled-user immediate lockout tested · session revocation on disable and on password reset tested · `must_change_password` gate tested · super-admin vs division-admin RBAC routes enforced · division admin cross-division isolation (404 on access, forbidden on role/division modification) · last-super-admin protection
+- [ ] Bootstrap-admin procedure (`role = super_admin`) documented and rehearsed on a fresh database
 
 **Database & data**
-- [ ] Migrations tested forward on production-size snapshot; rollback/N-1 compatibility verified
+- [ ] Migrations tested forward on production-size snapshot; rollback/N-1 compatibility verified; `users_admin_division_check` constraint verified
 - [ ] Append-only grants on `quota_ledger`/`audit_logs` confirmed
 - [ ] Indexes verified with `EXPLAIN` on top queries; autovacuum settings applied
 - [ ] **Backups running; PITR tested; full restore drill passed (RTO ≤ 1 h, RPO ≤ 5 min)**
@@ -1946,12 +2005,12 @@ dev/staging/prod; CI: lint (incl. provider-import rule), typecheck, unit/integra
 **Files & storage**
 - [ ] Upload hardening tests (zip bomb, macro, spoofed MIME, encrypted PDF) pass
 - [ ] Cleanup job running; orphan/missing-blob reconciliation verified; disk alerts set
-- [ ] Download authorization & headers verified; extraction sandbox limits enforced
+- [ ] Download authorization & headers verified (no admin/super admin exemption, A-13); extraction sandbox limits enforced
 
 **Quota accuracy**
 - [ ] Concurrency/property tests green in CI · nightly reconciliation = 0 mismatches for 14 days in staging
 - [ ] Reaper recovers crashed generations (kill -9 test) · overshoot ratio within budget
-- [ ] Admin adjustments produce ledger + audit rows
+- [ ] Super admin quota adjustments produce ledger + audit rows
 
 **Provider reliability**
 - [ ] Contract tests green for each adapter; live smoke test per provider
@@ -1982,7 +2041,7 @@ dev/staging/prod; CI: lint (incl. provider-import rule), typecheck, unit/integra
 ## 26. MVP vs Future Scope
 
 ### 26.1 Must Have for MVP (P0)
-Authentication (email/password + PostgreSQL sessions, lockout, admin provisioning & password reset) · user management (roles, divisions, enable/disable) · model registry + selection · **one model per conversation** (DB-enforced) · multi-provider abstraction (≥ 2 adapters live, third proves the abstraction) · text chat · SSE streaming with cancel/reconnect · conversation persistence · token quota (reserve/settle/release, ledger, monthly periods) · usage tracking & admin usage views · image upload · document upload (PDF, DOCX, XLSX, CSV, TXT, MD) · multimodal message-part model · multimodal **response persistence** (text, images, and binary generated files) · **toggleable built-in provider tools** (web search, web fetch, provider cloud code execution, built-in skills) · **image and document generation** (ArtifactSink download and persistence) · temporary local storage with TTL cleanup · idempotent send · retry of failed generations · basic security (RBAC, rate limiting, validation, headers, audit) · basic observability (logs, metrics, health) · production runbook basics.
+Authentication (email/password + PostgreSQL sessions, lockout, super admin & division-scoped admin provisioning & password reset) · user management (roles: user, admin, super_admin; divisions, enable/disable, last-super-admin protection) · model registry + selection · **one model per conversation** (DB-enforced) · multi-provider abstraction (≥ 2 adapters live, third proves the abstraction) · text chat · SSE streaming with cancel/reconnect · conversation persistence · token quota (reserve/settle/release, ledger, monthly periods) · usage tracking & super admin usage views · image upload · document upload (PDF, DOCX, XLSX, CSV, TXT, MD) · multimodal message-part model · multimodal **response persistence** (text, images, and binary generated files) · **toggleable built-in provider tools** (web search, web fetch, provider cloud code execution, built-in skills) · **image and document generation** (ArtifactSink download and persistence) · temporary local storage with TTL cleanup · idempotent send · retry of failed generations · basic security (two-tier administrative RBAC, rate limiting, validation, headers, audit) · basic observability (logs, metrics, health) · production runbook basics.
 
 ### 26.2 Should have (P1, cut first)
 Model visibility per division · circuit breaker · provider health page · error explorer · CSV exports · RLS hardening · AV scanning · editable settings UI · provider-specific token caps.
@@ -2023,7 +2082,7 @@ Model visibility per division · circuit breaker · provider health page · erro
 | R11 | Long-running streams exhaust connections/memory | Medium | Medium | Per-node cap, backpressure, no DB connection per stream, load tests |
 | R12 | Misconfigured proxy buffers SSE | Medium | Medium | Documented settings, readiness e2e check in staging |
 | R13 | Cost spikes from big contexts | Medium | Medium | Max input/output limits, quota weights, provider spend caps, usage alerts |
-| R14 | Admin abuse/insider risk | Low | High | RBAC, no content access, immutable audit, last-admin protection |
+| R14 | Admin abuse/insider risk | Low | High | Two-tier administrative RBAC, division admin isolation, no content access (A-13), immutable audit, last-super-admin protection |
 | R15 | Scope creep toward agents/RAG | Medium | Medium | Explicit non-goals, guardrail in §26.3 |
 | R16 | Provider API key leak (`.env`/secret file, logs, repo, or a compromised host) | Medium | High | Keys only in env/secret files (`0600`, not in VCS/images/DB backups), Pino redaction + CI secret scanning, egress allow-list, provider-console spend caps, documented rotate-and-restart runbook, separate keys per environment |
 | R17 | Password attacks (credential stuffing, spraying) and account takeover; no MFA | Medium | High | argon2id hashing, per-account lockout + per-IP login limit, generic errors (no enumeration), full audit of login failures, admin reset revokes sessions; MFA out of MVP (Q-14, closed v1.2) |
@@ -2043,25 +2102,25 @@ Model visibility per division · circuit breaker · provider health page · erro
 | Q-4 | ~~Should extracted document text persist after the file expires?~~ **Closed (v1.2)** — yes; extracted text is retained with the conversation after the binary expires (`RETAIN_EXTRACTIONS=true`, A-14). | Closed | Security / Product |
 | Q-5 | ~~Quota semantics: raw tokens vs weighted by model price? Rollover? Warning thresholds (e.g., 80 %)?~~ **Closed (v1.2)** — weighted via `quota_weight` (default 1); no rollover; default limit 500,000 tokens/user/month; warning thresholds/notifications are P2. | Closed | Product / Finance |
 | Q-6 | ~~Required message/conversation retention and legal hold needs?~~ **Closed (v1.2)** — the A-7 retention defaults apply; no legal hold in MVP. | Closed | Legal |
-| Q-7 | ~~Break-glass local admin if IdP is down?~~ **Closed (v1.1)** — no IdP; the first admin is created by the `bootstrap-admin` CLI/migration (FR-AUTH-8). | Closed | Security |
+| Q-7 | ~~Break-glass local admin if IdP is down?~~ **Closed (v1.1)** — no IdP; the first super admin is created by the `bootstrap-admin` CLI/migration with `role = super_admin` (FR-AUTH-8). | Closed | Security |
 | Q-8 | ~~Secret manager available (Vault/cloud)? If not, accept envelope-encrypted provider keys in DB?~~ **Closed (v1.1)** — provider keys come from the process environment/`.env` (A-16); no secret manager and no DB storage; rotation = update env + restart. | Closed | Platform |
 | Q-9 | ~~Quota period timezone?~~ **Closed (v1.1)** — configurable, default **UTC+7 (`Asia/Jakarta`)**. | Closed | Product |
-| Q-10 | ~~Do admins ever need content access (investigations)? Approval process?~~ **Closed (v1.2)** — no; admins never receive content access, including for investigations (A-13). | Closed | Security |
-| Q-11 | ~~Initial model list and per-model prices for cost estimates?~~ **Closed (v1.2)** — first adapters OpenAI + Anthropic, Gemini third (Phase 4); the model list/prices are entered by an admin at launch. | Closed | Product |
+| Q-10 | ~~Do admins ever need content access (investigations)? Approval process?~~ **Closed (v1.2)** — no; neither super admins nor division admins ever receive content access, including for investigations (A-13). | Closed | Security |
+| Q-11 | ~~Initial model list and per-model prices for cost estimates?~~ **Closed (v1.2)** — first adapters OpenAI + Anthropic, Gemini third (Phase 4); the model list/prices are entered by a super admin at launch. | Closed | Product |
 | Q-12 | ~~Is single-region, single-node acceptable for the availability target (99.5 %)?~~ **Closed (v1.2)** — yes; one active node plus a standby for rolling deploys (A-4). | Closed | Platform |
 | Q-13 | ~~Language/localization of server-side error messages?~~ **Closed (v1.2)** — English human-readable messages plus stable machine-readable error codes. | Closed | Product |
-| Q-14 | ~~Is MFA (TOTP) required for admins, or any user, by policy?~~ **Closed (v1.2)** — not in MVP (email + password only); admin MFA is the first candidate if policy later requires it. | Closed | Security / Product |
+| Q-14 | ~~Is MFA (TOTP) required for admins, or any user, by policy?~~ **Closed (v1.2)** — not in MVP (email + password only); admin/super_admin MFA is the first candidate if policy later requires it. | Closed | Security / Product |
 
 ## 29. Recommended Implementation Phases
 
 | Phase | Duration (est., 3–4 engineers) | Deliverables | Exit criteria |
 |---|---|---|---|
-| **0 — Foundations** | 1–1.5 wks | Repo, CI, config validation, DB migrations baseline, Hono skeleton, request IDs, error envelope, logging/metrics, **email/password auth (argon2id, lockout, PostgreSQL sessions), bootstrap-admin CLI, admin user provisioning + password reset**, RBAC, audit writer, FakeProvider | Auth + RBAC tests green; deploy to staging |
-| **1 — Registry & conversations** | 1.5 wks | Providers/models registry + admin APIs, conversations/messages/parts schema, model-lock trigger, list/load APIs, context builder (text), system settings | Create conversation with model; history loads; model immutability enforced |
+| **0 — Foundations** | 1–1.5 wks | Repo, CI, config validation, DB migrations baseline (including `users_admin_division_check`), Hono skeleton, request IDs, error envelope, logging/metrics, **email/password auth (argon2id, lockout, PostgreSQL sessions), bootstrap-admin CLI (super_admin), two-tier user administration (super admin platform-wide, division-scoped admin with cross-division 404 isolation), password reset, last-super-admin protection**, RBAC, audit writer, FakeProvider | Auth + RBAC tests green; deploy to staging |
+| **1 — Registry & conversations** | 1.5 wks | Providers/models registry + super admin APIs, conversations/messages/parts schema, model-lock trigger, list/load APIs, context builder (text), system settings | Create conversation with model; history loads; model immutability enforced |
 | **2 — Generation core** | 2 wks | Orchestrator/runner, adapter interface, **2 adapters** (OpenAI + Anthropic), SSE stream, checkpointing, finalizer, cancel, reaper, idempotent send, retry/timeouts, error translation, contract suite | Streaming works E2E; kill -9 recovery; contract tests green |
-| **3 — Quota & usage** | 2 wks | Policies, periods, reservation/settlement/release, ledger, reaper, estimation + per-provider tokenizer (`tiktoken` / `claude-tokenizer` port) + margins, usage records/rollups, `/me/quota`, admin quota APIs, reconciliation | Concurrency/property tests green; 14-day staging reconciliation clean (starts here, finishes in Phase 5) |
+| **3 — Quota & usage** | 2 wks | Policies, periods, reservation/settlement/release, ledger, reaper, estimation + per-provider tokenizer (`tiktoken` / `claude-tokenizer` port) + margins, usage records/rollups, `/me/quota`, super admin quota APIs, reconciliation | Concurrency/property tests green; 14-day staging reconciliation clean (starts here, finishes in Phase 5) |
 | **4 — Files & multimodal** | 2 wks | StorageProvider + Local impl, upload pipeline + hardening, extraction jobs, multimodal context/adapters, download endpoint, cleanup jobs, generated-artifact path (ArtifactSink tested with FakeProvider), **third adapter (Gemini)** | Upload/attach/answer flows work for MVP types; hardening tests green; third adapter needed zero core changes |
-| **5 — Admin, observability, hardening** | 1.5–2 wks | Admin usage/health/errors/audit APIs, dashboards + alerts, rate limiting, security headers/CORS, pen-test fixes, load/soak tests, runbooks, backup/restore drill | Production readiness checklist (§25) fully checked |
+| **5 — Admin, observability, hardening** | 1.5–2 wks | Super admin usage/health/errors/audit APIs, division admin & super admin permission verification, dashboards + alerts, rate limiting, security headers/CORS, pen-test fixes, load/soak tests, runbooks, backup/restore drill | Production readiness checklist (§25) fully checked |
 | **6 — Pilot & launch** | 2 wks | Pilot with one division, calibrate estimation margins & tokenizer per provider, tune limits, fix issues, go-live | SLOs met 2 weeks; no P1 defects |
 | **Post-MVP** | — | P1 items, S3 migration, multi-node streaming, then P2 features (§26.3) | — |
 

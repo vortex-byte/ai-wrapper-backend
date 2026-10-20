@@ -110,6 +110,16 @@ export interface ConversationRepository {
     tx?: TransactionContext,
   ): Promise<void>;
 
+  /**
+   * Attaches a stored binary to a part and marks it complete — the ArtifactSink's final step
+   * (persist-before-expose: the `file_id` only exists once the bytes are safely in storage).
+   */
+  attachPartFile(
+    partId: string,
+    fileId: string,
+    tx?: TransactionContext,
+  ): Promise<void>;
+
   appendPartText(
     partId: string,
     chunk: string,

@@ -51,7 +51,7 @@ describe('Finalizer', () => {
         transitionCalls++;
         return true;
       },
-      findById: async (id) => createDummyRecord(id),
+      findById: async (id: string) => createDummyRecord(id),
     };
 
     const dummyMessageWithParts: MessageWithParts = {
@@ -133,7 +133,7 @@ describe('Finalizer', () => {
 
     const mockGenerations: Partial<GenerationRepository> = {
       transitionToTerminal: async () => true,
-      findById: async (id) => createDummyRecord(id),
+      findById: async (id: string) => createDummyRecord(id),
     };
 
     const dummyMessageWithParts: MessageWithParts = {
@@ -234,7 +234,7 @@ describe('Finalizer', () => {
     const mockGenerations: Partial<GenerationRepository> = {
       transitionToTerminal: async () => true,
       // startedAt !== null indicates tokens were consumed and must be settled.
-      findById: async (id) => createDummyRecord(id),
+      findById: async (id: string) => createDummyRecord(id),
     };
 
     const mockConversations: Partial<ConversationRepository> = {
@@ -324,7 +324,7 @@ describe('Finalizer', () => {
 
     const mockGenerations: Partial<GenerationRepository> = {
       transitionToTerminal: async () => true,
-      findById: async (id) => createDummyRecord(id),
+      findById: async (id: string) => createDummyRecord(id),
     };
 
     const mockConversations: Partial<ConversationRepository> = {
@@ -377,7 +377,7 @@ describe('Finalizer', () => {
 
     const mockGenerations: Partial<GenerationRepository> = {
       transitionToTerminal: async () => true,
-      findById: async (id) => createDummyRecord(id),
+      findById: async (id: string) => createDummyRecord(id),
     };
 
     const mockConversations: Partial<ConversationRepository> = {
@@ -409,5 +409,89 @@ describe('Finalizer', () => {
     expect(inserted[0]?.[0]?.id).toBe('fallback-part-1');
     expect(inserted[0]?.[0]?.textContent).toBe('Recovered text');
     expect(inserted[0]?.[0]?.status).toBe('complete');
+  });
+});
+
+describe('Finalizer — non-text part reconciliation', () => {
+  function part(overrides: Partial<MessagePart>): MessagePart {
+    return {
+      id: 'part',
+      messageId: 'm-assistant',
+      position: 0,
+      type: 'text',
+      status: 'streaming',
+      textContent: null,
+      data: {},
+      fileId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...overrides,
+    };
+  }
+
+  async function run(
+    status: 'completed' | 'cancelled' | 'failed',
+    parts: MessagePart[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const updates = new Map<string, Record<string, unknown>>();
+    const finalizer = new Finalizer({
+      generations: {
+        transitionToTerminal: async () => true,
+        findById: async (id: string) => createDummyRecord(id),
+      } as unknown as GenerationRepository,
+      conversations: {
+        updateMessage: async () => {},
+        findMessageForUser: async () => ({
+          message: {
+            id: 'm-assistant',
+            conversationId: 'c-1',
+            seq: 2,
+            role: 'assistant',
+            status: 'streaming',
+            finishReason: null,
+            supersededBy: null,
+            metadata: {},
+            createdAt: new Date(),
+            completedAt: null,
+          },
+          parts,
+        }),
+        updatePart: async (id: string, update: Record<string, unknown>) => {
+          updates.set(id, update as Record<string, unknown>);
+        },
+      } as unknown as ConversationRepository,
+      quota: { settleOrRelease: async () => {} } as unknown as QuotaPort,
+      errorEvents: { record: async () => {} } as unknown as ErrorEventWriter,
+      clock: { now: () => new Date('2026-10-12T12:00:00Z') },
+    });
+
+    await finalizer.finalize({
+      generationId: 'gen-1',
+      status,
+      finishReason: status === 'completed' ? 'stop' : 'error',
+      accumulatedText: 'text',
+    });
+    return updates;
+  }
+
+  it('completes a file part that got its bytes and fails one that never did', async () => {
+    const updates = await run('completed', [
+      part({ id: 'text-1' }),
+      part({ id: 'image-1', type: 'image', position: 1, fileId: 'att-1' }),
+      part({ id: 'file-1', type: 'generated_file', position: 2, fileId: null }),
+    ]);
+
+    expect(updates.get('text-1')?.['status']).toBe('complete');
+    expect(updates.get('image-1')?.['status']).toBe('complete');
+    expect(updates.get('file-1')?.['status']).toBe('failed');
+  });
+
+  it('reconciles streaming non-text parts on cancel as well', async () => {
+    const updates = await run('cancelled', [
+      part({ id: 'text-1' }),
+      part({ id: 'file-1', type: 'generated_file', position: 1, fileId: null }),
+    ]);
+
+    expect(updates.get('file-1')?.['status']).toBe('failed');
   });
 });

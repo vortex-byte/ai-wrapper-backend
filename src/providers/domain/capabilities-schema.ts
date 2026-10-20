@@ -70,7 +70,6 @@ const EmptyObject = z.record(z.string(), z.unknown());
 export const ProviderConfigSchema = EmptyObject;
 export const ModelConfigSchema = EmptyObject;
 
-/** Parse a stored capabilities blob into a normalized `ModelCapabilities`. */
 export function parseCapabilities(value: unknown): ModelCapabilities {
   const parsed = ModelCapabilitiesSchema.parse(value ?? {});
   return {
@@ -96,7 +95,6 @@ export function parseConfig(value: unknown): Readonly<Record<string, unknown>> {
   return ProviderConfigSchema.parse(value ?? {});
 }
 
-/** Assemble the exact JSONB payload persisted for a model's capabilities blob. */
 export function toCapabilitiesJson(capabilities: ModelCapabilities): Record<string, unknown> {
   return { schemaVersion: CAPABILITIES_SCHEMA_VERSION, ...capabilities };
 }

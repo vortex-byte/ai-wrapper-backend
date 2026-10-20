@@ -1,7 +1,6 @@
 import type { SSEFrame } from './events.ts';
 
 export interface SubscriberOptions {
-  /** Maximum bytes permitted in subscriber queue before backpressure kick (default: 1 MB). */
   readonly maxQueueBytes?: number | undefined;
   readonly onKick?: ((subscriberId: string, reason: string) => void) | undefined;
   readonly onDisconnect?: ((subscriberId: string) => void) | undefined;
@@ -10,9 +9,8 @@ export interface SubscriberOptions {
 const DEFAULT_MAX_QUEUE_BYTES = 1024 * 1024;
 
 /**
- * A single connected SSE stream subscriber with a bounded queue.
- * Provides an AsyncIterable interface for streaming directly to HTTP clients.
- * Kicks the subscriber if backpressure exceeds `maxQueueBytes` (1 MB) to protect node memory.
+ * One connected SSE stream, exposed as an `AsyncIterable`. Kicks the subscriber when backpressure
+ * exceeds `maxQueueBytes` so a slow client cannot grow node memory.
  */
 export class Subscriber implements AsyncIterable<SSEFrame> {
   readonly id: string;
@@ -32,10 +30,6 @@ export class Subscriber implements AsyncIterable<SSEFrame> {
     this.onDisconnect = options.onDisconnect;
   }
 
-  /**
-   * Enqueues a frame for this subscriber.
-   * If queue exceeds `maxQueueBytes`, kicks the subscriber due to backpressure.
-   */
   push(frame: SSEFrame): boolean {
     if (this.closed) return false;
 
@@ -56,9 +50,6 @@ export class Subscriber implements AsyncIterable<SSEFrame> {
     return true;
   }
 
-  /**
-   * Closes the subscriber stream normally (e.g. terminal frame delivered).
-   */
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -72,9 +63,6 @@ export class Subscriber implements AsyncIterable<SSEFrame> {
     this.onDisconnect?.(this.id);
   }
 
-  /**
-   * Kicks the subscriber due to backpressure or error.
-   */
   kick(reason: string): void {
     if (this.closed) return;
     this.onKick?.(this.id, reason);

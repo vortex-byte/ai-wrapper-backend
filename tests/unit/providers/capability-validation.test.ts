@@ -24,7 +24,7 @@ const file = {
   },
 };
 
-describe('capability validation (D-4)', () => {
+describe('capability validation', () => {
   it('allows text on any model', () => {
     const parts: NormalizedPart[] = [{ type: 'text', text: 'hello' }];
     expect(validatePartsForModel(capabilities(), parts)).toEqual({ ok: true });

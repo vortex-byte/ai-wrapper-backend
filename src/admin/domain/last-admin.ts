@@ -9,7 +9,6 @@ export interface SafeguardCheckInput {
 
 /**
  * Domain invariant: cannot disable or demote the last active admin.
- * Returns true if the proposed change is allowed, false if it violates the safeguard.
  */
 export function canUpdateUserRoleOrStatus(input: SafeguardCheckInput): boolean {
   const { targetUser, newRole, newStatus, activeAdminCount } = input;

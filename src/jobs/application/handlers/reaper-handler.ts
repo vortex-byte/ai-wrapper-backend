@@ -7,14 +7,6 @@ export interface ReaperHandlerDeps {
   readonly finalizer: Finalizer;
 }
 
-/**
- * Recovers orphaned or crashed generations.
- * Sweeps for:
- * 1. generations with status='generating' whose heartbeat is older than 45s;
- * 2. generations with status='pending' older than 30s with no runner.
- *
- * Finalizes them to failed(interrupted) and marks parts/messages as incomplete.
- */
 export function createReaperHandler(deps: ReaperHandlerDeps) {
   return async (): Promise<{ reapedCount: number }> => {
     const rows = await deps.generations.findStaleGenerations({

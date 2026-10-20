@@ -18,13 +18,13 @@ export interface FinalizeInput {
   readonly generationId: string;
   readonly status: GenerationStatus;
   readonly finishReason: string;
-  readonly error?: { readonly code: string; readonly message: string; readonly retryable: boolean } | undefined;
+  readonly error?:
+    { readonly code: string; readonly message: string; readonly retryable: boolean } | undefined;
   readonly accumulatedText: string;
   readonly usage?: TokenUsage | undefined;
   /**
-   * The abort reason stored in `generation_jobs.cancel_reason` (DB CHECK: `user_cancel` |
-   * `detached` | `shutdown`). Distinct from `finishReason`, which is the wire-level reason
-   * (`cancelled`, `stop`, `error`). Defaults to `user_cancel` for a cancelled generation.
+   * Stored in `generation_jobs.cancel_reason`, which only accepts `user_cancel` | `detached` |
+   * `shutdown`. Distinct from `finishReason`, the wire-level reason.
    */
   readonly cancelReason?: string | undefined;
   readonly fallbackPartId?: string | undefined;
@@ -41,9 +41,8 @@ export interface FinalizerDeps {
 }
 
 /**
- * Handles terminal settlement for a generation.
- * Atomically transitions generation_jobs to its terminal state. If already terminalized, returns false (no-op).
- * Updates message and part statuses, flushes text, settles quota, and logs error events.
+ * Terminal settlement for one generation, idempotent: the second caller gets `false` and nothing
+ * is written.
  */
 export class Finalizer {
   private readonly generations: GenerationRepository;
@@ -74,14 +73,14 @@ export class Finalizer {
     let finishReason = initialMapping.finishReason;
 
     const record = await withTransaction(async (tx) => {
-      // Transition generation to terminal state atomically.
       const transitioned = await this.generations.transitionToTerminal(
         {
           generationId: input.generationId,
           status: initialMapping.generationStatus,
           cancelReason:
-            outcome.kind === 'cancelled' ? input.cancelReason ?? outcome.reason : null,
-          errorCategory: input.error?.code ?? (outcome.kind === 'interrupted' ? 'generation_interrupted' : null),
+            outcome.kind === 'cancelled' ? (input.cancelReason ?? outcome.reason) : null,
+          errorCategory:
+            input.error?.code ?? (outcome.kind === 'interrupted' ? 'generation_interrupted' : null),
           errorDetail: input.error
             ? { message: input.error.message, retryable: input.error.retryable }
             : null,
@@ -91,7 +90,6 @@ export class Finalizer {
       );
 
       if (!transitioned) {
-        // Another worker/path already finalized this generation -> idempotent no-op
         return null;
       }
 
@@ -100,7 +98,7 @@ export class Finalizer {
         return null;
       }
 
-      // Preserve existing checkpointed text if caller passed empty text (e.g. external cancel).
+      // An external cancel passes no text; keep whatever the checkpointer already persisted.
       const messageWithParts = await this.conversations.findMessageForUser(
         generationRecord.assistantMessageId,
         generationRecord.userId,
@@ -138,9 +136,20 @@ export class Finalizer {
           );
         }
 
-        // Resilience: an adapter that streamed raw `text_delta` without a preceding
-        // `part_started`, or a crash that lost the part row, leaves the assistant message with no
-        // text part. Persist the accumulated text so the content is recoverable rather than lost.
+        // Non-text parts stay `streaming` until the ArtifactSink links their bytes, and the DB
+        // CHECK forbids `complete` without a `file_id`. Settle them here so a cancel, a failure
+        // or a missing artifact cannot leave a part streaming forever.
+        for (const part of messageWithParts.parts) {
+          if (part.type === 'text' || part.status !== 'streaming') continue;
+          await this.conversations.updatePart(
+            part.id,
+            { status: part.fileId !== null ? 'complete' : 'failed' },
+            tx,
+          );
+        }
+
+        // An adapter that streamed text without `part_started`, or a crash that lost the part
+        // row, would drop the whole answer: persist it so the content stays recoverable.
         if (textParts.length === 0 && resolvedText.length > 0) {
           const position = messageWithParts.parts.length;
           await this.conversations.insertParts(
@@ -163,13 +172,12 @@ export class Finalizer {
         }
       }
 
-      // Quota settlement in the same transaction so reservations never outlive terminal state.
-      const usage =
-        input.usage ?? {
-          inputTokens: generationRecord.estInputTokens ?? 0,
-          outputTokens: Math.ceil(resolvedText.length / 4),
-          source: 'estimated' as const,
-        };
+      // Same transaction as the terminal transition, so a reservation can never outlive it.
+      const usage = input.usage ?? {
+        inputTokens: generationRecord.estInputTokens ?? 0,
+        outputTokens: Math.ceil(resolvedText.length / 4),
+        source: 'estimated' as const,
+      };
 
       const started = generationRecord.startedAt !== null;
       const shouldSettle = started || resolvedText.length > 0;
@@ -215,12 +223,11 @@ export class Finalizer {
       return false;
     }
 
-    const usage =
-      input.usage ?? {
-        inputTokens: record.estInputTokens ?? 0,
-        outputTokens: Math.ceil(resolvedText.length / 4),
-        source: 'estimated' as const,
-      };
+    const usage = input.usage ?? {
+      inputTokens: record.estInputTokens ?? 0,
+      outputTokens: Math.ceil(resolvedText.length / 4),
+      source: 'estimated' as const,
+    };
 
     if (input.status === 'failed' && input.error !== undefined) {
       try {
@@ -239,7 +246,9 @@ export class Finalizer {
       }
     }
 
-    const durationMs = record.startedAt ? Math.max(0, now.getTime() - record.startedAt.getTime()) : null;
+    const durationMs = record.startedAt
+      ? Math.max(0, now.getTime() - record.startedAt.getTime())
+      : null;
     getLogger().info(
       {
         requestId: record.requestId,
@@ -259,9 +268,6 @@ export class Finalizer {
   }
 }
 
-/**
- * Translate the finalizer's flat input into the domain `GenerationOutcome`.
- */
 function toOutcome(input: FinalizeInput): GenerationOutcome {
   if (input.status === 'completed') {
     return { kind: 'completed', finishReason: completedFinishReason(input.finishReason) };

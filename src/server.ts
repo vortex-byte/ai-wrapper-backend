@@ -45,13 +45,8 @@ function boot(): void {
   }
 
   /**
-   * Graceful shutdown:
-   * 1. Fail readiness.
-   * 2. Close admission gate for new requests.
-   * 3. Stop accepting new HTTP connections.
-   * 4. Allow in-flight requests and streams to drain.
-   * 5. Cancel remaining active runs if drain timeout expires.
-   * 6. Close database pool and exit.
+   * Graceful shutdown: fail readiness, drain in-flight requests and streams, then cancel whatever
+   * is still running once the drain window expires.
    */
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {

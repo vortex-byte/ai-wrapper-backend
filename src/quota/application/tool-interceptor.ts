@@ -1,10 +1,8 @@
 import { checkToolQuota, type ToolTariff } from '../domain/tariffs.ts';
 
 /**
- * Pre-execution tool quota interception.
- *
- * Checks tool tariff against remaining quota before executing external, non-token actions.
- * If quota is insufficient, returns a synthetic error result.
+ * Charges a tariffed tool's token cost before the call runs; without budget the caller gets a
+ * synthetic error result instead of executing the tool.
  */
 export interface ToolCallVerdict {
   readonly allowed: boolean;

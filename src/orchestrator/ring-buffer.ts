@@ -1,9 +1,7 @@
 import type { SSEEventType, SSEFrame } from './events.ts';
 
 export interface RingBufferOptions {
-  /** Maximum number of events to retain (default: 2000). */
   readonly maxEvents?: number;
-  /** Maximum total byte size of retained payloads (default: 1 MB = 1,048,576 bytes). */
   readonly maxBytes?: number;
 }
 
@@ -11,9 +9,8 @@ const DEFAULT_MAX_EVENTS = 2000;
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 
 /**
- * Ring buffer retaining SSE events for replay on reconnect.
- * Assigns monotonic sequence IDs. When capacity (event count or byte size) is reached,
- * the oldest frames roll off.
+ * Retains SSE events for replay on reconnect and assigns monotonic sequence ids. Oldest frames
+ * roll off once the event-count or byte-size cap is reached.
  */
 export class RingBuffer {
   private readonly maxEvents: number;
@@ -27,10 +24,6 @@ export class RingBuffer {
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   }
 
-  /**
-   * Pushes a new event into the buffer, assigning the next monotonic seq.
-   * Drops oldest frames if event count or byte size limits are exceeded.
-   */
   push(event: SSEEventType, payload: unknown): SSEFrame {
     const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
     const id = this.nextSeq++;
@@ -53,10 +46,6 @@ export class RingBuffer {
     return frame;
   }
 
-  /**
-   * Checks whether the buffer can cleanly replay events starting strictly after `lastEventSeq`.
-   * Returns false if the requested sequence has already rolled off (gap in history).
-   */
   canReplay(lastEventSeq: number): boolean {
     if (this.frames.length === 0) {
       return lastEventSeq >= this.nextSeq - 1;
@@ -66,9 +55,6 @@ export class RingBuffer {
     return lastEventSeq >= oldest.id - 1;
   }
 
-  /**
-   * Returns all frames whose seq is strictly greater than `lastEventSeq`.
-   */
   replayFrom(lastEventSeq: number): readonly SSEFrame[] {
     if (lastEventSeq <= 0) {
       return [...this.frames];

@@ -11,18 +11,8 @@ import { estimateTextTokens } from '@/estimation.ts';
 import { AppError } from '@/errors.ts';
 
 /**
- * Context Builder.
- * Transforms conversation history and system instructions into a `NormalizedChatRequest`.
- *
- * Algorithm:
- * 1. Calculate available input budget:
- *    available = contextWindow - maxOutputTokens - max(1000, 0.03 * contextWindow)
- * 2. System prompt concatenation:
- *    Platform policy prompt (system_settings) + model addendum (model.config.systemAddendum)
- * 3. Include system prompt and new user message. If this exceeds available budget -> throw context_too_large.
- * 4. Walk history newest -> oldest in pairs/messages, adding to context while within budget.
- * 5. Drop older messages in blocks (~20% of budget) if necessary to preserve prompt cache efficiency.
- * 6. Record truncation details if any history was dropped.
+ * Context Builder: turns conversation history and system instructions into a
+ * `NormalizedChatRequest`, dropping the oldest history first when the budget is exceeded.
  */
 
 export interface ContextBuilderInput {
@@ -35,6 +25,8 @@ export interface ContextBuilderInput {
   readonly history: readonly MessageWithParts[];
   readonly maxOutputTokensOverride?: number;
   readonly userIdHash: string;
+  /** Client opted into image output for this turn. */
+  readonly imageGeneration?: boolean;
 }
 
 export interface TruncationInfo {
@@ -58,10 +50,14 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
   const availableInputTokens = capabilities.contextWindow - maxOutputTokens - safetyMargin;
 
   if (availableInputTokens <= 0) {
-    throw new AppError('context_too_large', 'Context window too small for requested output and safety margin.');
+    throw new AppError(
+      'context_too_large',
+      'Context window too small for requested output and safety margin.',
+    );
   }
 
-  const systemAddendum = typeof model.config['systemAddendum'] === 'string' ? model.config['systemAddendum'] : undefined;
+  const systemAddendum =
+    typeof model.config['systemAddendum'] === 'string' ? model.config['systemAddendum'] : undefined;
   const systemParts: string[] = [];
   if (platformSystemPrompt && platformSystemPrompt.trim().length > 0) {
     systemParts.push(platformSystemPrompt.trim());
@@ -147,7 +143,8 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     ...(systemPrompt !== undefined ? { system: systemPrompt } : {}),
     messages: normalizedMessages,
     maxOutputTokens,
-    responseModalities: ['text'],
+    responseModalities:
+      input.imageGeneration === true && capabilities.imageGeneration ? ['text', 'image'] : ['text'],
     metadata: { userIdHash: input.userIdHash },
   };
 

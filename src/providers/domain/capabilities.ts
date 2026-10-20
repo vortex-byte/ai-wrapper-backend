@@ -1,5 +1,5 @@
 /**
- * Model/provider capability and runtime configuration as seen by the PAL. 
+ * Model/provider capability and runtime configuration as seen by the PAL.
  * The orchestrator and context builder ask "can this model take images?"
  * — never "is this OpenAI?". These shapes are assembled by the registry from the DB
  * rows plus the environment; adapters receive them by injection and never read env/DB
@@ -64,4 +64,35 @@ export interface NormalizedChatRequest {
   readonly responseModalities: readonly ('text' | 'image' | 'file')[];
   readonly tools?: never;
   readonly metadata: { readonly userIdHash: string };
+  /**
+   * Cloud-container document generation. When set, adapters attach their provider's sandbox tool
+   * and skills, and the prompt writes generated artifacts to `$OUTPUT_DIR` so the provider hands
+   * them back as files.
+   */
+  readonly container?: ContainerRequest | undefined;
+  /**
+   * Input binaries the container should mount, already uploaded to the provider's Files API.
+   * Nothing populates this yet: the adapters consume it, but no caller uploads and caches ids.
+   */
+  readonly inputFiles?: readonly MountedInputFile[] | undefined;
+}
+
+/** Anthropic's official document-generation skills; OpenAI uses its own skill ids. */
+export type ContainerSkillId = 'pdf' | 'docx' | 'xlsx' | 'pptx';
+
+export interface ContainerRequest {
+  readonly codeExecution: boolean;
+  readonly skills?: readonly ContainerSkillId[] | undefined;
+  readonly containerId?: string | undefined;
+  /**
+   * Environment variable the prompt must write generated files to. The adapter never
+   * interpolates a filesystem path — the provider owns the sandbox layout.
+   */
+  readonly outputDirEnv?: string | undefined;
+}
+
+export interface MountedInputFile {
+  readonly providerFileId: string;
+  readonly filename: string;
+  readonly mimeType: string;
 }

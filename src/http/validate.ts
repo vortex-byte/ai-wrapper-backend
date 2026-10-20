@@ -7,12 +7,9 @@ import type { AppEnv } from './types.ts';
 export const MAX_JSON_BODY_BYTES = 256 * 1024;
 
 /**
- * Parse and validate a JSON request body at the boundary
- * A malformed body or a schema failure becomes `400 invalid_request`
- * with field-level `details`, matching the error catalog.
- *
- * The body size is bounded first: an oversized body is rejected with `413 file_too_large`
- * rather than being buffered and parsed.
+ * Parses and validates a JSON body at the boundary; failures become `400 invalid_request` with
+ * field-level `details`. The size is bounded first, so an oversized body is rejected with `413`
+ * instead of being buffered.
  */
 export async function parseJsonBody<S extends z.ZodTypeAny>(
   c: Context<AppEnv>,

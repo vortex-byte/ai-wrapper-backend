@@ -1,16 +1,9 @@
 export interface TextCoalescerOptions {
-  /** Maximum delay between flushes in milliseconds (default: 50 ms = max 20 flushes/sec). */
   readonly flushIntervalMs?: number;
-  /** Maximum buffered characters before an immediate flush (default: 2048 chars). */
   readonly maxBufferedChars?: number;
-  /** Callback invoked when a coalesced chunk is flushed. */
   readonly onFlush: (partId: string, delta: string) => void;
 }
 
-/**
- * Coalesces streaming text deltas to avoid saturating clients with micro-frames.
- * Flushes periodically or immediately when buffer fills or `flush()` is called.
- */
 export class TextCoalescer {
   private readonly flushIntervalMs: number;
   private readonly maxBufferedChars: number;
@@ -26,9 +19,6 @@ export class TextCoalescer {
     this.onFlush = options.onFlush;
   }
 
-  /**
-   * Append a text chunk for a part. If the part ID changes, existing text is flushed immediately.
-   */
   append(partId: string, text: string): void {
     if (text.length === 0) return;
 
@@ -52,9 +42,6 @@ export class TextCoalescer {
     }
   }
 
-  /**
-   * Flush any buffered text immediately.
-   */
   flush(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);
@@ -69,9 +56,6 @@ export class TextCoalescer {
     }
   }
 
-  /**
-   * Clean up any pending timer and reset buffer.
-   */
   dispose(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);

@@ -10,6 +10,9 @@ export type SSEEventType =
   | 'text.delta'
   | 'part.completed'
   | 'progress'
+  | 'tool.started'
+  | 'tool.delta'
+  | 'tool.completed'
   | 'usage.updated'
   | 'generation.completed'
   | 'generation.cancelled'
@@ -52,6 +55,31 @@ export interface PartCompletedPayload {
 export interface ProgressPayload {
   readonly stage: string;
   readonly percent?: number;
+}
+
+/**
+ * Cloud-container tool activity. `partId` is the message part the tool ran for (empty when the
+ * provider emits tool activity before any text part); `toolCallId` lets clients correlate
+ * `tool.started` → `tool.delta*` → `tool.completed`.
+ */
+export interface ToolStartedPayload {
+  readonly partId: string;
+  readonly toolCallId: string;
+  readonly tool: string;
+  readonly command?: string;
+}
+
+export interface ToolDeltaPayload {
+  readonly partId: string;
+  readonly toolCallId: string;
+  readonly delta: string;
+}
+
+export interface ToolCompletedPayload {
+  readonly partId: string;
+  readonly toolCallId: string;
+  readonly status: 'success' | 'error' | 'interrupted';
+  readonly durationMs?: number;
 }
 
 export interface UsageUpdatedPayload {

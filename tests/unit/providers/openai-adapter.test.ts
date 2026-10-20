@@ -337,6 +337,7 @@ describe('OpenAIAdapter (Unit)', () => {
 
   it.each([
     [408, 'generation_timeout', true],
+    [504, 'generation_timeout', true],
     [410, 'model_unavailable', false],
     [413, 'context_too_large', false],
     [422, 'content_filtered', false],
@@ -475,5 +476,121 @@ describe('OpenAIAdapter (Unit)', () => {
     expect(getTiktoken('gpt-4.1')).not.toBeNull();
     expect(getTiktoken('o4-mini')).not.toBeNull();
     expect(getTiktoken('chatgpt-4o-latest')).not.toBeNull();
+  });
+});
+
+/** A lazy binary double matching `ResolvedFile` / `AttachmentFileRef`. */
+function resolvedFile(bytes: number[], mimeType: string, name: string) {
+  return {
+    fileId: `f-${name}`,
+    mimeType,
+    name,
+    sizeBytes: bytes.length,
+    read: async () => new Uint8Array(bytes),
+    stream: async () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(bytes));
+          controller.close();
+        },
+      }),
+  };
+}
+
+describe('OpenAIAdapter — multimodal input and reasoning config', () => {
+  it('keeps the synchronous request text-only (media is resolved by execute)', () => {
+    const adapter = new OpenAIAdapter(() => createMockOpenAIClient([]));
+    const params = adapter.toProviderRequest(
+      makeOpenAIRequest({
+        system: '',
+        messages: [
+          {
+            role: 'user',
+            parts: [
+              { type: 'image', file: resolvedFile([1, 2, 3, 4], 'image/jpeg', 'shot.jpg') },
+              { type: 'text', text: 'summarise' },
+            ],
+          },
+        ],
+      }),
+    ) as { messages: Array<{ role: string; content: unknown }> };
+
+    expect(params.messages[0]).toEqual({ role: 'user', content: 'summarise' });
+  });
+
+  it('streams with inline media resolved from the attachment bytes', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const client: OpenAIClientLike = {
+      models: { list: async () => ({ data: [] }) },
+      chat: {
+        completions: {
+          create: async (params: unknown) => {
+            calls.push(params as Record<string, unknown>);
+            return (async function* () {
+              yield { id: 'chatcmpl-1', choices: [{ index: 0, delta: { content: 'ok' } }] };
+              yield { id: 'chatcmpl-1', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] };
+            })();
+          },
+        },
+      },
+    };
+
+    const adapter = new OpenAIAdapter(() => client);
+    await collect(
+      adapter,
+      makeOpenAIRequest({
+        messages: [
+          {
+            role: 'user',
+            parts: [
+              { type: 'image', file: resolvedFile([1, 2, 3, 4], 'image/jpeg', 'shot.jpg') },
+              {
+                type: 'document',
+                file: resolvedFile([9, 9], 'application/pdf', 'spec.pdf'),
+                preferNative: true,
+              },
+              {
+                type: 'document',
+                file: resolvedFile(
+                  [7],
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                  'sheet.xlsx',
+                ),
+                extractedText: 'a,b\n1,2',
+                preferNative: true,
+              },
+              { type: 'text', text: 'summarise' },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const messages = calls[0]?.['messages'] as Array<{ role: string; content: unknown }>;
+    expect(messages[0]?.content).toEqual([
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AQIDBA==' } },
+      {
+        type: 'file',
+        file: { file_data: 'data:application/pdf;base64,CQk=', filename: 'spec.pdf' },
+      },
+      {
+        type: 'text',
+        text: '<attached_document name="sheet.xlsx" untrusted="true">\na,b\n1,2\n</attached_document>',
+      },
+      { type: 'text', text: 'summarise' },
+    ]);
+  });
+
+  it('forwards reasoning_effort from the registry config', () => {
+    const adapter = new OpenAIAdapter(() => createMockOpenAIClient([]));
+    const req = makeOpenAIRequest();
+    const params = adapter.toProviderRequest({
+      ...req,
+      model: { ...req.model, apiModelId: 'o4-mini', config: { reasoningEffort: 'high' } },
+    }) as Record<string, unknown>;
+
+    expect(params['reasoning_effort']).toBe('high');
+    // Reasoning models reject sampling params.
+    expect(params['temperature']).toBeUndefined();
   });
 });

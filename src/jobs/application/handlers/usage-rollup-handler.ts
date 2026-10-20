@@ -2,14 +2,7 @@ import { getLogger } from '@/observability/logger.ts';
 import { withTransaction } from '@/db/tx.ts';
 import type { UsageRepository } from '@/quota/ports/usage-repository.ts';
 
-/**
- * Daily usage rollup jobs:
- * - incremental: recomputes today's aggregations.
- * - nightly: recomputes yesterday's aggregations.
- */
-export function createUsageRollupHandler(deps: {
-  readonly usage: UsageRepository;
-}): {
+export function createUsageRollupHandler(deps: { readonly usage: UsageRepository }): {
   readonly incremental: () => Promise<{ day: string; rows: number }>;
   readonly nightly: () => Promise<{ day: string; rows: number }>;
 } {

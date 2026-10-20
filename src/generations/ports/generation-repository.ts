@@ -93,11 +93,7 @@ export interface GenerationRepository {
   /**
    * Updates `max_output_tokens` on a generation row when output clamping applies.
    */
-  updateMaxOutputTokens(
-    id: string,
-    maxOutputTokens: number,
-    tx: TransactionContext,
-  ): Promise<void>;
+  updateMaxOutputTokens(id: string, maxOutputTokens: number, tx: TransactionContext): Promise<void>;
 
   /** Scoped to the owner; another user's id returns `null` (mapped to 404). */
   findByIdForUser(
@@ -109,7 +105,6 @@ export interface GenerationRepository {
   /** System lookup by generation ID without user ownership predicate. */
   findById(id: string, tx?: TransactionContext): Promise<GenerationRecord | null>;
 
-  /** Checkpoints text to message part and touches heartbeat/lastEventSeq on generation. */
   checkpointText(input: CheckpointTextInput, tx?: TransactionContext): Promise<void>;
 
   /**
@@ -118,10 +113,8 @@ export interface GenerationRepository {
    */
   transitionToTerminal(input: TransitionTerminalInput, tx?: TransactionContext): Promise<boolean>;
 
-  /** Marks a generation as actively generating in DB. */
   markGenerating(id: string, startedAt: Date, tx?: TransactionContext): Promise<void>;
 
-  /** Sweeps generations that are abandoned/stale (reaper job). */
   findStaleGenerations(
     criteria: {
       readonly generatingHeartbeatOlderThanSeconds: number;
@@ -163,7 +156,6 @@ export interface GenerationRepository {
     tx: TransactionContext,
   ): Promise<void>;
 
-  /** Count this user's live generations (for user concurrency quotas). */
   countActiveForUser(userId: string, tx?: TransactionContext): Promise<number>;
 
   /** Count all active generations on this node/cluster — the `MAX_ACTIVE_GENERATIONS` admission check. */

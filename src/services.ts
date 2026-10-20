@@ -54,6 +54,21 @@ import type { ConversationRepository } from './conversations/ports/conversation-
 import type { GenerationRepository } from './generations/ports/generation-repository.ts';
 import { Finalizer } from './generations/application/finalizer.ts';
 
+import { LocalStorageProvider } from './storage/index.ts';
+import { ArtifactSink } from './artifactsink/index.ts';
+import {
+  GENERATED_FILE_RETENTION_DAYS,
+  MAX_GENERATED_ARTIFACT_BYTES,
+} from './artifactsink/index.ts';
+import { DrizzleAttachmentRepository } from './attachments/infrastructure/drizzle-attachment-repository.ts';
+import { AttachmentService } from './attachments/application/attachment-service.ts';
+import type { AttachmentService as AttachmentServiceType } from './attachments/application/attachment-service.ts';
+import {
+  createAttachmentsExpiryHandler,
+  createAttachmentsOrphanHandler,
+} from './attachments/application/expiry-handler.ts';
+import { createStorageReconcileHandler } from './attachments/application/storage-reconcile-handler.ts';
+
 import type { JobQueue } from './jobs/ports/job-queue.ts';
 import { DrizzleJobQueue } from './jobs/infrastructure/drizzle-job-queue.ts';
 import { JobRunner } from './jobs/application/job-runner.ts';
@@ -92,6 +107,8 @@ export interface Services {
   readonly quota: QuotaPort;
   readonly quotaService: QuotaServiceType;
   readonly usageService: UsageServiceType;
+  readonly attachments: AttachmentServiceType;
+  readonly storage: LocalStorageProvider;
 }
 
 export function createServices(config: Config): Services {
@@ -166,6 +183,26 @@ export function createServices(config: Config): Services {
   const metrics = createGenerationMetrics();
   const generationRepository = new DrizzleGenerationRepository();
 
+  const storage = new LocalStorageProvider(config.STORAGE_LOCAL_ROOT);
+  const attachmentRepository = new DrizzleAttachmentRepository();
+  const attachments = new AttachmentService(
+    config,
+    storage,
+    attachmentRepository,
+    conversationRepository,
+    systemClock,
+    uuidv7Generator,
+  );
+  const artifactSink = new ArtifactSink({
+    storage,
+    attachments: attachmentRepository,
+    conversations: conversationRepository,
+    clock: systemClock,
+    idGen: uuidv7Generator,
+    retentionDays: GENERATED_FILE_RETENTION_DAYS,
+    maxBytes: MAX_GENERATED_ARTIFACT_BYTES,
+  });
+
   const quotaAccountsRepo = new DrizzleQuotaAccountRepository();
   const quotaPoliciesRepo = new DrizzleQuotaPolicyRepository();
   const usageRepo = new DrizzleUsageRepository();
@@ -203,6 +240,7 @@ export function createServices(config: Config): Services {
     finalizer,
     generationRepo: generationRepository,
     conversationRepo: conversationRepository,
+    artifactSink,
   });
 
   const send = createSendService({
@@ -214,9 +252,28 @@ export function createServices(config: Config): Services {
     idGen: uuidv7Generator,
     config,
     orchestrator,
+    attachments,
+    attachmentRepo: attachmentRepository,
   });
 
   const jobQueue = new DrizzleJobQueue(systemClock, uuidv7Generator);
+
+  const attachmentsExpiryHandler = createAttachmentsExpiryHandler({
+    attachments: attachmentRepository,
+    storage,
+    clock: systemClock,
+  });
+  const attachmentsOrphanHandler = createAttachmentsOrphanHandler({
+    attachments: attachmentRepository,
+    storage,
+    clock: systemClock,
+  });
+  const storageReconcileHandler = createStorageReconcileHandler({
+    attachments: attachmentRepository,
+    storage,
+    clock: systemClock,
+  });
+
   const runnerId = `runner-${uuidv7Generator.uuidv7()}`;
   const jobRunner = new JobRunner(jobQueue, runnerId);
   const scheduler = new Scheduler(jobQueue);
@@ -258,6 +315,9 @@ export function createServices(config: Config): Services {
   jobRunner.registerHandler('usage.rollup.incremental', async () => usageRollup.incremental());
   jobRunner.registerHandler('usage.rollup.nightly', async () => usageRollup.nightly());
   jobRunner.registerHandler('quota.precreate_periods', async () => precreatePeriodsHandler());
+  jobRunner.registerHandler('attachments.expire', async () => attachmentsExpiryHandler());
+  jobRunner.registerHandler('attachments.purge_orphans', async () => attachmentsOrphanHandler());
+  jobRunner.registerHandler('storage.reconcile', async () => storageReconcileHandler());
 
   return {
     auth,
@@ -283,5 +343,7 @@ export function createServices(config: Config): Services {
     quota,
     quotaService,
     usageService,
+    attachments,
+    storage,
   };
 }

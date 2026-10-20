@@ -78,14 +78,12 @@ export class MemoryRateLimiter implements RateLimiter {
     };
   }
 
-  /** Drop buckets whose window has already closed. */
   private sweepExpired(nowMs: number): void {
     for (const [key, bucket] of this.buckets) {
       if (nowMs >= bucket.resetAtMs) this.buckets.delete(key);
     }
   }
 
-  /** Evict the entry closest to expiry when at capacity. */
   private evictSoonest(): void {
     let soonestKey: string | undefined;
     let soonestAt = Number.POSITIVE_INFINITY;
@@ -103,7 +101,6 @@ export class MemoryRateLimiter implements RateLimiter {
     return this.buckets.size;
   }
 
-  /** Maintenance helper for tests or memory cleanup. */
   clear(): void {
     this.buckets.clear();
   }

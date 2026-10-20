@@ -1,11 +1,12 @@
 import type { TransactionContext } from '@/db/tx.ts';
 import { getLogger } from '@/observability/logger.ts';
-import type { QuotaPort, ReservationHandle, ReserveContext, Settlement } from '../ports/quota-port.ts';
+import type {
+  QuotaPort,
+  ReservationHandle,
+  ReserveContext,
+  Settlement,
+} from '../ports/quota-port.ts';
 
-/**
- * Noop quota implementation for testing and stubbing.
- * Accepts reservations without decrementing balances.
- */
 export class NoopQuota implements QuotaPort {
   async reserve(ctx: ReserveContext, _tx: TransactionContext): Promise<ReservationHandle> {
     return {

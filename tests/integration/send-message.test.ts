@@ -39,7 +39,9 @@ async function seedUser(email: string, role: 'admin' | 'user' = 'user') {
   });
 }
 
-async function loginAs(email: string): Promise<{ cookie: string; csrfToken: string; userId: string }> {
+async function loginAs(
+  email: string,
+): Promise<{ cookie: string; csrfToken: string; userId: string }> {
   const res = await app.request(
     new Request('http://localhost/api/auth/login', {
       method: 'POST',
@@ -81,7 +83,11 @@ async function seedActiveModel(providerAdapter = 'openai'): Promise<string> {
   return modelId;
 }
 
-async function createConversation(cookie: string, csrfToken: string, modelId: string): Promise<string> {
+async function createConversation(
+  cookie: string,
+  csrfToken: string,
+  modelId: string,
+): Promise<string> {
   const res = await app.request(
     new Request('http://localhost/api/conversations', {
       method: 'POST',
@@ -121,7 +127,9 @@ async function send(
     new Request(`http://localhost/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(options.body ?? { parts: [{ type: 'text', text: options.text ?? 'Hello' }] }),
+      body: JSON.stringify(
+        options.body ?? { parts: [{ type: 'text', text: options.text ?? 'Hello' }] },
+      ),
     }),
   );
 }
@@ -163,7 +171,9 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     expect(body.data.assistantMessage.status).toBe('streaming');
     expect(body.data.assistantMessage.seq).toBe(2);
     expect(body.data.generation.status).toBe('pending');
-    expect(body.data.generation.streamUrl).toBe(`/api/generations/${body.data.generation.id}/stream`);
+    expect(body.data.generation.streamUrl).toBe(
+      `/api/generations/${body.data.generation.id}/stream`,
+    );
     // Quota reports the reservation and remaining balance.
     expect(body.data.quota).not.toBeNull();
     expect(body.data.quota?.reservedTokens).toBeGreaterThan(0);
@@ -230,7 +240,10 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     const first = await send(convId, auth.cookie, auth.csrfToken, { key, text: 'First payload' });
     expect(first.status).toBe(202);
 
-    const second = await send(convId, auth.cookie, auth.csrfToken, { key, text: 'Different payload' });
+    const second = await send(convId, auth.cookie, auth.csrfToken, {
+      key,
+      text: 'Different payload',
+    });
     expect(second.status).toBe(422);
     expect(((await second.json()) as { code: string }).code).toBe('idempotency_key_reuse');
   });
@@ -322,7 +335,7 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     expect(bad.status).toBe(400);
   });
 
-  it('rejects an empty message (400) and a file part (422 unsupported_for_model)', async () => {
+  it('rejects an empty message (400) and an unknown attachment (404)', async () => {
     const modelId = await seedActiveModel();
     await seedUser('invalid@corp.example');
     const auth = await loginAs('invalid@corp.example');
@@ -334,15 +347,17 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     });
     expect(empty.status).toBe(400);
 
+    // Attachments are wired in this build, so a file id that is not the caller's (or does not
+    // exist) resolves to `not_found` — never 403, never a silent drop.
     const file = await send(convId, auth.cookie, auth.csrfToken, {
       key: Bun.randomUUIDv7(),
       body: { parts: [{ type: 'file', fileId: Bun.randomUUIDv7() }] },
     });
-    expect(file.status).toBe(422);
-    expect(((await file.json()) as { code: string }).code).toBe('unsupported_for_model');
+    expect(file.status).toBe(404);
+    expect(((await file.json()) as { code: string }).code).toBe('not_found');
   });
 
-  it('returns 404 for another user\'s conversation (IDOR) with no rows written', async () => {
+  it("returns 404 for another user's conversation (IDOR) with no rows written", async () => {
     const modelId = await seedActiveModel();
     await seedUser('owner2@corp.example');
     await seedUser('intruder@corp.example');
@@ -372,7 +387,11 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     const key = Bun.randomUUIDv7();
 
     const { canonicalRequestHash } = await import('@/generations/application/send-service.ts');
-    const requestHash = canonicalRequestHash(convId, [{ type: 'text', text: 'In flight' }], undefined);
+    const requestHash = canonicalRequestHash(
+      convId,
+      [{ type: 'text', text: 'In flight' }],
+      undefined,
+    );
     await getPool().query(
       `INSERT INTO idempotency_keys (user_id, key, endpoint, request_hash, response_status, response_body, expires_at)
        VALUES ($1, $2, 'POST /api/conversations/:id/messages', $3, 0, '{}', now() + interval '1 day')`,

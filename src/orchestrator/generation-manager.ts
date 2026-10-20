@@ -3,13 +3,19 @@ import type { Config } from '@/config/index.ts';
 import type { GenerationMetrics } from '@/observability/metrics.ts';
 import type { ProviderRegistry } from '@/providers/ports/provider-registry.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
-import type { GenerationRecord, GenerationRepository } from '@/generations/ports/generation-repository.ts';
+import type {
+  GenerationRecord,
+  GenerationRepository,
+} from '@/generations/ports/generation-repository.ts';
 import type { ConversationRepository } from '@/conversations/ports/conversation-repository.ts';
 import type { Finalizer } from '@/generations/application/finalizer.ts';
 import { Checkpointer } from '@/generations/application/checkpointer.ts';
 import { AppError } from '@/errors.ts';
 import { GenerationRun, type GenerationRunHooks } from './generation-run.ts';
 import type { Subscriber } from './subscriber.ts';
+import type { ArtifactSink } from '@/artifactsink/artifact-sink.ts';
+import { ARTIFACT_FETCH_TIMEOUT_MS } from '@/artifactsink/artifact-sink.ts';
+import type { PartType } from '@/conversations/domain/conversation.ts';
 
 export interface EnqueueInput {
   readonly generation: GenerationRecord;
@@ -38,12 +44,10 @@ export interface GenerationManagerDeps {
   readonly finalizer?: Finalizer | undefined;
   readonly generationRepo?: GenerationRepository | undefined;
   readonly conversationRepo?: ConversationRepository | undefined;
+  /** Hydrates provider-generated binaries (cloud containers). Absent ⇒ file parts fail. */
+  readonly artifactSink?: ArtifactSink | undefined;
 }
 
-/**
- * Manages in-memory active generation runs, subscriber routing, capacity gating,
- * and lifecycle termination across the node.
- */
 export class GenerationManager {
   private readonly runs = new Map<string, GenerationRun>();
   private readonly providerRegistry: ProviderRegistry;
@@ -54,6 +58,7 @@ export class GenerationManager {
   private readonly finalizer?: Finalizer | undefined;
   private readonly generationRepo?: GenerationRepository | undefined;
   private readonly conversationRepo?: ConversationRepository | undefined;
+  private readonly artifactSink?: ArtifactSink | undefined;
   isDraining = false;
 
   constructor(deps: GenerationManagerDeps) {
@@ -65,6 +70,7 @@ export class GenerationManager {
     this.finalizer = deps.finalizer;
     this.generationRepo = deps.generationRepo;
     this.conversationRepo = deps.conversationRepo;
+    this.artifactSink = deps.artifactSink;
   }
 
   get activeCount(): number {
@@ -75,10 +81,6 @@ export class GenerationManager {
     return this.runs.get(generationId);
   }
 
-  /**
-   * Enqueues and starts a generation run.
-   * Frame #1 (message.created) and #2 (generation.state) are queued into the ring buffer synchronously.
-   */
   enqueue(input: EnqueueInput): GenerationRun {
     if (this.isDraining) {
       throw new AppError('service_busy', 'Server is shutting down', {
@@ -132,15 +134,22 @@ export class GenerationManager {
         },
         onPartStarted: async (part) => {
           if (this.conversationRepo !== undefined) {
+            const partType: PartType =
+              part.type === 'text' ? 'text' : part.type === 'image' ? 'image' : 'generated_file';
+            const data: Record<string, unknown> = {};
+            if (part.name !== undefined) data['name'] = part.name;
+            if (part.mimeType !== undefined) data['mimeType'] = part.mimeType;
             await this.conversationRepo.insertParts([
               {
                 id: part.partId,
                 messageId: input.assistantMessageId,
                 position: part.position,
-                type: 'text',
+                type: partType,
+                // `generated_file`/`image` parts stay `streaming` until the ArtifactSink links
+                // the stored bytes — the DB CHECK forbids `complete` without a `file_id`.
                 status: 'streaming',
-                textContent: '',
-                data: {},
+                textContent: part.type === 'text' ? '' : null,
+                data,
                 fileId: null,
                 createdAt: this.clock.now(),
                 updatedAt: this.clock.now(),
@@ -150,6 +159,34 @@ export class GenerationManager {
           if (input.hooks?.onPartStarted !== undefined) {
             await input.hooks.onPartStarted(part);
           }
+        },
+        onArtifact: async (artifact) => {
+          if (this.artifactSink === undefined) return null;
+          const fetchArtifactStream = adapter.fetchArtifactStream?.bind(adapter);
+          if (fetchArtifactStream === undefined && artifact.bytes === undefined) return null;
+          const provider = input.chatRequest.provider;
+          return await this.artifactSink.hydrate(
+            {
+              partId: artifact.partId,
+              userId: input.generation.userId,
+              conversationId: input.generation.conversationId,
+              messageId: input.assistantMessageId,
+              providerFileId: artifact.providerFileId,
+              filename: artifact.filename,
+              ...(artifact.mimeType !== undefined ? { mimeType: artifact.mimeType } : {}),
+              ...(artifact.sizeBytes !== undefined ? { sizeBytes: artifact.sizeBytes } : {}),
+              ...(artifact.bytes !== undefined ? { bytes: artifact.bytes } : {}),
+            },
+            async (providerFileId) => {
+              if (fetchArtifactStream === undefined) {
+                throw new Error('adapter cannot download artifacts');
+              }
+              return await fetchArtifactStream(providerFileId, {
+                provider,
+                signal: AbortSignal.timeout(ARTIFACT_FETCH_TIMEOUT_MS),
+              });
+            },
+          );
         },
         onTextChunk: (partId, chunk, lastEventSeq) => {
           checkpointer?.append(partId, chunk, lastEventSeq);
@@ -205,7 +242,10 @@ export class GenerationManager {
           }
           const ttftSeconds = run.timeToFirstTokenSeconds;
           if (ttftSeconds !== null) {
-            this.metrics?.generationTtft.observe({ provider: providerKey, model: modelKey }, ttftSeconds);
+            this.metrics?.generationTtft.observe(
+              { provider: providerKey, model: modelKey },
+              ttftSeconds,
+            );
           }
 
           if (outcome.error !== undefined) {
@@ -237,10 +277,6 @@ export class GenerationManager {
     return run;
   }
 
-  /**
-   * Attaches a subscriber to an active generation run.
-   * If not found locally, returns `{ found: false, canReplay: false }`.
-   */
   subscribe(generationId: string, lastEventSeq?: number): SubscribeResult {
     const run = this.runs.get(generationId);
     if (run === undefined) {
@@ -257,10 +293,6 @@ export class GenerationManager {
     };
   }
 
-  /**
-   * Explicitly cancels an active generation run.
-   * Returns true if a local run was found and cancelled, false otherwise.
-   */
   cancel(generationId: string, reason = 'user_cancel'): boolean {
     const run = this.runs.get(generationId);
     if (run === undefined) return false;

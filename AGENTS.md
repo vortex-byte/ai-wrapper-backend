@@ -410,13 +410,13 @@ CREATE UNIQUE INDEX divisions_external_ref_uq ON divisions (external_ref) WHERE 
   - `password_updated_at timestamptz` — set on every change/reset.
   - `must_change_password boolean NOT NULL DEFAULT true` — first login / after admin reset.
   - `failed_login_attempts int NOT NULL DEFAULT 0`, `locked_until timestamptz` — lockout state.
-  - `role text` — `user | admin`.
+  - `role text` — `user | admin | super_admin`.
   - `status text` — `active | disabled`; `disabled` → 401 + session revocation on next request.
-  - `division_id uuid` — nullable (unassigned users are possible).
+  - `division_id uuid` — nullable (`admin` requires `division_id IS NOT NULL`; `user` and `super_admin` may be unassigned).
   - `idp_subject text` — **nullable**, reserved for future SSO (A-15).
   - `deleted_at timestamptz` — soft delete.
 - **Relationships:** 1‑N to `sessions`, `conversations`, `attachments`, `generation_jobs`, `quota_accounts`; N‑1 to `divisions`.
-- **Constraints:** `UNIQUE (email)`; `UNIQUE (idp_subject)` **partial where not null**; range check on `failed_login_attempts >= 0`; `CHECK (role IN (...))`; `CHECK (status IN (...))`.
+- **Constraints:** `UNIQUE (email)`; `UNIQUE (idp_subject)` **partial where not null**; range check on `failed_login_attempts >= 0`; `CHECK (role IN ('user','admin','super_admin'))`; `CHECK (status IN (...))`; `CHECK (role <> 'admin' OR division_id IS NOT NULL)`.
 - **Indexing strategy:**
   - `UNIQUE (email)` — login lookup (citext gives case-insensitivity).
   - `UNIQUE (idp_subject) WHERE idp_subject IS NOT NULL` — future SSO.
@@ -434,14 +434,15 @@ CREATE TABLE users (
   must_change_password  boolean NOT NULL DEFAULT true,
   failed_login_attempts int NOT NULL DEFAULT 0 CHECK (failed_login_attempts >= 0),
   locked_until          timestamptz,
-  role                  text NOT NULL DEFAULT 'user'   CHECK (role IN ('user','admin')),
+  role                  text NOT NULL DEFAULT 'user'   CHECK (role IN ('user','admin','super_admin')),
   status                text NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   division_id           uuid REFERENCES divisions(id),
   idp_subject           text,
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT now(),
   last_login_at         timestamptz,
-  deleted_at            timestamptz
+  deleted_at            timestamptz,
+  CONSTRAINT users_admin_division_check CHECK (role <> 'admin' OR division_id IS NOT NULL)
 );
 CREATE UNIQUE INDEX users_idp_subject_uq ON users (idp_subject) WHERE idp_subject IS NOT NULL;
 CREATE INDEX users_active_idx   ON users (status) WHERE status = 'active';

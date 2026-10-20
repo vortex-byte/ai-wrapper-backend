@@ -24,6 +24,32 @@ export interface HealthCheckContext {
   readonly signal: AbortSignal;
 }
 
+/** A provider-owned binary fetched back from a Files API, ready for `ArtifactSink` to store. */
+export interface ProviderArtifact {
+  readonly stream: ReadableStream<Uint8Array>;
+  /** Size when the provider reports it; `ArtifactSink` always re-measures the stored bytes. */
+  readonly sizeBytes?: number | undefined;
+  readonly mimeType?: string | undefined;
+  readonly filename?: string | undefined;
+}
+
+/** Context for Files-API calls (artifact download, input upload). */
+export interface FilesApiContext {
+  readonly provider: ProviderRuntimeConfig;
+  readonly signal: AbortSignal;
+}
+
+/** An input binary the platform wants the provider to mount into its cloud container. */
+export interface InputFileUpload {
+  readonly filename: string;
+  readonly mimeType: string;
+  readonly bytes: Uint8Array;
+}
+
+export interface UploadedInputFile {
+  readonly providerFileId: string;
+}
+
 /**
  * The adapter contract every provider implements. Owned by the consumers
  * (`generations/`, `orchestrator/`) and implemented under `providers/adapters/<name>/`.
@@ -46,4 +72,23 @@ export interface ProviderAdapter {
   translateError(err: unknown): ProviderError;
 
   healthCheck(ctx: HealthCheckContext): Promise<HealthCheckResult>;
+
+  /**
+   * Downloads a provider-generated file (Anthropic/OpenAI Files API) so the `ArtifactSink`
+   * can persist it locally. Optional: adapters without a Files API simply omit it, and the
+   * orchestrator marks the file part failed.
+   */
+  fetchArtifactStream?(
+    providerFileId: string,
+    ctx: FilesApiContext,
+  ): Promise<ProviderArtifact>;
+
+  /**
+   * Uploads an input binary to the provider's Files API so it can be mounted into the cloud
+   * container (Anthropic `container_upload`, OpenAI `purpose: "responses"`). Optional.
+   */
+  uploadInputFile?(
+    file: InputFileUpload,
+    ctx: FilesApiContext,
+  ): Promise<UploadedInputFile>;
 }

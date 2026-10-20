@@ -13,13 +13,7 @@ export interface Conversation {
 export type MessageRole = 'user' | 'assistant';
 export type MessageStatus = 'streaming' | 'complete' | 'incomplete' | 'failed';
 export type FinishReason =
-  | 'stop'
-  | 'length'
-  | 'content_filter'
-  | 'cancelled'
-  | 'error'
-  | 'timeout'
-  | 'interrupted';
+  'stop' | 'length' | 'content_filter' | 'cancelled' | 'error' | 'timeout' | 'interrupted';
 
 export interface Message {
   readonly id: string;
@@ -66,7 +60,6 @@ export interface MessageWithParts {
 }
 
 export const MAX_TITLE_LENGTH = 200;
-/** Titles are derived from the first user text message, truncated. */
 const DEFAULT_TITLE = 'New conversation';
 
 /**

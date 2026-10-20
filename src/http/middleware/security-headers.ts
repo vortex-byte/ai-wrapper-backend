@@ -22,7 +22,11 @@ export function securityHeaders(config: Config): MiddlewareHandler<AppEnv> {
     }
 
     if (c.req.path.startsWith('/api') || c.req.path === '/metrics') {
-      headers.set('Cache-Control', 'no-store');
+      // `GET /api/files/:id/content` sets its own `private, no-store`; never clobber a
+      // route-level decision.
+      if (headers.get('Cache-Control') === null) {
+        headers.set('Cache-Control', 'no-store');
+      }
     }
   };
 }

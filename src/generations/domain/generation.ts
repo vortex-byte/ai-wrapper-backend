@@ -3,14 +3,13 @@
  * Terminal states are set conditionally so concurrent events resolve deterministically.
  */
 
-import type { FinishReason, MessageStatus, PartStatus } from '@/conversations/domain/conversation.ts';
+import type {
+  FinishReason,
+  MessageStatus,
+  PartStatus,
+} from '@/conversations/domain/conversation.ts';
 
-export type GenerationStatus =
-  | 'pending'
-  | 'generating'
-  | 'completed'
-  | 'cancelled'
-  | 'failed';
+export type GenerationStatus = 'pending' | 'generating' | 'completed' | 'cancelled' | 'failed';
 
 /** Terminal states are final; `pending`/`generating` are the two live states. */
 export const TERMINAL_STATUSES = ['completed', 'cancelled', 'failed'] as const;
@@ -66,9 +65,6 @@ export interface OutcomeMapping {
   readonly providerAccepted: boolean;
 }
 
-/**
- * Maps a generation outcome to terminal message and generation states.
- */
 export function mapOutcome(
   outcome: GenerationOutcome,
   options: { readonly hasContent: boolean },
@@ -126,9 +122,6 @@ export function canTransition(from: GenerationStatus, to: GenerationStatus): boo
   return to !== 'generating';
 }
 
-/**
- * Map a PAL `finished` reason onto a completed outcome.
- */
 export function completedFromFinishReason(
   reason: 'stop' | 'length' | 'content_filter' | 'tool_use' | 'other',
 ): CompletedFinishReason {

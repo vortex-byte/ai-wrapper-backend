@@ -1,8 +1,6 @@
 /**
- * Quota accounting port.
- *
- * Enforces reservation invariants inside send transactions and idempotent
- * settlement/release during terminal finalization.
+ * Quota accounting port: reservation inside send transactions, idempotent settlement and release
+ * at finalization.
  */
 
 import type { TransactionContext } from '@/db/tx.ts';
@@ -26,6 +24,8 @@ export interface ReserveContext {
   readonly marginOverride?: number | undefined;
   /** True when the request carries image/document parts (heavier estimation uncertainty). */
   readonly hasMediaParts: boolean;
+  /** The client opted into provider-side image generation for this turn. */
+  readonly imageGeneration?: boolean | undefined;
   /** Model context cap for per-request input token validation. */
   readonly maxInputTokensForRequest?: number | undefined;
 }
@@ -35,8 +35,7 @@ export interface ReservationHandle {
   readonly reservedTokens: number;
   readonly accountId: string | null;
   /**
-   * Effective output bound after clamping. When remaining quota is low, this bound
-   * is reduced to fit available tokens.
+   * Effective output bound after clamping; reduced when remaining quota is low.
    */
   readonly effectiveMaxOutputTokens: number | null;
   /** Quota tokens still available after this reservation. */
@@ -50,13 +49,15 @@ export interface Settlement {
   /** Raw provider tokens (input + output). Multiplied by `quota_weight` by the implementation. */
   readonly actualTokens: number;
   /** Usage breakdown for `usage_events` (optional: absent ⇒ raw actualTokens only). */
-  readonly usage?: {
-    readonly inputTokens: number;
-    readonly outputTokens: number;
-    readonly cachedInputTokens?: number | undefined;
-    readonly reasoningTokens?: number | undefined;
-    readonly source: 'provider' | 'estimated';
-  } | undefined;
+  readonly usage?:
+    | {
+        readonly inputTokens: number;
+        readonly outputTokens: number;
+        readonly cachedInputTokens?: number | undefined;
+        readonly reasoningTokens?: number | undefined;
+        readonly source: 'provider' | 'estimated';
+      }
+    | undefined;
   readonly outcomeCategory?: 'completed' | 'cancelled' | 'failed' | undefined;
   readonly errorCategory?: string | null | undefined;
   readonly durationMs?: number | null | undefined;

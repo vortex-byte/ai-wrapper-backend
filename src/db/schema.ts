@@ -242,6 +242,68 @@ export const messageParts = pgTable('message_parts', {
 });
 
 /**
+ * Binary artifacts — user uploads (`origin=input`) and provider-generated files hydrated
+ * by the ArtifactSink (`origin=generated`). See migrations/0013_attachments.sql.
+ */
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: uuid('id').primaryKey(),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => users.id),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+    messagePartId: uuid('message_part_id'),
+    origin: text('origin').notNull(),
+    kind: text('kind').notNull(),
+    displayName: text('display_name').notNull(),
+    declaredMime: text('declared_mime'),
+    detectedMime: text('detected_mime').notNull(),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    sha256: char('sha256', { length: 64 }).notNull(),
+    storageProvider: text('storage_provider').notNull(),
+    storageBucket: text('storage_bucket'),
+    storageKey: text('storage_key').notNull().unique(),
+    status: text('status').notNull(),
+    errorCode: text('error_code'),
+    width: integer('width'),
+    height: integer('height'),
+    pageCount: integer('page_count'),
+    metadata: jsonb('metadata').notNull().default({}),
+    expiresAt: timestamptz('expires_at').notNull(),
+    createdAt: timestamptz('created_at')
+      .notNull()
+      .default(sql`now()`),
+    deletedAt: timestamptz('deleted_at'),
+    pinnedAt: timestamptz('pinned_at'),
+  },
+  (table) => [
+    index('attachments_owner_conv_idx').on(table.ownerUserId, table.conversationId),
+    index('attachments_expiry_idx').on(table.expiresAt),
+  ],
+);
+
+export const fileExtractions = pgTable('file_extractions', {
+  fileId: uuid('file_id')
+    .primaryKey()
+    .references(() => attachments.id, { onDelete: 'cascade' }),
+  status: text('status').notNull(),
+  extractor: text('extractor'),
+  text: text('text'),
+  charCount: integer('char_count'),
+  tokenEstimate: integer('token_estimate'),
+  truncated: boolean('truncated').notNull().default(false),
+  pageCount: integer('page_count'),
+  errorCode: text('error_code'),
+  createdAt: timestamptz('created_at')
+    .notNull()
+    .default(sql`now()`),
+});
+
+/**
  * The generation execution and job record. One live generation per conversation
  * is enforced by a database partial unique index.
  */

@@ -1,8 +1,6 @@
 /**
- * Tool token tariffs.
- *
- * External actions (e.g. image generation, search) carry synthetic token tariffs.
- * Token-native actions (code, text) are billed via actual token consumption.
+ * Synthetic token tariffs for external actions (e.g. image generation, search). Token-native
+ * actions are billed by actual consumption.
  */
 
 export interface ToolTariff {
@@ -32,7 +30,5 @@ export function checkToolQuota(
   if (tariff === null) {
     return { allowed: true, tariff: { tokens: 0, reason: 'token-native tool' } };
   }
-  return remainingTokens >= tariff.tokens
-    ? { allowed: true, tariff }
-    : { allowed: false, tariff };
+  return remainingTokens >= tariff.tokens ? { allowed: true, tariff } : { allowed: false, tariff };
 }

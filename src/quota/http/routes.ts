@@ -15,10 +15,7 @@ import { parseJsonBody } from '@/http/validate.ts';
 import type { QuotaService } from '../application/quota-service.ts';
 import type { UsageService } from '../application/usage-service.ts';
 
-/**
- * Quota & usage HTTP surface.
- * Thin: parse → call the application service → shape the envelope.
- */
+/** Quota and usage read endpoints. */
 
 const UUID = z.string().uuid();
 
@@ -33,7 +30,10 @@ export const PolicyUpsertBodySchema = z.object({
 });
 
 export const AdjustmentBodySchema = z.object({
-  tokens: z.number().int().refine((v) => v !== 0, 'tokens must be non-zero'),
+  tokens: z
+    .number()
+    .int()
+    .refine((v) => v !== 0, 'tokens must be non-zero'),
   reason: z.string().min(1).max(500),
   expiresAtPeriodEnd: z.boolean().optional().default(true),
 });

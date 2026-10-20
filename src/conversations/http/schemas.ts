@@ -73,17 +73,20 @@ const SendPartSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('file'), fileId: z.uuid() }),
 ]);
 
+const SendOptionsSchema = z
+  .object({
+    maxOutputTokens: z.number().int().min(1).max(1_000_000).optional(),
+    tools: z.object({ imageGeneration: z.boolean().optional() }).optional(),
+  })
+  .optional();
+
 export const SendMessageBodySchema = z.object({
   parts: z.array(SendPartSchema).min(1).max(50),
-  options: z
-    .object({ maxOutputTokens: z.number().int().min(1).max(1_000_000).optional() })
-    .optional(),
+  options: SendOptionsSchema,
 });
 
 export const RetryMessageBodySchema = z.object({
-  options: z
-    .object({ maxOutputTokens: z.number().int().min(1).max(1_000_000).optional() })
-    .optional(),
+  options: SendOptionsSchema,
 });
 
 export const IdempotencyKeySchema = z.uuid();

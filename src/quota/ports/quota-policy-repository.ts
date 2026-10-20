@@ -1,7 +1,4 @@
-/**
- * Quota policy persistence.
- * Reads/writes `quota_policies` rows; resolution logic lives in `../domain/policy.ts`.
- */
+/** Persistence for `quota_policies`; resolution logic lives in `../domain/policy.ts`. */
 import type { TransactionContext } from '@/db/tx.ts';
 import type { QuotaPolicyRow } from '../domain/policy.ts';
 

@@ -34,7 +34,7 @@
 | 1 | Registry & conversations | 1.5 wk | Create conversation, history loads, model lock enforced | [x] code · [ ] integration suite run |
 | 2 | Generation core | 2 wk | Streaming E2E; kill -9 recovery; adapter contract tests green | [ ] |
 | 3 | Quota & usage | 2 wk | Concurrency/property tests green; reconciliation clean | [ ] |
-| 4 | Files & multimodal | 2 wk | Upload/attach/answer works; third adapter = zero core changes | [ ] |
+| 4 | Files, multimodal & cloud containers | 2 wk | Cloud doc generation (PDF/DOCX/XLSX/PPTX) & upload work; third adapter = zero core changes | [ ] |
 | 5 | Admin, observability, hardening | 1.5–2 wk | §25 readiness checklist fully checked | [ ] |
 | 6 | Pilot & launch | 2 wk | SLOs met 2 weeks; no P1 defects | [ ] |
 | — | Post-MVP | — | P1 items, S3 migration, multi-node streaming, P2 | [ ] |
@@ -103,24 +103,24 @@ Copied from `AGENTS.md` — these are not revisited during the build.
 - [x] Hono app: request-id middleware, JSON logging (pino) with redaction, `/healthz`, `/readyz`, `/metrics` (**raw, not enveloped**). ✅ M0.1
 - [x] **Wire contract (v1.3):** unversioned `/api` prefix + shared envelope helpers (`{status,message,data}` / `{status,code,message,retryable,details,trace?}`, `trace` only when `NODE_ENV=development`), per `docs/API_CONTRACTS.md` §1. No route hand-rolls JSON; 2xx never returns `204`. ✅ M0.1/M0.0
 - [x] DB layer: pool, Drizzle client, migration runner (forward-only, `pg_advisory_lock`), `db/seed` for the example registry (**never auto-applied in prod**). ✅ M0.2/M0.6 (`seed-example` guarded; populates once Phase 1 registry tables exist)
-- [x] **Migrations baseline:** `users`, `sessions`, `divisions`, `audit_logs`, `system_settings`, `jobs` (+ `citext` extension). Apply the AGENTS.md §6 grammar from day one (UUIDv7, `text`+`CHECK`, partial indexes). ✅ M0.2
+- [x] **Migrations baseline:** `users`, `sessions`, `divisions`, `audit_logs`, `system_settings`, `jobs` (+ `citext` extension). Apply the AGENTS.md §6 grammar from day one (UUIDv7, `text`+`CHECK` with `CHECK (role IN ('user','admin','super_admin'))` and `CHECK (role <> 'admin' OR division_id IS NOT NULL)`, partial indexes). ✅ M0.2
 - [x] **Auth (FR-AUTH-1…9):** argon2id (`Bun.password`), `POST /auth/login`, opaque `__Host-session` cookie, sessions in PostgreSQL (idle 8 h / absolute 24 h), rotation on login, lockout (8 / 15 min), per-IP login limit, generic errors. ✅ M0.3/M0.4/M0.5 (per-IP limit via `rateLimitLogin`)
-- [x] **RBAC** middleware (`user | admin`); `must_change_password` gate (403 `password_change_required`) allowing only `GET /me`, `POST /me/password`, `DELETE /auth/session`. ✅ M0.4/M0.5
-- [x] Admin user provisioning + password reset; `bootstrap-admin` CLI; last-admin protection. ✅ M0.5
+- [x] **RBAC** middleware (`user | admin | super_admin`); `must_change_password` gate (403 `password_change_required`) allowing only `GET /me`, `POST /me/password`, `DELETE /auth/session`. ✅ M0.4/M0.5
+- [x] **Two-tier user provisioning + password reset:** super admin (`super_admin`) platform-wide; division admin (`admin`) scoped strictly to assigned division (`division_id NOT NULL`, cross-division 404, role escalation forbidden); `bootstrap-admin` CLI (creates initial `super_admin`); last-super-admin protection (`409 conflict`). ✅ M0.5
 - [x] **Audit writer** (same transaction as the mutation); append-only grants prepared. ✅ M0.3 (grants in migrations)
 - [x] `FakeProvider` + provider registry interfaces (no adapter yet). ✅ M0.6
 - [ ] CI: lint (incl. provider-import rule), typecheck, unit + integration (Testcontainers), dependency audit, migration dry-run. — *deferred by decision (no workflow files yet); needs a hosted git remote*
 - [ ] Staging deploy using **Part B** (first pass — can be `ROLE=all`, single instance). — *runbook + scripts ready (`db:migrate:check`, `build`); needs the VPS*
 
-**Deliverables.** Sign-in/out, forced password change, admin user CRUD, RBAC, audit rows, health endpoints, CI green, staging reachable over HTTPS.
+**Deliverables.** Sign-in/out, forced password change, two-tier user CRUD (super admin platform-wide, division-scoped admin), RBAC, audit rows, health endpoints, CI green, staging reachable over HTTPS.
 
-**Exit criteria.** Auth + RBAC tests green (lockout, rotation, revocation, IDOR); deploy to staging reproducible from a clean checkout.
+**Exit criteria.** Auth + RBAC tests green (lockout, rotation, revocation, division admin isolation & cross-division 404, last-super-admin protection, IDOR); deploy to staging reproducible from a clean checkout.
 
 **Commands**
 ```bash
 bun install
 bun run db:migrate
-bun run cli bootstrap-admin --email you@corp.example
+bun run cli bootstrap-admin --email you@corp.example   # creates initial super_admin
 bun run cli seed-example   # optional dev examples; refuses in production
 bun run typecheck && bun run lint && bun run test
 bun run dev
@@ -128,19 +128,19 @@ bun run dev
 
 ## Phase 1 — Registry & conversations
 
-**Objective.** Admin-managed provider/model registry and the conversation/message/part persistence model.
+**Objective.** Super-admin-managed provider/model registry and the conversation/message/part persistence model.
 
 **Tasks**
 - [x] Migrations: `ai_providers`, `ai_models`, `ai_model_prices`, `conversations`, `messages`, `message_parts`, `quota_policies`, `quota_accounts`, `quota_reservations`, `quota_ledger`, `usage_events`, `usage_daily`, `idempotency_keys` (schema may land here; quota **logic** is Phase 3). ✅ M1.1 (`0008_registry`, `0009_conversations`, `0010_accounting` — accounting is schema-only; FKs to `generation_jobs` deferred to Phase 2)
 - [x] `forbid_model_switch` trigger (model immutable once `message_count > 0`). ✅ M1.2 (in `0009`; covered by `migrations.test.ts` + `conversations-http.test.ts`)
-- [x] Registry cache (≤30 s invalidation via `config_version`) + capability-driven validation. ✅ M1.3 (`CachedModelRegistry`: 30 s TTL + in-process `invalidate()` on admin writes; `config_version` is stored/bumped on writes and reserved for cross-node polling — PRD §9.4 "≤30 s" met)
-- [x] Admin APIs: providers (`secretRef` = env var name only), models, pricing, health/test stubs. ✅ M1.4 (`providers/http/admin-routes.ts`, incl. `GET/POST /models/:id/prices`, health snapshot + `POST /providers/:id/test`)
+- [x] Registry cache (≤30 s invalidation via `config_version`) + capability-driven validation. ✅ M1.3 (`CachedModelRegistry`: 30 s TTL + in-process `invalidate()` on super admin writes; `config_version` is stored/bumped on writes and reserved for cross-node polling — PRD §9.4 "≤30 s" met)
+- [x] Super Admin APIs: providers (`secretRef` = env var name only), models, pricing, health/test stubs. ✅ M1.4 (`providers/http/admin-routes.ts`, incl. `GET/POST /models/:id/prices`, health snapshot + `POST /providers/:id/test`)
 - [x] Conversations: create/list (keyset)/get/rename/soft-delete; `GET /models` filtered by status/permission. ✅ M1.5 (division-scoped visibility is P1)
 - [x] Messages: `GET /conversations/:id/messages` (cursor by `seq`), part loading (`ORDER BY message_id, position`). ✅ M1.6
 - [x] Context builder (text-only) with a truncation strategy hook. ✅ M1.7 (`context-builder/`; unit-tested)
-- [x] `system_settings` reader/writer (system prompt, limits, `quota.timezone`). ✅ M1.8 (audited `set()`; `quota.timezone` seeded. The admin **HTTP** route for settings is P1 — PRD §20)
+- [x] `system_settings` reader/writer (system prompt, limits, `quota.timezone`). ✅ M1.8 (audited `set()`; `quota.timezone` seeded. The super admin **HTTP** route for settings is P1 — PRD §20)
 
-**Deliverables.** Admin can register OpenAI + Anthropic + models; a user can create a conversation and load (empty) history; model lock enforced in the DB.
+**Deliverables.** Super Admin can register OpenAI + Anthropic + models; a user can create a conversation and load (empty) history; model lock enforced in the DB.
 
 **Exit criteria.** Integration tests: create conversation with model, model immutability, keyset pagination, IDOR on every ID route. — *Suite written (`tests/integration/conversations-http.test.ts`, `registry-http.test.ts`); must be executed against a real PostgreSQL (CI or local) to close the gate.*
 
@@ -176,7 +176,7 @@ bun run dev
 - [x] Tokenizer per provider (FR-QUOTA-7): `tiktoken` (WASM, lazy-init, cached per encoding) in OpenAI adapter; local port `dhamaniasad/claude-tokenizer` in Anthropic adapter; local/BPE tokenizer + margin for other adapter. Other adapter using heuristic.
 - [x] Comapre between `est_tokens` vs usage actual provider → metrics `estimation_error_ratio`; override margin per model via `models.config.estimation.margin`.
 - [x] Token estimation for message with image/PDF via formula per-provider in adapter; calibrate using real data.
-- [x] `GET /me/quota`, `GET /me/usage`; admin quota APIs (`quota-policies`, `adjustments`, user quota + ledger).
+- [x] `GET /me/quota`, `GET /me/usage`; super admin quota APIs (`quota-policies`, `adjustments`, user quota + ledger).
 - [x] `usage_events` written once per settled generation; `usage_daily` rollup handler + nightly rebuild.
 - [x] Nightly reconciliation (counters vs ledger) + a `reconcile` job.
 - [x] **Concurrency/property tests** (real PostgreSQL): the 100,000-limit / 50×20,000 test → exactly 5 succeed.
@@ -185,35 +185,111 @@ bun run dev
 
 **Exit criteria.** Concurrency + property tests green; `used + reserved <= limit` holds at every sampled instant; daily reconciliation runs (must stay clean for 14 days across Phases 3–5).
 
-## Phase 4 — Files, multimodal & built-in provider tools
+## Phase 4 — Files, multimodal & provider cloud containers (built-in tools)
 
-**Objective.** Upload, validate, extract, attach, and serve binary artifacts; integrate built-in provider cloud tools (search, fetch, code execution, skills, image/doc generation); prove the abstraction with a third adapter.
+**Objective.** Upload, validate, extract, attach, and serve binary artifacts; leverage **OpenAI and Anthropic Claude cloud-hosted containers and native skills** for high-fidelity document generation (`pdf`, `docx`, `xlsx`, `pptx`, charts, images) instead of self-hosted container runtimes on the VPS; hydrate provider artifacts into local storage; prove the abstraction with a third adapter (Gemini).
+
+> **Architectural Decision — Provider Cloud Containers vs. Self-Hosted:**
+> We deliberately avoid running self-hosted containers (Docker, microVMs, headless LibreOffice, Python sandboxes) on the VPS for file generation. The VPS stays a lightweight, native Bun process (`ROLE = api | worker | all`, no Docker daemon required). All arbitrary code execution, document generation, and sandbox rendering are offloaded to **Anthropic Claude Container Sandbox** (`code_execution` + official `pptx`, `xlsx`, `docx`, `pdf` skills) and **OpenAI Hosted Container** (`code_interpreter` and `shell` + `container_auto` + skills). **Image generation is provider-hosted too**: OpenAI's `image_generation` tool runs on OpenAI's side and returns the image over the API — there is no local renderer (no LibreOffice, no image libraries) on the VPS. Anthropic Claude cannot generate images; Gemini support is post-MVP. This guarantees zero host sandbox escape risks, preserves VPS CPU/memory, and delivers production-grade document fidelity with zero container overhead on the host.
 
 **Tasks**
-- [ ] `attachments` + `file_extractions` migrations; `StorageProvider` interface + `LocalStorageProvider` (`STORAGE_LOCAL_ROOT`, opaque keys only — no paths stored/returned).
-- [ ] Upload pipeline: size/type limits, magic-byte detection, image dimension/probe, archive-bomb + macro + encrypted-PDF rejection, `sha256`.
-- [ ] Async extraction job (forked child: timeout + memory limit); 5 s fast-path; `RETAIN_EXTRACTIONS`.
-- [ ] Attach flow inside the send transaction; `ArtifactSink` for `generated_file` and generated image parts.
-- [ ] Built-in provider tools (cloud-executed, toggleable via `options.tools`):
-  - Web search (`web_search`) and web fetch (`web_fetch`) grounding.
-  - Cloud code execution (`code_execution`) sandbox & built-in skills (`xlsx`, `docx`, `pptx`, `pdf`).
-  - Image generation (OpenAI/Claude image generation).
-  - Multi-part SSE streaming (`part.started`, `tool.started`, `tool.delta`, `tool.completed`, `part.completed`).
-  - Artifact hydration: `ArtifactSink` intercepts provider `file_id` / generated bytes, downloads them from provider APIs (e.g. Anthropic Files API), commits them to local storage, and creates `attachments` rows.
-- [ ] `GET /files/:id/content` (owner-only, correct headers, `Range`); `GET`/`DELETE /attachments/:id`.
-- [ ] Cleanup jobs: `files.expire_and_delete` (two-phase), `files.orphan_reaper`, `storage.reconcile` weekly.
-- [ ] **Third adapter: Gemini** (must require zero core changes to `orchestrator/`).
+- [ ] **M4.1 — Storage & Attachments Domain Foundations:**
+  - Migrations: `attachments` and `file_extractions` tables (per `AGENTS.md` §6.7).
+  - Ports & Adapters: `StorageProviderPort` interface (`putStream`, `getStream`, `delete`, `exists`, `getMetadata`) + `LocalStorageProvider` (`STORAGE_LOCAL_ROOT`, e.g. `/var/lib/ai-chat/files`).
+  - Opaque key scheme: `files/YYYY/MM/<uuid>` — strictly no filesystem paths stored in DB or returned over HTTP (PRD §12.1).
+  - Content endpoint: `GET /files/:id/content` with strict owner-authorization (`AuthContext`), correct MIME headers, `Content-Disposition`, anti-sniffing headers (`X-Content-Type-Options: nosniff`), and HTTP `Range` byte-serving support for large files.
+  - Attachment metadata APIs: `GET /attachments/:id`, `DELETE /attachments/:id` (soft-delete + storage purge).
 
-**Deliverables.** Image + document upload → attach → grounded answer; toggleable search/fetch/skills; generated files and images stored and downloadable; TTL cleanup working.
+- [ ] **M4.2 — Upload Validation & Lightweight Text Extraction Pipeline:**
+  - Hardened upload pipeline: size limits (30MB total, configurable per MIME), magic-byte sniffing (via file signature analysis, rejecting mismatched declared MIME), image dimension probing (PNG/JPEG/WebP/GIF).
+  - Security rejections: zip-bomb / archive expansion limits, macro-enabled documents (`.docm`, `.xlsm` rejected), encrypted/password-protected PDFs rejected.
+  - Input text extraction: Asynchronous extraction job (`file_extractions`) for user-uploaded documents, powered by [`firecrawl/anydoc`](https://github.com/firecrawl/anydoc) (`@firecrawl/anydoc`) — Rust converter (DOCX/DOC, XLSX/XLS, PPTX, PDF, CSV, RTF, ODF, EPUB → Markdown) with Node bindings off the event loop. Scanned PDFs (`NeedsOcr`) are recorded `failed/needs_ocr`; hosted OCR is a P2 extension point (off by default).
+  - Fast-path execution (5s wait in upload request): returns `201 ready` if fast-path completes, else `202 processing` with background worker.
+  - *Scope demarcation:* Local extraction is strictly read-only text indexing for conversation context. Binary document generation (PDF/DOCX/XLSX/PPTX) is **never performed locally**.
 
-**Exit criteria.** Upload-hardening tests pass; built-in tool streaming and artifact downloads verified with real/fake providers; third adapter added with **zero** core changes; disk-space alerts set.
+- [ ] **M4.3 — Anthropic Claude Cloud Container & Agent Skills Adapter:**
+  - [x] Enable Anthropic code execution tool (`code_execution_20250825` or `code_execution_20260120`) in `src/providers/infrastructure/adapters/anthropic/`.
+  - [x] Declare skills on the container from the model registry (`model.config.containerSkills`, defaulting to all four):
+    `container: { skills: [{ type: "anthropic", skill_id: "pdf" | "docx" | "xlsx" | "pptx", version: "latest" }] }`.
+    Skills are registry-level, not a per-request client toggle.
+  - [ ] Input file mounting via Anthropic Files API:
+    - Adapter side is in place (`uploadInputFile`, `container_upload` blocks) but no producer populates
+      `NormalizedChatRequest.inputFiles` yet, so nothing is mounted today.
+    - Planned: upload from `LocalStorageProvider` to `POST https://api.anthropic.com/v1/files`, inject
+      `container_upload` blocks into the user turn, and cache the provider `file_id` on the attachment row.
+  - [ ] Multi-turn container reuse (`container.id`):
+    - The adapter accepts `container.id` and rolls `expires_at` forward, but the id is not persisted:
+      `generation_jobs.context_info` / conversation state never record it, so every turn starts fresh.
+  - [x] Handle `pause_turn` stop reason in orchestrator (continue turn in the same container, hard cap on continuations).
+  - [x] Capture generated files:
+    - Parse `bash_code_execution_tool_result` output blocks containing `file_id` (files written to `$OUTPUT_DIR`).
+    - Retrieve metadata: `GET https://api.anthropic.com/v1/files/{file_id}` (`filename`, `size_bytes`).
+    - Download binary stream: `GET https://api.anthropic.com/v1/files/{file_id}/content`.
+    - Stream directly to `LocalStorageProvider`, create `attachments` row (`origin = 'generated'`, `kind = 'document'`), and generate `message_parts` row (`type = 'generated_file'`).
+
+- [x] **M4.4 — OpenAI Hosted Container & Built-in Skills Adapter:**
+  - Responses API built-in tool configuration in `src/providers/infrastructure/adapters/openai/adapter.ts`
+    (container turns and image-generation turns only; everything else stays on Chat Completions):
+    - `code_interpreter` with `container: { type: "auto", file_ids }` (or a pinned container id) for the Python sandbox.
+    - `shell` with `environment: { type: "container_auto", file_ids, skills: [...] }` (or `container_reference`) — skills attach to the shell container only.
+    - One sandbox per request: declaring both tools with separate auto containers would give the model two isolated sandboxes.
+  - Input file mounting via OpenAI Files API: `/v1/files` with purpose **`user_data`** (the documented flexible Responses purpose), then `file_ids` on the container. Same gap as M4.3: the adapter consumes `req.inputFiles` but no producer fills it yet.
+  - Generated images: the hosted `image_generation` tool returns base64 in the stream; the adapter sniffs the
+    magic bytes (PNG/JPEG/WebP), emits the artifact with inline bytes, and the sink stores them without a
+    download round-trip. Gated per request by `options.tools.imageGeneration`.
+  - Capture generated files: `container_file_citation` annotations plus a container files sweep
+    (`GET /v1/containers/{container_id}/files`, `source = "assistant"`), downloaded through
+    `GET /v1/containers/{container_id}/files/{file_id}/content`, persisted via `StorageProvider`, and linked to `attachments`/`message_parts`.
+  - Context compaction: deferred (bounded by `max_output_tokens` and the generation timeout).
+
+- [ ] **M4.5 — PAL Orchestration, ArtifactSink & Multi-Part SSE Streaming:**
+  - PAL (Provider Abstraction Layer) unification:
+    - Provider-agnostic representation for container tools, skills, and file generation in `NormalizedChatRequest`.
+    - Unified streaming events:
+      - `tool.started` (tool name: code_execution, bash, shell, skills)
+      - `tool.delta` (code snippet, command output, stdout/stderr)
+      - `tool.completed` (status, return code, provider file references)
+      - `part.started` / `part.completed` (`type = 'generated_file'` or `'image'`)
+    - Client SSE payload includes hydrated download endpoint (`/api/files/{id}/content`), display name, MIME type, and byte size.
+  - `ArtifactSink` implementation:
+    - Intercepts provider file IDs during streaming finalization.
+    - Streams binary bytes directly from provider Files API to local storage.
+    - Computes `sha256`, detects actual MIME, populates `attachments` and `message_parts` inside settlement transaction (T2).
+  - Quota accounting:
+    - Account for container tool execution tokens (input, output, reasoning) in `usage_events` and quota settlement.
+
+- [ ] **M4.6 — File Retention, Cleanup & Third Adapter (Gemini):**
+  - Automated retention jobs:
+    - `files.expire_and_delete`: Two-phase TTL reaper (mark `expired`, unlink binary from disk after grace period).
+    - `files.orphan_reaper`: Cleans unattached uploads after 24h.
+    - `storage.reconcile`: Weekly job cross-referencing disk blobs with DB `attachments` records.
+  - Third adapter: Google Gemini:
+    - Implement Gemini adapter adhering to PAL without changing `orchestrator/`.
+    - Support Gemini multimodal inputs (images, audio, PDF) and built-in Google Search / Code Execution tools.
+
+**Deliverables.**
+- End-to-end file generation for PDF, DOCX, XLSX, PPTX, charts, and images using OpenAI and Anthropic cloud containers.
+- Zero local Docker / container dependencies on the VPS host.
+- Automated artifact hydration via `ArtifactSink` downloading files from provider Files APIs to local storage.
+- Multi-turn container continuity (`container.id` reuse for conversational document iteration).
+- Hardened upload validation pipeline and lightweight local text indexing (`file_extractions`).
+- Multi-part SSE streaming for tool progress and generated file links.
+- Third adapter (Gemini) working with zero core orchestrator changes.
+
+**Exit criteria.**
+- Upload-hardening tests pass (rejection of malicious MIME, zip-bombs, macros, encrypted PDFs).
+- Cloud container execution and document generation verified with real OpenAI and Anthropic credentials.
+- Multi-turn container state reuse verified (follow-up prompt edits an existing generated spreadsheet/document in the same container).
+- Artifact download endpoint (`GET /files/:id/content`) verified with authorization checks and range requests.
+- Third adapter (Gemini) contract tests pass with zero core changes.
+- VPS host remains completely container-free (native Bun process only).
 
 ## Phase 5 — Admin, observability, hardening
 
 **Objective.** Meet the production readiness checklist (PRD §25).
 
 **Tasks**
-- [ ] Admin reporting APIs: usage (`groupBy`), error explorer (`error_events`), audit log search; CSV exports (P1).
+- [ ] Super admin reporting APIs: usage (`groupBy`), error explorer (`error_events`), audit log search; CSV exports (P1); verification of division admin vs super admin permission boundaries.
 - [ ] Metrics (low cardinality), dashboards, alert rules (§21.5); OTLP tracing hook (sample errors 100 %, success 10 %).
 - [ ] Rate limiting (per-IP/login/user/message/upload) with `RateLimit-*` headers; security headers + CORS + CSRF/Origin.
 - [ ] Retention jobs (messages, files, ledger, audit, logs); session/idempotency purge.
@@ -662,7 +738,7 @@ blobs are marked `missing` and the UI shows "unavailable"). Back up the **databa
 ## B15 — Go-live checklist
 
 - [ ] PRD §25 checklist fully checked.
-- [ ] `bootstrap-admin` executed on the production DB; first login forces a password change.
+- [ ] `bootstrap-admin` executed on the production DB (provisions initial `super_admin`); first login forces a password change.
 - [ ] Provider registry populated; keys valid; health check green; spend caps set.
 - [ ] Verified tokenizers per provider: `tiktoken` for OpenAI and the ported `claude-tokenizer` for Anthropic produce estimates within a margin of error against actual `usage` (metric `estimation_error_ratio`); cold-start estimation was recorded in the load test.
 - [ ] Backups running + **restore drill passed**; offsite copy verified.
@@ -747,7 +823,7 @@ WantedBy=multi-user.target
 # 6) migrate as migrator                        (B8)
 # 7) enable + start systemd units               (B6)
 # 8) configure proxy + TLS                      (B7)
-# 9) bootstrap admin                            (Phase 0)
+# 9) bootstrap super admin                     (Phase 0)
 sudo -u aichat sh -c 'set -a; . /etc/ai-chat/ai-chat.env; set +a; cd /srv/ai-chat/current && bun run cli bootstrap-admin --email you@corp.example'
 # 10) verify health + login + a smoke generation
 curl -fsS https://ai.corp.example/readyz

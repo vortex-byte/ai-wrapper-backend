@@ -30,7 +30,6 @@ export interface ConversationRoutesDeps {
 }
 
 /**
- * Conversation + message read API. Thin: parse → use case → shape.
  * Every route is scoped to the signed-in user; another user's id yields `404 not_found`.
  */
 export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
@@ -58,9 +57,7 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
       limit: parsed.data.limit,
       cursor,
     });
-    return c.json(
-      ok({ items: page.items.map(toWireConversation), nextCursor: page.nextCursor }),
-    );
+    return c.json(ok({ items: page.items.map(toWireConversation), nextCursor: page.nextCursor }));
   });
 
   routes.post('/conversations', async (c) => {
@@ -86,11 +83,7 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
     const caller = c.get('auth');
     if (!caller) throw new AppError('unauthenticated');
     const body = await parseJsonBody(c, RenameConversationBodySchema);
-    const conversation = await conversations.rename(
-      c.req.param('id'),
-      caller.user.id,
-      body.title,
-    );
+    const conversation = await conversations.rename(c.req.param('id'), caller.user.id, body.title);
     return c.json(ok(toWireConversationDetail(conversation), 'Conversation updated.'));
   });
 
@@ -219,9 +212,6 @@ function toWirePart(part: MessagePart) {
   return { ...base, data: part.data };
 }
 
-/**
- * Validates that `Idempotency-Key` header is present and is a UUID.
- */
 function readIdempotencyKey(header: string | undefined): string {
   if (header === undefined || header === '') {
     throw new AppError('invalid_request', 'The Idempotency-Key header is required.', {

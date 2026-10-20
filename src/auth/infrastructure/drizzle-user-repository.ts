@@ -177,19 +177,19 @@ export class DrizzleUserRepository implements UserRepository {
     return toUser(row);
   }
 
-  async countActiveAdmins(tx?: TransactionContext): Promise<number> {
+  async countActiveSuperAdmins(tx?: TransactionContext): Promise<number> {
     const rows = await runDb(tx)
       .select({ count: sql<number>`count(*)::int` })
       .from(users)
-      .where(and(eq(users.role, 'admin'), eq(users.status, 'active'), isNull(users.deletedAt)));
+      .where(and(eq(users.role, 'super_admin'), eq(users.status, 'active'), isNull(users.deletedAt)));
     return rows[0]?.count ?? 0;
   }
 
-  async lockActiveAdmins(tx: TransactionContext): Promise<number> {
+  async lockActiveSuperAdmins(tx: TransactionContext): Promise<number> {
     const rows = await runDb(tx)
       .select({ id: users.id })
       .from(users)
-      .where(and(eq(users.role, 'admin'), eq(users.status, 'active'), isNull(users.deletedAt)))
+      .where(and(eq(users.role, 'super_admin'), eq(users.status, 'active'), isNull(users.deletedAt)))
       .for('update');
     return rows.length;
   }

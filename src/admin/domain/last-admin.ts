@@ -4,24 +4,25 @@ export interface SafeguardCheckInput {
   readonly targetUser: User;
   readonly newRole?: UserRole | undefined;
   readonly newStatus?: UserStatus | undefined;
-  readonly activeAdminCount: number;
+  readonly activeSuperAdminCount: number;
 }
 
 /**
- * Domain invariant: cannot disable or demote the last active admin.
+ * Domain invariant: cannot disable or demote the last active super_admin.
  */
 export function canUpdateUserRoleOrStatus(input: SafeguardCheckInput): boolean {
-  const { targetUser, newRole, newStatus, activeAdminCount } = input;
+  const { targetUser, newRole, newStatus, activeSuperAdminCount } = input;
 
-  const isCurrentlyActiveAdmin = targetUser.role === 'admin' && targetUser.status === 'active';
-  if (!isCurrentlyActiveAdmin) {
+  const isCurrentlyActiveSuperAdmin =
+    targetUser.role === 'super_admin' && targetUser.status === 'active';
+  if (!isCurrentlyActiveSuperAdmin) {
     return true;
   }
 
-  const isDemoted = newRole !== undefined && newRole !== 'admin';
+  const isDemoted = newRole !== undefined && newRole !== 'super_admin';
   const isDisabled = newStatus !== undefined && newStatus !== 'active';
 
-  if ((isDemoted || isDisabled) && activeAdminCount <= 1) {
+  if ((isDemoted || isDisabled) && activeSuperAdminCount <= 1) {
     return false;
   }
 

@@ -25,13 +25,26 @@ const users = new DrizzleUserRepository();
 const hasher = new BunPasswordHasher();
 const PASSWORD = 'correct horse battery staple';
 
-async function seedAdminUser(email = 'admin@corp.example') {
+async function seedSuperAdminUser(email = 'admin@corp.example') {
   return users.create({
     id: Bun.randomUUIDv7(),
     email,
-    displayName: 'Admin User',
+    displayName: 'Super Admin User',
+    passwordHash: await hasher.hash(PASSWORD),
+    role: 'super_admin',
+    mustChangePassword: false,
+    status: 'active',
+  });
+}
+
+async function seedAdminUser(email = 'admin@corp.example', divisionId: string) {
+  return users.create({
+    id: Bun.randomUUIDv7(),
+    email,
+    displayName: 'Division Admin User',
     passwordHash: await hasher.hash(PASSWORD),
     role: 'admin',
+    divisionId,
     mustChangePassword: false,
     status: 'active',
   });
@@ -97,8 +110,8 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     expect(body.code).toBe('forbidden');
   });
 
-  it('admin can list users, create user, and update user', async () => {
-    await seedAdminUser('admin@corp.example');
+  it('super admin can list users, create user, and update user', async () => {
+    await seedSuperAdminUser('admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
 
     const listRes = await app.request(
@@ -143,8 +156,8 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     expect(auditRows.rows[0]?.action).toBe('user.create');
   });
 
-  it('enforces last-admin safeguard: cannot demote the only active admin', async () => {
-    const admin = await seedAdminUser('onlyadmin@corp.example');
+  it('enforces last-super-admin safeguard: cannot demote the only active super admin', async () => {
+    const admin = await seedSuperAdminUser('onlyadmin@corp.example');
     const { cookie, csrfToken } = await loginAs('onlyadmin@corp.example');
 
     const res = await app.request(
@@ -163,7 +176,7 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     expect(res.status).toBe(409);
     const body = (await res.json()) as { code: string; message: string };
     expect(body.code).toBe('conflict');
-    expect(body.message).toBe('Cannot disable or demote the last active admin.');
+    expect(body.message).toBe('Cannot disable or demote the last active super admin.');
   });
 
   it('returns standard 404 envelope for unmatched /api routes', async () => {
@@ -176,7 +189,7 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
   });
 
   it('allows re-creating a user whose email belonged to a soft-deleted row (409→201)', async () => {
-    await seedAdminUser('admin@corp.example');
+    await seedSuperAdminUser('admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
     const pool = getPool();
 
@@ -213,7 +226,7 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
   });
 
   it('returns 409 (not 500) when the email belongs to a live user', async () => {
-    await seedAdminUser('admin@corp.example');
+    await seedSuperAdminUser('admin@corp.example');
     await seedStandardUser('taken@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
 
@@ -241,7 +254,7 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
   });
 
   it('rejects a malformed cursor with 400 instead of silently returning page 1', async () => {
-    await seedAdminUser('admin@corp.example');
+    await seedSuperAdminUser('admin@corp.example');
     const { cookie } = await loginAs('admin@corp.example');
 
     const res = await app.request(
@@ -255,11 +268,11 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     expect(body.code).toBe('invalid_request');
   });
 
-  it('keeps at least one active admin under concurrent demotions', async () => {
-    // Three admins: A and B are the concurrent targets, C is the caller (stays admin).
-    await seedAdminUser('admin-c@corp.example');
-    const adminA = await seedAdminUser('admin-a@corp.example');
-    const adminB = await seedAdminUser('admin-b@corp.example');
+  it('keeps at least one active super admin under concurrent demotions', async () => {
+    // Three super admins: A and B are the concurrent targets, C is the caller (stays super admin).
+    await seedSuperAdminUser('admin-c@corp.example');
+    const adminA = await seedSuperAdminUser('admin-a@corp.example');
+    const adminB = await seedSuperAdminUser('admin-b@corp.example');
     const { cookie, csrfToken } = await loginAs('admin-c@corp.example');
 
     const demote = (targetId: string) =>
@@ -281,9 +294,228 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
 
     const pool = getPool();
     const activeAdmins = await pool.query(
-      "SELECT count(*)::int AS n FROM users WHERE role = 'admin' AND status = 'active' AND deleted_at IS NULL",
+      "SELECT count(*)::int AS n FROM users WHERE role = 'super_admin' AND status = 'active' AND deleted_at IS NULL",
     );
     expect(activeAdmins.rows[0]?.n).toBeGreaterThanOrEqual(1);
     expect(statuses.every((s) => s === 200 || s === 409)).toBe(true);
+  });
+
+  describe('two-tier role division admin and super admin isolation', () => {
+    it('division admin can manage users in own division but cannot escalate roles, reassign divisions, or touch other divisions', async () => {
+      const pool = getPool();
+      const div1Id = Bun.randomUUIDv7();
+      const div2Id = Bun.randomUUIDv7();
+      await pool.query('INSERT INTO divisions (id, name) VALUES ($1, $2), ($3, $4)', [
+        div1Id,
+        'Engineering',
+        div2Id,
+        'Marketing',
+      ]);
+
+      const divAdmin = await seedAdminUser('divadmin@corp.example', div1Id);
+      const userDiv1 = await users.create({
+        id: Bun.randomUUIDv7(),
+        email: 'user1@corp.example',
+        displayName: 'User 1',
+        passwordHash: await hasher.hash(PASSWORD),
+        role: 'user',
+        divisionId: div1Id,
+        mustChangePassword: false,
+        status: 'active',
+      });
+      const userDiv2 = await users.create({
+        id: Bun.randomUUIDv7(),
+        email: 'user2@corp.example',
+        displayName: 'User 2',
+        passwordHash: await hasher.hash(PASSWORD),
+        role: 'user',
+        divisionId: div2Id,
+        mustChangePassword: false,
+        status: 'active',
+      });
+
+      const { cookie, csrfToken } = await loginAs('divadmin@corp.example');
+
+      // 1. List users: only sees own division users (divAdmin and userDiv1), not userDiv2
+      const listRes = await app.request(
+        new Request('http://localhost/api/admin/users', {
+          headers: { Cookie: cookie },
+        }),
+      );
+      expect(listRes.status).toBe(200);
+      const listBody = (await listRes.json()) as { data: { items: Array<{ id: string }> } };
+      const listedIds = listBody.data.items.map((i) => i.id);
+      expect(listedIds).toContain(divAdmin.id);
+      expect(listedIds).toContain(userDiv1.id);
+      expect(listedIds).not.toContain(userDiv2.id);
+
+      // 2. Cross-division access returns 404 (opaque existence protection)
+      const getCrossRes = await app.request(
+        new Request(`http://localhost/api/admin/users/${userDiv2.id}`, {
+          headers: { Cookie: cookie },
+        }),
+      );
+      expect(getCrossRes.status).toBe(404);
+
+      const patchCrossRes = await app.request(
+        new Request(`http://localhost/api/admin/users/${userDiv2.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ displayName: 'Hacked' }),
+        }),
+      );
+      expect(patchCrossRes.status).toBe(404);
+
+      // 3. Create user forces divisionId to caller's division, and role must be 'user'
+      const createEscalateRes = await app.request(
+        new Request('http://localhost/api/admin/users', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({
+            email: 'escalate@corp.example',
+            displayName: 'Escalate',
+            role: 'admin',
+            generatePassword: true,
+          }),
+        }),
+      );
+      expect(createEscalateRes.status).toBe(403);
+
+      const createValidRes = await app.request(
+        new Request('http://localhost/api/admin/users', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({
+            email: 'newuser1@corp.example',
+            displayName: 'New User 1',
+            role: 'user',
+            divisionId: div2Id, // Attempted to assign to div2, should be overridden to div1
+            generatePassword: true,
+          }),
+        }),
+      );
+      expect(createValidRes.status).toBe(201);
+      const createdUser = (await createValidRes.json()) as { data: { divisionId: string } };
+      expect(createdUser.data.divisionId).toBe(div1Id);
+
+      // 4. Forbid changing role or division on own-division user
+      const patchRoleRes = await app.request(
+        new Request(`http://localhost/api/admin/users/${userDiv1.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ role: 'admin' }),
+        }),
+      );
+      expect(patchRoleRes.status).toBe(403);
+
+      const patchDivRes = await app.request(
+        new Request(`http://localhost/api/admin/users/${userDiv1.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ divisionId: div2Id }),
+        }),
+      );
+      expect(patchDivRes.status).toBe(403);
+
+      // 5. Forbid self-disabling
+      const selfDisableRes = await app.request(
+        new Request(`http://localhost/api/admin/users/${divAdmin.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ status: 'disabled' }),
+        }),
+      );
+      expect(selfDisableRes.status).toBe(403);
+
+      // 6. Division admin cannot access super_admin routes (e.g. /api/admin/divisions)
+      const divisionsRes = await app.request(
+        new Request('http://localhost/api/admin/divisions', {
+          headers: { Cookie: cookie },
+        }),
+      );
+      expect(divisionsRes.status).toBe(403);
+
+      // 7. Division admin cannot target super_admin even in same division
+      const superAdminDiv1 = await seedSuperAdminUser('super-in-div1@corp.example');
+      await pool.query('UPDATE users SET division_id = $1 WHERE id = $2', [
+        div1Id,
+        superAdminDiv1.id,
+      ]);
+
+      const getSuperRes = await app.request(
+        new Request(`http://localhost/api/admin/users/${superAdminDiv1.id}`, {
+          headers: { Cookie: cookie },
+        }),
+      );
+      expect(getSuperRes.status).toBe(404);
+
+      const patchSuperRes = await app.request(
+        new Request(`http://localhost/api/admin/users/${superAdminDiv1.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ displayName: 'Hacked Super' }),
+        }),
+      );
+      expect(patchSuperRes.status).toBe(404);
+
+      const resetSuperRes = await app.request(
+        new Request(`http://localhost/api/admin/users/${superAdminDiv1.id}/password/reset`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ generatePassword: true }),
+        }),
+      );
+      expect(resetSuperRes.status).toBe(404);
+
+      // 8. Non-UUID path parameters return 400 invalid_request instead of 500
+      const malformedIdRes = await app.request(
+        new Request('http://localhost/api/admin/users/not-a-uuid', {
+          headers: { Cookie: cookie },
+        }),
+      );
+      expect(malformedIdRes.status).toBe(400);
+      const malformedBody = (await malformedIdRes.json()) as { code: string };
+      expect(malformedBody.code).toBe('invalid_request');
+    });
   });
 });

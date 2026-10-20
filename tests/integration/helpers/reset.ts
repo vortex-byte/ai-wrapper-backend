@@ -34,6 +34,7 @@ const RESET_STATEMENTS = [
   'DELETE FROM ai_providers',
   'UPDATE system_settings SET updated_by = NULL WHERE updated_by IS NOT NULL',
   'DELETE FROM users',
+  'DELETE FROM divisions',
 ] as const;
 
 export async function resetDatabase(): Promise<void> {

@@ -43,31 +43,31 @@ class InMemoryDivisionRepository implements DivisionRepository {
   }
 }
 
-describe('last-admin domain safeguard', () => {
-  it('prevents demoting or disabling the only active admin', () => {
-    const adminUser = makeUser({ role: 'admin', status: 'active' });
+describe('last-super-admin domain safeguard', () => {
+  it('prevents demoting or disabling the only active super_admin', () => {
+    const superAdminUser = makeUser({ role: 'super_admin', status: 'active' });
 
     expect(
       canUpdateUserRoleOrStatus({
-        targetUser: adminUser,
+        targetUser: superAdminUser,
         newRole: 'user',
-        activeAdminCount: 1,
+        activeSuperAdminCount: 1,
       }),
     ).toBe(false);
 
     expect(
       canUpdateUserRoleOrStatus({
-        targetUser: adminUser,
+        targetUser: superAdminUser,
         newStatus: 'disabled',
-        activeAdminCount: 1,
+        activeSuperAdminCount: 1,
       }),
     ).toBe(false);
 
     expect(
       canUpdateUserRoleOrStatus({
-        targetUser: adminUser,
+        targetUser: superAdminUser,
         newRole: 'user',
-        activeAdminCount: 2,
+        activeSuperAdminCount: 2,
       }),
     ).toBe(true);
   });
@@ -94,6 +94,12 @@ describe('generateTemporaryPassword', () => {
 
 describe('admin service', () => {
   const meta = { ip: '127.0.0.1', userAgentHash: 'hash', requestId: 'req-1' };
+  const superAdminCaller = {
+    actorUserId: 'admin-1',
+    role: 'super_admin' as const,
+    divisionId: null,
+    meta,
+  };
 
   function setup() {
     const harness = createHarness();
@@ -113,7 +119,7 @@ describe('admin service', () => {
 
   it('creates a user with generated temporary password and logs audit', async () => {
     const { admin, harness } = setup();
-    const adminUser = makeUser({ id: 'admin-1', role: 'admin' });
+    const adminUser = makeUser({ id: 'admin-1', role: 'super_admin' });
     harness.users.seed(adminUser);
 
     const res = await admin.createUser({
@@ -121,8 +127,7 @@ describe('admin service', () => {
       displayName: 'New User',
       role: 'user',
       generatePassword: true,
-      actorUserId: 'admin-1',
-      meta,
+      caller: superAdminCaller,
     });
 
     expect(res.user.email).toBe('newuser@corp.example');
@@ -131,31 +136,30 @@ describe('admin service', () => {
     expect(harness.audit.actions()).toContain('user.create');
   });
 
-  it('prevents demoting the last admin', async () => {
+  it('prevents demoting the last super admin', async () => {
     const { admin, harness } = setup();
-    const onlyAdmin = makeUser({ id: 'admin-1', role: 'admin', status: 'active' });
+    const onlyAdmin = makeUser({ id: 'admin-1', role: 'super_admin', status: 'active' });
     harness.users.seed(onlyAdmin);
 
     await expect(
       admin.updateUser({
         id: 'admin-1',
         role: 'user',
-        actorUserId: 'admin-1',
-        meta,
+        caller: superAdminCaller,
       }),
-    ).rejects.toThrow('Cannot disable or demote the last active admin.');
+    ).rejects.toThrow('Cannot disable or demote the last active super admin.');
   });
 
   it('never exposes passwordHash through its read surface', async () => {
     const { admin, harness } = setup();
-    const list = await admin.listUsers({});
+    const list = await admin.listUsers({}, superAdminCaller);
     harness.users.seed(makeUser({ id: 'u1', passwordHash: 'plain$secret' }));
 
-    const listed = await admin.listUsers({});
+    const listed = await admin.listUsers({}, superAdminCaller);
     expect(list.items).toHaveLength(0);
     expect(listed.items[0]).not.toHaveProperty('passwordHash');
 
-    const fetched = await admin.getUser('u1');
+    const fetched = await admin.getUser('u1', superAdminCaller);
     expect(fetched).not.toHaveProperty('passwordHash');
   });
 
@@ -170,13 +174,196 @@ describe('admin service', () => {
       );
     }
 
-    const first = await admin.listUsers({ limit: 2 });
+    const first = await admin.listUsers({ limit: 2 }, superAdminCaller);
     expect(first.items).toHaveLength(2);
     expect(first.nextCursor).not.toBeNull();
 
-    const second = await admin.listUsers({ limit: 2, cursor: first.nextCursor ?? undefined });
+    const second = await admin.listUsers(
+      { limit: 2, cursor: first.nextCursor ?? undefined },
+      superAdminCaller,
+    );
     expect(second.items).toHaveLength(2);
     const firstIds = new Set(first.items.map((u) => u.id));
     expect(second.items.every((u) => !firstIds.has(u.id))).toBe(true);
+  });
+
+  describe('division admin isolation & rules', () => {
+    const div1Caller = {
+      actorUserId: 'admin-div-1',
+      role: 'admin' as const,
+      divisionId: 'div-1',
+      meta,
+    };
+
+    it('forces divisionId on create and restricts role to user', async () => {
+      const { admin, harness, divisions } = setup();
+      await divisions.create({ id: 'div-1', name: 'Division 1' });
+      harness.users.seed(
+        makeUser({ id: 'admin-div-1', role: 'admin', divisionId: 'div-1', status: 'active' }),
+      );
+
+      // Attempt to create super_admin or admin fails with forbidden
+      await expect(
+        admin.createUser({
+          email: 'admin2@corp.example',
+          displayName: 'Admin 2',
+          role: 'admin',
+          generatePassword: true,
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('Division administrators can only provision users with the user role.');
+
+      // Valid creation forces divisionId = caller.divisionId
+      const created = await admin.createUser({
+        email: 'user-in-div1@corp.example',
+        displayName: 'User In Div 1',
+        role: 'user',
+        generatePassword: true,
+        divisionId: 'some-other-div', // ignored/overridden
+        caller: div1Caller,
+      });
+
+      expect(created.user.divisionId).toBe('div-1');
+      expect(created.user.role).toBe('user');
+    });
+
+    it('returns 404 when division admin accesses or modifies users in other divisions', async () => {
+      const { admin, harness } = setup();
+      harness.users.seed(
+        makeUser({ id: 'admin-div-1', role: 'admin', divisionId: 'div-1', status: 'active' }),
+      );
+      harness.users.seed(
+        makeUser({ id: 'user-div-2', role: 'user', divisionId: 'div-2', status: 'active' }),
+      );
+
+      // getUser returns 404
+      await expect(admin.getUser('user-div-2', div1Caller)).rejects.toThrow('User not found.');
+
+      // updateUser returns 404
+      await expect(
+        admin.updateUser({
+          id: 'user-div-2',
+          displayName: 'Hacked Name',
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('User not found.');
+
+      // resetUserPassword returns 404
+      await expect(
+        admin.resetUserPassword({
+          id: 'user-div-2',
+          generatePassword: true,
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('User not found.');
+    });
+
+    it('forbids division admin from changing role or division of users in own division', async () => {
+      const { admin, harness } = setup();
+      harness.users.seed(
+        makeUser({ id: 'admin-div-1', role: 'admin', divisionId: 'div-1', status: 'active' }),
+      );
+      harness.users.seed(
+        makeUser({ id: 'user-div-1', role: 'user', divisionId: 'div-1', status: 'active' }),
+      );
+
+      await expect(
+        admin.updateUser({
+          id: 'user-div-1',
+          role: 'admin',
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('Division administrators cannot change user roles.');
+
+      await expect(
+        admin.updateUser({
+          id: 'user-div-1',
+          divisionId: 'div-2',
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('Division administrators cannot reassign user divisions.');
+    });
+
+    it('prevents division admin without division from listing users', async () => {
+      const { admin, harness } = setup();
+      harness.users.seed(makeUser({ id: 'admin-unassigned', role: 'admin', divisionId: null }));
+      const unassignedCaller = {
+        actorUserId: 'admin-unassigned',
+        role: 'admin' as const,
+        divisionId: null,
+        meta,
+      };
+
+      await expect(admin.listUsers({}, unassignedCaller)).rejects.toThrow(
+        'Division administrator must belong to a division.',
+      );
+    });
+
+    it('prevents division admin from targeting super_admin or peer admin in same division', async () => {
+      const { admin, harness } = setup();
+      harness.users.seed(
+        makeUser({ id: 'admin-div-1', role: 'admin', divisionId: 'div-1', status: 'active' }),
+      );
+      harness.users.seed(
+        makeUser({ id: 'super-admin-div-1', role: 'super_admin', divisionId: 'div-1', status: 'active' }),
+      );
+      harness.users.seed(
+        makeUser({ id: 'peer-admin-div-1', role: 'admin', divisionId: 'div-1', status: 'active' }),
+      );
+
+      await expect(admin.getUser('super-admin-div-1', div1Caller)).rejects.toThrow(
+        'User not found.',
+      );
+      await expect(admin.getUser('peer-admin-div-1', div1Caller)).rejects.toThrow(
+        'User not found.',
+      );
+
+      await expect(
+        admin.updateUser({
+          id: 'super-admin-div-1',
+          displayName: 'Hacked Super',
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('User not found.');
+
+      await expect(
+        admin.updateUser({
+          id: 'peer-admin-div-1',
+          status: 'disabled',
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('User not found.');
+
+      await expect(
+        admin.resetUserPassword({
+          id: 'super-admin-div-1',
+          generatePassword: true,
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('User not found.');
+
+      await expect(
+        admin.resetUserPassword({
+          id: 'peer-admin-div-1',
+          generatePassword: true,
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('User not found.');
+    });
+
+    it('forbids division admin from self-disabling', async () => {
+      const { admin, harness } = setup();
+      harness.users.seed(
+        makeUser({ id: 'admin-div-1', role: 'admin', divisionId: 'div-1', status: 'active' }),
+      );
+
+      await expect(
+        admin.updateUser({
+          id: 'admin-div-1',
+          status: 'disabled',
+          caller: div1Caller,
+        }),
+      ).rejects.toThrow('Cannot disable your own administrator account.');
+    });
   });
 });

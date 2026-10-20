@@ -62,13 +62,8 @@ export interface UserRepository {
   ): Promise<{ items: User[]; nextCursor: string | null }>;
   create(input: CreateUserInput, tx?: TransactionContext): Promise<User>;
   update(input: UpdateUserInput, tx?: TransactionContext): Promise<User>;
-  countActiveAdmins(tx?: TransactionContext): Promise<number>;
-  /**
-   * Lock the active-admin row set (`SELECT ... FOR UPDATE`) and return its size. Must be
-   * called inside a transaction. Serializes concurrent role/status mutations so the
-   * last-admin invariant cannot be violated by two racing demotions.
-   */
-  lockActiveAdmins(tx: TransactionContext): Promise<number>;
+  countActiveSuperAdmins(tx?: TransactionContext): Promise<number>;
+  lockActiveSuperAdmins(tx: TransactionContext): Promise<number>;
   recordLoginSuccess(input: LoginSuccessInput, tx?: TransactionContext): Promise<void>;
   recordLoginFailure(
     id: string,

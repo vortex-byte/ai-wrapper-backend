@@ -3,6 +3,7 @@ import { DrizzleAuditLogRepository } from '../audit/infrastructure/drizzle-audit
 import { generateTemporaryPassword } from '../admin/domain/password-generator.ts';
 import { passwordProblemMessage, validatePassword } from '../auth/domain/password-policy.ts';
 import { BunPasswordHasher } from '../auth/infrastructure/bun-password-hasher.ts';
+import { DrizzleSessionRepository } from '../auth/infrastructure/drizzle-session-repository.ts';
 import { DrizzleUserRepository } from '../auth/infrastructure/drizzle-user-repository.ts';
 import { systemClock, uuidv7Generator } from '../clock/index.ts';
 import { getConfig } from '../config/index.ts';
@@ -47,13 +48,14 @@ export function parseBootstrapAdminArgs(args: string[]): BootstrapAdminArgs {
 export async function runBootstrapAdmin(parsed: BootstrapAdminArgs): Promise<number> {
   const config = getConfig();
   const users = new DrizzleUserRepository();
+  const sessions = new DrizzleSessionRepository();
   const audit = new DrizzleAuditLogRepository();
   const hasher = new BunPasswordHasher();
 
-  const activeAdminCount = await users.countActiveAdmins();
-  if (activeAdminCount > 0 && !parsed.force) {
+  const activeSuperAdminCount = await users.countActiveSuperAdmins();
+  if (activeSuperAdminCount > 0 && !parsed.force) {
     console.error(
-      `Active admin user(s) already exist (${activeAdminCount} found). Use --force to add or upgrade an admin anyway.`,
+      `Active super admin user(s) already exist (${activeSuperAdminCount} found). Use --force to add or upgrade a super admin anyway.`,
     );
     return 1;
   }
@@ -85,7 +87,7 @@ export async function runBootstrapAdmin(parsed: BootstrapAdminArgs): Promise<num
         {
           id: existingUser.id,
           displayName: parsed.displayName ?? existingUser.displayName,
-          role: 'admin',
+          role: 'super_admin',
           status: 'active',
           at: now,
         },
@@ -101,6 +103,8 @@ export async function runBootstrapAdmin(parsed: BootstrapAdminArgs): Promise<num
         tx,
       );
 
+      await sessions.revokeAllForUser(existingUser.id, now, undefined, tx);
+
       await audit.append(
         {
           actorUserId: null,
@@ -108,7 +112,7 @@ export async function runBootstrapAdmin(parsed: BootstrapAdminArgs): Promise<num
           targetType: 'user',
           targetId: existingUser.id,
           before: { role: existingUser.role, status: existingUser.status },
-          after: { role: 'admin', status: 'active', bootstrapped: true },
+          after: { role: 'super_admin', status: 'active', bootstrapped: true },
         },
         tx,
       );
@@ -121,7 +125,7 @@ export async function runBootstrapAdmin(parsed: BootstrapAdminArgs): Promise<num
           email: parsed.email,
           displayName: parsed.displayName ?? 'System Admin',
           passwordHash,
-          role: 'admin',
+          role: 'super_admin',
           status: 'active',
           mustChangePassword: true,
         },
@@ -134,17 +138,17 @@ export async function runBootstrapAdmin(parsed: BootstrapAdminArgs): Promise<num
           action: AUDIT_ACTIONS.userCreate,
           targetType: 'user',
           targetId: userId,
-          after: { email: parsed.email, role: 'admin', status: 'active', bootstrapped: true },
+          after: { email: parsed.email, role: 'super_admin', status: 'active', bootstrapped: true },
         },
         tx,
       );
     }
   });
 
-  console.log(`✓ Admin user ${createdNew ? 'created' : 'upgraded'}:`);
+  console.log(`✓ Super admin user ${createdNew ? 'created' : 'upgraded'}:`);
   console.log(`  ID:                 ${userId}`);
   console.log(`  Email:              ${parsed.email}`);
-  console.log(`  Role:               admin`);
+  console.log(`  Role:               super_admin`);
   console.log(`  Must change pass:   true`);
   if (generated) {
     console.log(`  Temporary password: ${passwordToSet}`);

@@ -56,7 +56,7 @@ const MessageBeforeSchema = z
       }
     }
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       message: 'The before parameter is invalid.',
     });
     return z.NEVER;

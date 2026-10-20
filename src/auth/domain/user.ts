@@ -1,7 +1,7 @@
-export type UserRole = 'user' | 'admin';
+export type UserRole = 'user' | 'admin' | 'super_admin';
 export type UserStatus = 'active' | 'disabled';
 
-export const USER_ROLES = ['user', 'admin'] as const satisfies readonly UserRole[];
+export const USER_ROLES = ['user', 'admin', 'super_admin'] as const satisfies readonly UserRole[];
 export const USER_STATUSES = ['active', 'disabled'] as const satisfies readonly UserStatus[];
 
 export interface User {

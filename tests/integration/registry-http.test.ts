@@ -25,7 +25,7 @@ const app = createApp(config, services);
 const users = new DrizzleUserRepository();
 const hasher = new BunPasswordHasher();
 
-async function seedUser(role: 'admin' | 'user', email: string) {
+async function seedUser(role: 'super_admin' | 'admin' | 'user', email: string) {
   return users.create({
     id: Bun.randomUUIDv7(),
     email,
@@ -132,8 +132,29 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
     expect(res.status).toBe(403);
   });
 
+  it('rejects a division admin with 403 forbidden', async () => {
+    const divId = Bun.randomUUIDv7();
+    const pool = getPool();
+    await pool.query('INSERT INTO divisions (id, name) VALUES ($1, $2)', [divId, 'Providers Div']);
+    await users.create({
+      id: Bun.randomUUIDv7(),
+      email: 'divadmin@corp.example',
+      displayName: 'Div Admin',
+      passwordHash: await hasher.hash(PASSWORD),
+      role: 'admin',
+      divisionId: divId,
+      mustChangePassword: false,
+      status: 'active',
+    });
+    const { cookie } = await loginAs('divadmin@corp.example');
+    const res = await app.request(
+      new Request('http://localhost/api/admin/providers', { headers: { Cookie: cookie } }),
+    );
+    expect(res.status).toBe(403);
+  });
+
   it('requires a CSRF token on POST', async () => {
-    await seedUser('admin', 'admin@corp.example');
+    await seedUser('super_admin', 'admin@corp.example');
     const { cookie } = await loginAs('admin@corp.example');
     const res = await app.request(
       new Request('http://localhost/api/admin/providers', {
@@ -151,7 +172,7 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
   });
 
   it('creates and lists a provider; never echoes key material', async () => {
-    await seedUser('admin', 'admin@corp.example');
+    await seedUser('super_admin', 'admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
 
     const created = await createProvider(cookie, csrfToken);
@@ -171,7 +192,7 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
   });
 
   it('rejects an unknown adapter with 400 invalid_request', async () => {
-    await seedUser('admin', 'admin@corp.example');
+    await seedUser('super_admin', 'admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
     const res = await app.request(
       new Request('http://localhost/api/admin/providers', {
@@ -194,7 +215,7 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
   });
 
   it('rejects a duplicate provider key with 409 conflict', async () => {
-    await seedUser('admin', 'admin@corp.example');
+    await seedUser('super_admin', 'admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
     expect((await createProvider(cookie, csrfToken)).status).toBe(201);
     const dup = await createProvider(cookie, csrfToken);
@@ -202,7 +223,7 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
   });
 
   it('writes an audit row for each mutation', async () => {
-    await seedUser('admin', 'admin@corp.example');
+    await seedUser('super_admin', 'admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
     await createProvider(cookie, csrfToken);
 
@@ -213,7 +234,7 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
   });
 
   it('creates a model and exposes it on GET /api/models with wire shape', async () => {
-    const admin = await seedUser('admin', 'admin@corp.example');
+    const admin = await seedUser('super_admin', 'admin@corp.example');
     void admin;
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
 
@@ -251,7 +272,7 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
   });
 
   it('hides a disabled model from GET /api/models', async () => {
-    await seedUser('admin', 'admin@corp.example');
+    await seedUser('super_admin', 'admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');
     const providerRes = await createProvider(cookie, csrfToken);
     const providerId = ((await providerRes.json()) as { data: { id: string } }).data.id;

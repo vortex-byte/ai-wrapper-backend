@@ -173,18 +173,18 @@ export class InMemoryUserRepository implements UserRepository {
     return updated;
   }
 
-  async countActiveAdmins(): Promise<number> {
+  async countActiveSuperAdmins(): Promise<number> {
     let count = 0;
     for (const u of this.rows.values()) {
-      if (u.role === 'admin' && u.status === 'active' && u.deletedAt === null) {
+      if (u.role === 'super_admin' && u.status === 'active' && u.deletedAt === null) {
         count += 1;
       }
     }
     return count;
   }
 
-  async lockActiveAdmins(): Promise<number> {
-    return this.countActiveAdmins();
+  async lockActiveSuperAdmins(): Promise<number> {
+    return this.countActiveSuperAdmins();
   }
 
   async recordLoginSuccess(input: LoginSuccessInput): Promise<void> {

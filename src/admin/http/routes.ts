@@ -7,7 +7,7 @@ import { ok, okEmpty } from '@/http/envelope.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requireCsrf } from '@/http/middleware/require-csrf.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
-import { requireAdmin } from '@/http/middleware/require-role.ts';
+import { requireAdmin, requireSuperAdmin } from '@/http/middleware/require-role.ts';
 import { clientIp, requestMeta } from '@/http/request-meta.ts';
 import type { AppEnv } from '@/http/types.ts';
 import { parseJsonBody } from '@/http/validate.ts';
@@ -15,10 +15,12 @@ import type { AdminService, PublicUser } from '../application/admin-service.ts';
 import {
   CreateDivisionBodySchema,
   CreateUserBodySchema,
+  DivisionIdParamSchema,
   ListUsersQuerySchema,
   ResetUserPasswordBodySchema,
   UpdateDivisionBodySchema,
   UpdateUserBodySchema,
+  UserIdParamSchema,
 } from './schemas.ts';
 
 export interface AdminRoutesDeps {
@@ -63,8 +65,11 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
   routes.use('*', requireAuth(auth, config));
   routes.use('*', requirePasswordChanged());
   routes.use('*', requireAdmin());
+  routes.use('/divisions*', requireSuperAdmin());
 
   routes.get('/users', async (c) => {
+    const caller = c.get('auth');
+    if (!caller) throw new AppError('unauthenticated');
     const rawQuery = c.req.query();
     const parsed = ListUsersQuerySchema.safeParse(rawQuery);
     if (!parsed.success) {
@@ -73,7 +78,13 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
     const queryInput = {
       ...parsed.data,
     };
-    const result = await admin.listUsers(queryInput);
+    const callerCtx = {
+      actorUserId: caller.user.id,
+      role: caller.user.role,
+      divisionId: caller.user.divisionId,
+      meta: requestMeta(c, clientIp(c, config)),
+    };
+    const result = await admin.listUsers(queryInput, callerCtx);
     return c.json(
       ok(
         {
@@ -98,8 +109,12 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
       divisionId: body.divisionId,
       initialPassword: body.initialPassword,
       generatePassword: body.generatePassword,
-      actorUserId: caller.user.id,
-      meta,
+      caller: {
+        actorUserId: caller.user.id,
+        role: caller.user.role,
+        divisionId: caller.user.divisionId,
+        meta,
+      },
     });
 
     return c.json(
@@ -115,26 +130,44 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
   });
 
   routes.get('/users/:id', async (c) => {
-    const id = c.req.param('id');
-    const user = await admin.getUser(id);
+    const caller = c.get('auth');
+    if (!caller) throw new AppError('unauthenticated');
+    const parsedId = UserIdParamSchema.safeParse(c.req.param('id'));
+    if (!parsedId.success) {
+      throw new AppError('invalid_request', 'Invalid user ID.');
+    }
+    const meta = requestMeta(c, clientIp(c, config));
+    const user = await admin.getUser(parsedId.data, {
+      actorUserId: caller.user.id,
+      role: caller.user.role,
+      divisionId: caller.user.divisionId,
+      meta,
+    });
     return c.json(ok(toWireUser(user)));
   });
 
   routes.patch('/users/:id', async (c) => {
     const caller = c.get('auth');
     if (!caller) throw new AppError('unauthenticated');
-    const id = c.req.param('id');
+    const parsedId = UserIdParamSchema.safeParse(c.req.param('id'));
+    if (!parsedId.success) {
+      throw new AppError('invalid_request', 'Invalid user ID.');
+    }
     const body = await parseJsonBody(c, UpdateUserBodySchema);
     const meta = requestMeta(c, clientIp(c, config));
 
     const updated = await admin.updateUser({
-      id,
+      id: parsedId.data,
       displayName: body.displayName,
       role: body.role,
       status: body.status,
       divisionId: body.divisionId,
-      actorUserId: caller.user.id,
-      meta,
+      caller: {
+        actorUserId: caller.user.id,
+        role: caller.user.role,
+        divisionId: caller.user.divisionId,
+        meta,
+      },
     });
 
     return c.json(ok(toWireUser(updated), 'User updated.'));
@@ -143,17 +176,24 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
   routes.post('/users/:id/password/reset', async (c) => {
     const caller = c.get('auth');
     if (!caller) throw new AppError('unauthenticated');
-    const id = c.req.param('id');
+    const parsedId = UserIdParamSchema.safeParse(c.req.param('id'));
+    if (!parsedId.success) {
+      throw new AppError('invalid_request', 'Invalid user ID.');
+    }
     const body = await parseJsonBody(c, ResetUserPasswordBodySchema);
     const meta = requestMeta(c, clientIp(c, config));
 
     const result = await admin.resetUserPassword({
-      id,
+      id: parsedId.data,
       newPassword: body.newPassword,
       generatePassword: body.generatePassword,
       reason: body.reason,
-      actorUserId: caller.user.id,
-      meta,
+      caller: {
+        actorUserId: caller.user.id,
+        role: caller.user.role,
+        divisionId: caller.user.divisionId,
+        meta,
+      },
     });
 
     if (result.temporaryPassword) {
@@ -208,12 +248,15 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
   routes.patch('/divisions/:id', async (c) => {
     const caller = c.get('auth');
     if (!caller) throw new AppError('unauthenticated');
-    const id = c.req.param('id');
+    const parsedId = DivisionIdParamSchema.safeParse(c.req.param('id'));
+    if (!parsedId.success) {
+      throw new AppError('invalid_request', 'Invalid division ID.');
+    }
     const body = await parseJsonBody(c, UpdateDivisionBodySchema);
     const meta = requestMeta(c, clientIp(c, config));
 
     const division = await admin.updateDivision({
-      id,
+      id: parsedId.data,
       name: body.name,
       externalRef: body.externalRef,
       actorUserId: caller.user.id,

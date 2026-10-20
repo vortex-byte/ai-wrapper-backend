@@ -1,8 +1,3 @@
-/**
- * Every durable effect of a turn — idempotency claim, sequences, messages, generation row and
- * quota reservation — commits as one transaction; the provider call starts only after that commit.
- */
-
 import { createHash } from 'node:crypto';
 import type { Clock, IdGenerator } from '@/clock/index.ts';
 import type { Config } from '@/config/index.ts';

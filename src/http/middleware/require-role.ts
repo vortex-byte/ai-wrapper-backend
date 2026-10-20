@@ -20,7 +20,12 @@ export function requireRole(...roles: readonly UserRole[]): MiddlewareHandler<Ap
   };
 }
 
-/** Shorthand for the (currently) only privileged role. */
+/** Shorthand for division administrators and super administrators (e.g. user management). */
 export function requireAdmin(): MiddlewareHandler<AppEnv> {
-  return requireRole('admin');
+  return requireRole('admin', 'super_admin');
+}
+
+/** Shorthand for system-wide super administrator routes. */
+export function requireSuperAdmin(): MiddlewareHandler<AppEnv> {
+  return requireRole('super_admin');
 }

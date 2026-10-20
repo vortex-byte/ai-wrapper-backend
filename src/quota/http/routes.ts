@@ -8,7 +8,7 @@ import { ok } from '@/http/envelope.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requireCsrf } from '@/http/middleware/require-csrf.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
-import { requireAdmin } from '@/http/middleware/require-role.ts';
+import { requireSuperAdmin } from '@/http/middleware/require-role.ts';
 import { clientIp, requestMeta } from '@/http/request-meta.ts';
 import type { AppEnv } from '@/http/types.ts';
 import { parseJsonBody } from '@/http/validate.ts';
@@ -17,14 +17,14 @@ import type { UsageService } from '../application/usage-service.ts';
 
 /** Quota and usage read endpoints. */
 
-const UUID = z.string().uuid();
+const UUID = z.uuid();
 
 export const PolicyUpsertBodySchema = z.object({
   monthlyTokens: z.number().int().min(0).nullable().optional(),
   maxInputTokensPerRequest: z.number().int().min(1).nullable().optional(),
   maxOutputTokensPerRequest: z.number().int().min(1).nullable().optional(),
   maxConcurrentGenerations: z.number().int().min(1).nullable().optional(),
-  allowedModelIds: z.array(z.string().uuid()).nullable().optional(),
+  allowedModelIds: z.array(z.uuid()).nullable().optional(),
   applyToCurrentPeriod: z.boolean().optional().default(false),
   reason: z.string().min(1).max(500).optional(),
 });
@@ -101,7 +101,7 @@ export function quotaRoutes(deps: QuotaRoutesDeps): Hono<AppEnv> {
   admin.use('/admin/*', requireCsrf(config));
   admin.use('/admin/*', requireAuth(auth, config));
   admin.use('/admin/*', requirePasswordChanged());
-  admin.use('/admin/*', requireAdmin());
+  admin.use('/admin/*', requireSuperAdmin());
 
   admin.get('/admin/quota-policies/:scope/:id?', async (c) => {
     const scope = parseScope(c.req.param('scope'));

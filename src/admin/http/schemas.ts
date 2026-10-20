@@ -23,7 +23,7 @@ const CursorSchema = z
 
 export const ListUsersQuerySchema = z.object({
   query: z.string().trim().optional(),
-  divisionId: z.string().uuid().optional(),
+  divisionId: z.uuid().optional(),
   status: z.enum(USER_STATUSES).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: CursorSchema,
@@ -52,7 +52,7 @@ export const UpdateUserBodySchema = z.object({
   displayName: z.string().trim().min(1).max(256).optional(),
   role: z.enum(USER_ROLES).optional(),
   status: z.enum(USER_STATUSES).optional(),
-  divisionId: z.string().uuid().nullable().optional(),
+  divisionId: z.uuid().nullable().optional(),
 });
 
 export const ResetUserPasswordBodySchema = z
@@ -80,3 +80,6 @@ export const UpdateDivisionBodySchema = z.object({
   name: z.string().trim().min(1).max(256).optional(),
   externalRef: z.string().trim().max(256).nullable().optional(),
 });
+
+export const UserIdParamSchema = z.uuid();
+export const DivisionIdParamSchema = z.uuid();

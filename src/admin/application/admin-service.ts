@@ -27,6 +27,13 @@ function toPublicUser(user: User): PublicUser {
   return rest;
 }
 
+export interface CallerContext {
+  readonly actorUserId: string;
+  readonly role: UserRole;
+  readonly divisionId: string | null;
+  readonly meta: RequestMeta;
+}
+
 export interface CreateUserInput {
   readonly email: string;
   readonly displayName: string;
@@ -34,8 +41,7 @@ export interface CreateUserInput {
   readonly divisionId?: string | null | undefined;
   readonly initialPassword?: string | undefined;
   readonly generatePassword?: boolean | undefined;
-  readonly actorUserId: string;
-  readonly meta: RequestMeta;
+  readonly caller: CallerContext;
 }
 
 export interface CreateUserResult {
@@ -49,8 +55,7 @@ export interface UpdateUserInput {
   readonly role?: UserRole | undefined;
   readonly status?: UserStatus | undefined;
   readonly divisionId?: string | null | undefined;
-  readonly actorUserId: string;
-  readonly meta: RequestMeta;
+  readonly caller: CallerContext;
 }
 
 export interface ResetPasswordInput {
@@ -58,8 +63,7 @@ export interface ResetPasswordInput {
   readonly newPassword?: string | undefined;
   readonly generatePassword?: boolean | undefined;
   readonly reason?: string | undefined;
-  readonly actorUserId: string;
-  readonly meta: RequestMeta;
+  readonly caller: CallerContext;
 }
 
 export interface ResetPasswordResult {
@@ -82,8 +86,11 @@ export interface UpdateDivisionInput {
 }
 
 export interface AdminService {
-  listUsers(query: ListUsersQuery): Promise<{ items: PublicUser[]; nextCursor: string | null }>;
-  getUser(id: string): Promise<PublicUser>;
+  listUsers(
+    query: ListUsersQuery,
+    caller: CallerContext,
+  ): Promise<{ items: PublicUser[]; nextCursor: string | null }>;
+  getUser(id: string, caller: CallerContext): Promise<PublicUser>;
   createUser(input: CreateUserInput): Promise<CreateUserResult>;
   updateUser(input: UpdateUserInput): Promise<PublicUser>;
   resetUserPassword(input: ResetPasswordInput): Promise<ResetPasswordResult>;
@@ -95,20 +102,64 @@ export interface AdminService {
 
 export function createAdminService(deps: AdminDeps): AdminService {
   return {
-    async listUsers(query) {
-      const result = await deps.users.findMany(query);
+    async listUsers(query, caller) {
+      if (caller.role === 'admin' && !caller.divisionId) {
+        throw new AppError('forbidden', 'Division administrator must belong to a division.');
+      }
+
+      const effectiveQuery: ListUsersQuery =
+        caller.role === 'admin'
+          ? {
+              ...query,
+              divisionId: caller.divisionId ?? undefined,
+            }
+          : query;
+
+      const result = await deps.users.findMany(effectiveQuery);
       return { items: result.items.map(toPublicUser), nextCursor: result.nextCursor };
     },
 
-    async getUser(id) {
+    async getUser(id, caller) {
       const user = await deps.users.findById(id);
       if (user === null || user.deletedAt !== null) {
         throw new AppError('not_found', 'User not found.');
       }
+
+      if (caller.role === 'admin') {
+        if (
+          !caller.divisionId ||
+          user.divisionId !== caller.divisionId ||
+          (user.role !== 'user' && user.id !== caller.actorUserId)
+        ) {
+          throw new AppError('not_found', 'User not found.');
+        }
+      }
+
       return toPublicUser(user);
     },
 
     async createUser(input) {
+      const { caller } = input;
+
+      if (caller.role === 'admin') {
+        if (input.role !== 'user') {
+          throw new AppError(
+            'forbidden',
+            'Division administrators can only provision users with the user role.',
+          );
+        }
+        if (!caller.divisionId) {
+          throw new AppError('forbidden', 'Division administrator must belong to a division.');
+        }
+      } else if (caller.role === 'super_admin') {
+        if (input.role === 'admin' && !input.divisionId) {
+          throw new AppError('invalid_request', 'Division administrator must be assigned to a division.');
+        }
+      }
+
+      const assignedDivisionId =
+        caller.role === 'admin' ? caller.divisionId : (input.divisionId ?? null);
+
       const existing = await deps.users.findByEmail(input.email);
       if (existing !== null && existing.deletedAt === null) {
         throw new AppError('conflict', 'A user with this email already exists.');
@@ -127,8 +178,8 @@ export function createAdminService(deps: AdminDeps): AdminService {
         throw new AppError('invalid_request', passwordProblemMessage(problem, deps.passwordPolicy));
       }
 
-      if (input.divisionId) {
-        const division = await deps.divisions.findById(input.divisionId);
+      if (assignedDivisionId) {
+        const division = await deps.divisions.findById(assignedDivisionId);
         if (division === null) {
           throw new AppError('invalid_request', 'Division not found.');
         }
@@ -148,7 +199,7 @@ export function createAdminService(deps: AdminDeps): AdminService {
               passwordHash,
               role: input.role,
               status: 'active',
-              divisionId: input.divisionId ?? null,
+              divisionId: assignedDivisionId,
               mustChangePassword: true,
             },
             tx,
@@ -164,7 +215,7 @@ export function createAdminService(deps: AdminDeps): AdminService {
 
         await deps.audit.append(
           {
-            actorUserId: input.actorUserId,
+            actorUserId: caller.actorUserId,
             action: AUDIT_ACTIONS.userCreate,
             targetType: 'user',
             targetId: user.id,
@@ -175,9 +226,9 @@ export function createAdminService(deps: AdminDeps): AdminService {
               status: user.status,
               divisionId: user.divisionId,
             },
-            requestId: input.meta.requestId,
-            ip: input.meta.ip,
-            userAgentHash: input.meta.userAgentHash,
+            requestId: caller.meta.requestId,
+            ip: caller.meta.ip,
+            userAgentHash: caller.meta.userAgentHash,
           },
           tx,
         );
@@ -187,12 +238,45 @@ export function createAdminService(deps: AdminDeps): AdminService {
     },
 
     async updateUser(input) {
+      const { caller } = input;
       const now = deps.clock.now();
 
       return withTransaction(async (tx) => {
         const target = await deps.users.findById(input.id, tx);
         if (target === null || target.deletedAt !== null) {
           throw new AppError('not_found', 'User not found.');
+        }
+
+        if (caller.role === 'admin') {
+          if (!caller.divisionId || target.divisionId !== caller.divisionId) {
+            throw new AppError('not_found', 'User not found.');
+          }
+          if (target.role !== 'user' && target.id !== caller.actorUserId) {
+            throw new AppError('not_found', 'User not found.');
+          }
+          if (input.role !== undefined) {
+            throw new AppError('forbidden', 'Division administrators cannot change user roles.');
+          }
+          if (input.divisionId !== undefined) {
+            throw new AppError(
+              'forbidden',
+              'Division administrators cannot reassign user divisions.',
+            );
+          }
+          if (target.id === caller.actorUserId && input.status === 'disabled') {
+            throw new AppError('forbidden', 'Cannot disable your own administrator account.');
+          }
+        }
+
+        const effectiveDivisionId =
+          input.divisionId !== undefined ? input.divisionId : target.divisionId;
+        const effectiveRole = input.role !== undefined ? input.role : target.role;
+
+        if (effectiveRole === 'admin' && !effectiveDivisionId) {
+          throw new AppError(
+            'invalid_request',
+            'Division administrator must be assigned to a division.',
+          );
         }
 
         if (input.divisionId) {
@@ -202,16 +286,24 @@ export function createAdminService(deps: AdminDeps): AdminService {
           }
         }
 
-        const activeAdminCount = await deps.users.lockActiveAdmins(tx);
-        const allowed = canUpdateUserRoleOrStatus({
-          targetUser: target,
-          newRole: input.role,
-          newStatus: input.status,
-          activeAdminCount,
-        });
+        const isDemotingOrDisablingSuperAdmin =
+          target.role === 'super_admin' &&
+          target.status === 'active' &&
+          ((input.role !== undefined && input.role !== 'super_admin') ||
+            (input.status !== undefined && input.status !== 'active'));
 
-        if (!allowed) {
-          throw new AppError('conflict', 'Cannot disable or demote the last active admin.');
+        if (isDemotingOrDisablingSuperAdmin) {
+          const activeSuperAdminCount = await deps.users.lockActiveSuperAdmins(tx);
+          const allowed = canUpdateUserRoleOrStatus({
+            targetUser: target,
+            newRole: input.role,
+            newStatus: input.status,
+            activeSuperAdminCount,
+          });
+
+          if (!allowed) {
+            throw new AppError('conflict', 'Cannot disable or demote the last active super admin.');
+          }
         }
 
         if (input.status === 'disabled' && target.status !== 'disabled') {
@@ -232,7 +324,7 @@ export function createAdminService(deps: AdminDeps): AdminService {
 
         await deps.audit.append(
           {
-            actorUserId: input.actorUserId,
+            actorUserId: caller.actorUserId,
             action: AUDIT_ACTIONS.userUpdate,
             targetType: 'user',
             targetId: target.id,
@@ -248,9 +340,9 @@ export function createAdminService(deps: AdminDeps): AdminService {
               status: updated.status,
               divisionId: updated.divisionId,
             },
-            requestId: input.meta.requestId,
-            ip: input.meta.ip,
-            userAgentHash: input.meta.userAgentHash,
+            requestId: caller.meta.requestId,
+            ip: caller.meta.ip,
+            userAgentHash: caller.meta.userAgentHash,
           },
           tx,
         );
@@ -260,6 +352,7 @@ export function createAdminService(deps: AdminDeps): AdminService {
     },
 
     async resetUserPassword(input) {
+      const { caller } = input;
       const now = deps.clock.now();
 
       let passwordToUse = input.newPassword;
@@ -283,6 +376,16 @@ export function createAdminService(deps: AdminDeps): AdminService {
           throw new AppError('not_found', 'User not found.');
         }
 
+        if (caller.role === 'admin') {
+          if (
+            !caller.divisionId ||
+            target.divisionId !== caller.divisionId ||
+            target.role !== 'user'
+          ) {
+            throw new AppError('not_found', 'User not found.');
+          }
+        }
+
         await deps.users.setPassword(
           {
             id: target.id,
@@ -297,14 +400,14 @@ export function createAdminService(deps: AdminDeps): AdminService {
 
         await deps.audit.append(
           {
-            actorUserId: input.actorUserId,
+            actorUserId: caller.actorUserId,
             action: AUDIT_ACTIONS.passwordReset,
             targetType: 'user',
             targetId: target.id,
             after: { reason: input.reason ?? null },
-            requestId: input.meta.requestId,
-            ip: input.meta.ip,
-            userAgentHash: input.meta.userAgentHash,
+            requestId: caller.meta.requestId,
+            ip: caller.meta.ip,
+            userAgentHash: caller.meta.userAgentHash,
           },
           tx,
         );

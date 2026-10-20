@@ -3,7 +3,7 @@ import type { AuthService } from '@/auth/application/auth-service.ts';
 import type { Config } from '@/config/index.ts';
 import { AppError } from '@/errors.ts';
 import { ok } from '@/http/envelope.ts';
-import { requireAdmin } from '@/http/middleware/require-role.ts';
+import { requireSuperAdmin } from '@/http/middleware/require-role.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requireCsrf } from '@/http/middleware/require-csrf.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
@@ -38,7 +38,7 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
   routes.use('*', requireCsrf(config));
   routes.use('*', requireAuth(auth, config));
   routes.use('*', requirePasswordChanged());
-  routes.use('*', requireAdmin());
+  routes.use('*', requireSuperAdmin());
 
   routes.get('/providers', async (c) => {
     const providers = await registryAdmin.listProviders();

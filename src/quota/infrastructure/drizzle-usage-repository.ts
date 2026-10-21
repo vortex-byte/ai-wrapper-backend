@@ -121,7 +121,7 @@ export class DrizzleUsageRepository implements UsageRepository {
         SELECT
           (${usageEvents.createdAt} AT TIME ZONE 'UTC')::date AS day,
           ${usageEvents.userId} AS user_id,
-          min(${usageEvents.divisionId}) AS division_id,
+          min(${usageEvents.divisionId}::text)::uuid AS division_id,
           ${usageEvents.providerId} AS provider_id,
           ${usageEvents.modelId} AS model_id,
           count(*)::int AS requests,

@@ -2,13 +2,13 @@
 
 | | |
 |---|---|
-| **Document status** | v1.3 — aligned with `docs/PRD.md` (Draft v1.3) |
+| **Document status** | v1.3 |
 | **Date** | 2026-10-08 |
 | **Base URL** | `/api` (e.g. `https://ai.corp.example/api`). Ops endpoints are served at the root (`/healthz`, `/readyz`). |
 | **Transport** | HTTPS · JSON (`application/json`) · SSE (`text/event-stream`) for generation streams |
 
-This file is the contract between the backend and the SPA. The PRD is authoritative for behaviour;
-this document is authoritative for **wire shapes**. Where they disagree, fix both.
+This file is the contract between the backend and the SPA. It is authoritative for **wire shapes**
+and runtime request/response behavior.
 
 **v1.3 changes:** every JSON response is wrapped in a uniform envelope (§1.1/§1.2); the API is
 **unversioned** — paths use the `/api` prefix with no version segment (§17); errors always carry a
@@ -17,7 +17,7 @@ stable `code`; `trace` is included **only when `NODE_ENV=development`**.
 **v1.1 changes:** authentication is email + password with a server-backed session cookie (no OIDC);
 new `password_change_required` gate/error; new `POST /me/password` and
 `POST /admin/users/:id/password/reset`; provider API keys are **not** part of the API (configured via
-environment — PRD A-16).
+environment variables).
 
 ---
 
@@ -34,7 +34,7 @@ environment — PRD A-16).
   Never use `offset`.
 - **Unknown fields:** rejected on mutations (`400 invalid_request`).
 - **No provider-specific fields** ever appear in a response; providers are represented by a display label only.
-- **Provider secrets** are never accepted or returned by any endpoint (env-only — PRD A-16).
+- **Provider secrets** are never accepted or returned by any endpoint (configured exclusively via server environment variables).
 - **Envelope exemptions (raw bodies):** `GET /api/files/:id/content` (binary + `Range`), SSE frames
   (§7.2), `/healthz`, `/readyz`. Everything else uses the envelope.
 
@@ -490,10 +490,10 @@ Submits a new user message turn, reserves quota tokens, and queues assistant gen
     "userMessage":      { "id": "…", "seq": 12, "role": "user", "status": "complete", "parts": [ … ] },
     "assistantMessage": { "id": "…", "seq": 13, "role": "assistant", "status": "streaming", "parts": [] },
     "generation":       { "id": "…", "status": "pending", "streamUrl": "/api/generations/…/stream" },
-    "quota":            { "reservedTokens": null, "remainingTokens": null } } }
+    "quota":            { "reservedTokens": 24310, "remainingTokens": 455690 } } }
 ```
 
-> Phase 2 note: quota values are `null` until Phase 3 implements reservation and settlement.
+> Note: `quota` may be `null` if the user is unmetered or has no active quota account.
 
 **Idempotency semantics**
 
@@ -550,11 +550,12 @@ Retrieves the current execution status, token usage, and outcome details of a ge
 { "status": "ok", "message": "", "data": {
     "id": "…", "conversationId": "…", "status": "completed",
     "finishReason": "stop",
-    "usage": { "inputTokens": 18250, "outputTokens": 1190, "quotaTokens": 19440, "source": "provider" },
-    "remainingQuota": 455920,
+    "usage": null,
+    "remainingQuota": null,
     "error": null } }
 ```
-On failure `data.error` is `{ "code": "provider_unavailable", "message": "…", "retryable": true }`. `usage` and `remainingQuota` are nullable until Phase 3 quota accounting lands (both are `null` in Phase 2).
+On failure `data.error` is `{ "code": "provider_unavailable", "message": "…", "retryable": true }`.
+`finishReason` reflects the completion or cancel reason (`stop`, `user_cancel`, etc.).
 
 ### 7.2 `GET /api/generations/:id/stream` (SSE) — **raw, not enveloped**
 
@@ -624,7 +625,7 @@ data: {"finishReason":"stop","usage":{"inputTokens":18250,"outputTokens":1190,"q
 
 Reconnect: if `Last-Event-ID` is still in the server buffer the stream replays then goes live; otherwise
 it emits `snapshot` (built from PostgreSQL) and continues. A disconnected client within the 60 s grace
-does not cancel the generation (PRD A-12).
+does not cancel the generation.
 
 ### 7.3 `POST /api/generations/:id/cancel`
 
@@ -1106,7 +1107,7 @@ All provider and model administration endpoints require `role=super_admin`.
 ### 11.1 Providers (`GET /api/admin/providers`, `POST /api/admin/providers`, `PATCH /api/admin/providers/:id`)
 
 Provider registry. **The API key is never accepted or returned** — `secretRef` is the **name of the
-environment variable** that holds it (PRD A-16).
+environment variable** that holds it.
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -1153,7 +1154,7 @@ environment variable** that holds it (PRD A-16).
     "config": { "maxConcurrency": 8 }, "configVersion": 4, "updatedAt": "2026-10-08T09:00:00Z" } }
 ```
 > Rotating the actual key is an operator action: update the env/`.env` file and restart the process
-> (rolling restart). See PRD §15.6, §24.2.
+> (rolling restart).
 
 ### 11.2 Models (`GET /api/admin/models`, `POST /api/admin/models`, `PATCH /api/admin/models/:id`)
 
@@ -1231,18 +1232,53 @@ environment variable** that holds it (PRD A-16).
     "status": "disabled", "updatedAt": "2026-10-08T10:30:00Z" } }
 ```
 
-### 11.3 `GET /api/admin/providers/health`
+### 11.3 Model Prices (`GET /api/admin/models/:id/prices`, `POST /api/admin/models/:id/prices`)
+
+Effective-dated token pricing for models used in cost reporting. Requires `role=super_admin`.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target model ID. |
+
+**Request body (`POST`):**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `effectiveFrom` | string (ISO-8601 datetime) | No | When this price becomes active (defaults to current time). |
+| `inputMicrosPerMtok` | integer | Yes | Cost in USD micro-cents ($0.000001) per 1M input tokens. |
+| `outputMicrosPerMtok` | integer | Yes | Cost in USD micro-cents per 1M output tokens. |
+| `cachedInputMicrosPerMtok` | integer \| null | No | Cost for cached prompt tokens per 1M tokens. |
+| `currency` | string | No | 3-letter currency code (default `"USD"`). |
+
+`POST /api/admin/models/:id/prices` (`201`):
+```json
+{ "status": "ok", "message": "Price recorded.", "data": {
+    "id": "0192…", "modelId": "0192…", "effectiveFrom": "2026-10-08T10:00:00Z",
+    "inputMicrosPerMtok": 3000000, "outputMicrosPerMtok": 15000000,
+    "cachedInputMicrosPerMtok": 375000, "currency": "USD", "createdAt": "2026-10-08T10:00:00Z" } }
+```
+
+`GET /api/admin/models/:id/prices` (`200`):
+```json
+{ "status": "ok", "message": "", "data": {
+    "items": [
+      { "id": "0192…", "modelId": "0192…", "effectiveFrom": "2026-10-08T10:00:00Z",
+        "inputMicrosPerMtok": 3000000, "outputMicrosPerMtok": 15000000,
+        "cachedInputMicrosPerMtok": 375000, "currency": "USD", "createdAt": "2026-10-08T10:00:00Z" }
+    ] } }
+```
+
+### 11.4 `GET /api/admin/providers/health`
 
 Retrieves real-time health status, error rates, and circuit breaker states across configured providers. Requires no request parameters.
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
     { "providerId": "…", "key": "anthropic", "status": "healthy",
-      "lastCheckAt": "…", "latencyMs": 214,
-      "errorRate5m": 0.0, "errorRate60m": 0.012, "circuit": "closed" } ] } }
+      "lastCheckAt": "…", "latencyMs": 214, "detail": "models.list ok" } ] } }
 ```
 
-### 11.4 `POST /api/admin/providers/:id/test`
+### 11.5 `POST /api/admin/providers/:id/test`
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -1412,7 +1448,7 @@ separate from the per-IP limit.
   time. Clients **must ignore unknown fields and unknown SSE events**.
 - **Breaking changes** (renaming/removing a field, changing a status value, changing an error `code`)
   are only permitted as part of an **atomic SPA + API deploy** from the same release, because there is
-  no version boundary to straddle the change. See PRD §24.8 (environments) and §24.7 (rollback).
+  no version boundary to straddle the change.
 - Model capabilities are normalized — clients must not branch on provider identity.
 - Error `code` values (§14) are treated as a stable, additive-only vocabulary; new codes may be added,
   existing ones are not renamed.

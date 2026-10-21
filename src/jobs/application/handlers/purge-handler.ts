@@ -22,3 +22,16 @@ export function createSessionsPurgeHandler() {
     return { purgedCount };
   };
 }
+
+export function createJobsPurgeHandler(retentionDays = 7) {
+  return async (): Promise<{ purgedCount: number }> => {
+    const pool = getPool();
+    const res = await pool.query(
+      `DELETE FROM jobs WHERE status IN ('done', 'dead') AND finished_at < now() - ($1 || ' days')::interval`,
+      [retentionDays],
+    );
+    const purgedCount = res.rowCount ?? 0;
+    getLogger().info({ purgedCount }, 'purged completed/dead jobs');
+    return { purgedCount };
+  };
+}

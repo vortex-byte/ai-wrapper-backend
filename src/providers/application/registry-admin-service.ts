@@ -12,11 +12,7 @@ import type { ProviderRegistry } from '../ports/provider-registry.ts';
 import type { ModelPrice, RegistryRepository } from '../ports/registry-repository.ts';
 import type { SecretResolver } from '../ports/secret-resolver.ts';
 
-/**
- * Admin application service for the provider/model registry. Writes are
- * transactional and audited in the same transaction; the read-through cache is
- * invalidated after a successful commit so this process sees the change immediately.
- */
+/** Admin service for managing providers, models, pricing, and health checks. */
 
 export interface RegistryAdminDeps {
   readonly repository: RegistryRepository;

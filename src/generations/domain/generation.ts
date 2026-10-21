@@ -1,13 +1,15 @@
-/**
- * Generation state machine and terminal outcome to status mappings.
- * Terminal states are set conditionally so concurrent events resolve deterministically.
- */
+/** Generation lifecycle state machine, terminal statuses, and finish reasons. */
 
-import type {
-  FinishReason,
-  MessageStatus,
-  PartStatus,
-} from '@/conversations/domain/conversation.ts';
+export type MessageStatus = 'streaming' | 'complete' | 'incomplete' | 'failed';
+export type FinishReason =
+  | 'stop'
+  | 'length'
+  | 'content_filter'
+  | 'cancelled'
+  | 'error'
+  | 'timeout'
+  | 'interrupted';
+export type PartStatus = 'streaming' | 'complete' | 'incomplete' | 'failed';
 
 export type GenerationStatus = 'pending' | 'generating' | 'completed' | 'cancelled' | 'failed';
 
@@ -29,11 +31,7 @@ export function isActive(status: GenerationStatus): boolean {
 /** Why a generation stopped while still live. */
 export type CancelReason = 'user_cancel' | 'detached' | 'shutdown';
 
-/**
- * The generation-level error category stored on `generation_jobs.error_category` and surfaced in
- * the `generation.failed` SSE frame. A subset of the platform error vocabulary — only what a
- * generation can end with.
- */
+/** Failure categories surfaced in error telemetry and SSE frames. */
 export type GenerationFailureCategory =
   | 'provider_unavailable'
   | 'provider_rate_limited'
@@ -42,10 +40,7 @@ export type GenerationFailureCategory =
   | 'incomplete'
   | 'internal_error';
 
-/**
- * A terminal outcome derived from how the run ended. This is the single input to the mapping
- * table below; the runner, the finalizer and the reaper all produce one.
- */
+/** Terminal generation outcome model. */
 export type GenerationOutcome =
   | { readonly kind: 'completed'; readonly finishReason: CompletedFinishReason }
   | { readonly kind: 'cancelled'; readonly reason: CancelReason }
@@ -111,10 +106,7 @@ function failureFinishReason(category: GenerationFailureCategory): FinishReason 
   return category === 'generation_timeout' ? 'timeout' : 'error';
 }
 
-/**
- * The live-state transitions. Returns `false` for any transition that the state machine forbids,
- * which the caller turns into "leave the row alone" (idempotency) rather than an error.
- */
+/** Evaluates valid generation status transitions. */
 export function canTransition(from: GenerationStatus, to: GenerationStatus): boolean {
   if (isTerminal(from)) return false;
   if (to === 'pending') return false;

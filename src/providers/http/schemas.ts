@@ -1,16 +1,46 @@
 import { z } from 'zod';
 import { ModelCapabilitiesSchema, PartialModelCapabilitiesSchema } from '@/providers/domain/capabilities-schema.ts';
 
-/**
- * Zod schemas for the admin registry endpoints. Validation lives here,
- * at the HTTP boundary; the application service enforces cross-row rules (adapter exists,
- * duplicate keys, replacement model known).
- */
+/** Zod schemas for provider and model administration endpoints. */
 
 const ConfigSchema = z.record(z.string(), z.unknown());
 
 const ProviderStatusSchema = z.enum(['active', 'disabled']);
 const ModelStatusSchema = z.enum(['active', 'disabled']);
+
+const FORBIDDEN_SECRET_NAMES = new Set([
+  'SESSION_SECRET',
+  'DATABASE_URL',
+  'TEST_DATABASE_URL',
+  'MIGRATION_DATABASE_URL',
+]);
+
+const SecretRefSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Z][A-Z0-9_]*_(KEY|TOKEN|SECRET)$/, 'Use an API key or token variable name, e.g. OPENAI_API_KEY.')
+  .refine((name) => !FORBIDDEN_SECRET_NAMES.has(name.toUpperCase()), {
+    message: 'Referencing system database or session secrets is forbidden.',
+  });
+
+const BaseUrlSchema = z
+  .string()
+  .url()
+  .refine(
+    (val) => {
+      try {
+        const parsed = new URL(val);
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+      } catch {
+        return false;
+      }
+    },
+    { message: 'baseUrl must use http: or https: scheme.' },
+  )
+  .nullable()
+  .optional();
 
 export const CreateProviderBodySchema = z.object({
   key: z
@@ -21,13 +51,8 @@ export const CreateProviderBodySchema = z.object({
     .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Use lowercase letters, digits, "-" or "_".'),
   displayName: z.string().trim().min(1).max(128),
   adapter: z.string().trim().min(1).max(64),
-  baseUrl: z.url().nullable().optional(),
-  secretRef: z
-    .string()
-    .trim()
-    .min(1)
-    .max(128)
-    .regex(/^[A-Z][A-Z0-9_]*$/, 'Use an environment-variable name, e.g. OPENAI_API_KEY.'),
+  baseUrl: BaseUrlSchema,
+  secretRef: SecretRefSchema,
   status: ProviderStatusSchema.optional(),
   config: ConfigSchema.optional(),
 });
@@ -35,14 +60,8 @@ export const CreateProviderBodySchema = z.object({
 export const UpdateProviderBodySchema = z
   .object({
     displayName: z.string().trim().min(1).max(128).optional(),
-    baseUrl: z.url().nullable().optional(),
-    secretRef: z
-      .string()
-      .trim()
-      .min(1)
-      .max(128)
-      .regex(/^[A-Z][A-Z0-9_]*$/, 'Use an environment-variable name, e.g. OPENAI_API_KEY.')
-      .optional(),
+    baseUrl: BaseUrlSchema,
+    secretRef: SecretRefSchema.optional(),
     status: ProviderStatusSchema.optional(),
     config: ConfigSchema.optional(),
   })

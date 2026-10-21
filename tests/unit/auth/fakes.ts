@@ -216,6 +216,8 @@ export class InMemoryUserRepository implements UserRepository {
       passwordHash: update.passwordHash,
       passwordUpdatedAt: update.at,
       mustChangePassword: update.mustChangePassword,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
     });
   }
 }

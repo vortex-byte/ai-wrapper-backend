@@ -8,8 +8,8 @@ import {
   probeImageDimensions,
   sanitizeDisplayName,
   validateUpload,
+  AttachmentValidationError,
 } from '@/attachments/domain/attachment.ts';
-import { AppError } from '@/errors.ts';
 
 const pngHeader = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -114,15 +114,52 @@ describe('validateUpload', () => {
         bytes: pngBytes(FILE_LIMITS.maxImageDimension + 1, 10),
         declaredMime: null,
       }),
-    ).toThrowError(AppError);
+    ).toThrowError(AttachmentValidationError);
   });
 
   it('rejects empty and oversized uploads', () => {
     expect(() => validateUpload({ kind: 'png', bytes: new Uint8Array(0), declaredMime: null })).toThrowError(
-      AppError,
+      AttachmentValidationError,
     );
     expect(() =>
       validateUpload({ kind: 'text', bytes: new Uint8Array(FILE_LIMITS.perType.text + 1).fill(0x61), declaredMime: null }),
-    ).toThrowError(AppError);
+    ).toThrowError(AttachmentValidationError);
+  });
+
+  it('rejects declared MIME type that contradicts detected kind', () => {
+    expect(() =>
+      validateUpload({
+        kind: 'png',
+        bytes: pngBytes(64, 64),
+        declaredMime: 'application/pdf',
+      }),
+    ).toThrowError(/does not match detected content type/);
+  });
+
+  it('allows compatible or generic application/octet-stream declared MIME', () => {
+    const res1 = validateUpload({
+      kind: 'png',
+      bytes: pngBytes(64, 64),
+      declaredMime: 'application/octet-stream',
+    });
+    expect(res1.detectedMime).toBe('image/png');
+
+    const res2 = validateUpload({
+      kind: 'text',
+      bytes: new TextEncoder().encode('hello world'),
+      declaredMime: 'text/plain; charset=utf-8',
+    });
+    expect(res2.detectedMime).toBe('text/plain');
+  });
+
+  it('rejects animated GIF uploads', () => {
+    const multi = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x0a, 0x00, 0x0a, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x2c]);
+    expect(() =>
+      validateUpload({
+        kind: 'gif',
+        bytes: multi,
+        declaredMime: 'image/gif',
+      }),
+    ).toThrowError(/Animated images are not supported/);
   });
 });

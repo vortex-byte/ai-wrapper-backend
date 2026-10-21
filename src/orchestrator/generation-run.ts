@@ -25,12 +25,7 @@ export interface GenerationRunPartStartedInput {
   readonly mimeType?: string | undefined;
 }
 
-/**
- * A provider-emitted binary awaiting hydration (`ArtifactSink`). The hook is expected to
- * download, persist (persist-before-expose), and link the attachment to `partId`, returning
- * the new attachment id — or `null` when hydration failed (the part is then marked failed and
- * the generation continues normally).
- */
+/** Provider-emitted binary artifact awaiting hydration. */
 export interface GenerationRunArtifactInput {
   readonly partId: string;
   readonly providerFileId: string;
@@ -61,6 +56,8 @@ export interface RunFinalizeInput {
     { readonly code: string; readonly message: string; readonly retryable: boolean } | undefined;
   readonly accumulatedText: string;
   readonly usage?: TokenUsage | undefined;
+  /** Whether the upstream provider accepted the request (stream connection established / started event). */
+  readonly providerAccepted?: boolean | undefined;
   /** Abort reason for a cancelled run (`user_cancel` | `detached`) — the DB `cancel_reason` value. */
   readonly cancelReason?: string | undefined;
   /** Part the run streamed text into, so the finalizer can persist text if the part row is missing. */
@@ -89,10 +86,7 @@ interface NextResult<T> {
   readonly aborted?: boolean;
 }
 
-/**
- * Races an async iterator next() against an AbortSignal.
- * Guarantees that an adapter that ignores abort or hangs mid-stream will not wedge the loop.
- */
+/** Races an async iterator next() against an AbortSignal. */
 async function nextWithAbort<T>(
   iterator: AsyncIterator<T>,
   signal: AbortSignal,
@@ -139,10 +133,7 @@ function mimeForArtifact(mimeType: string | undefined, filename: string): 'image
   return 'file';
 }
 
-/**
- * Owns the execution lifecycle, ring buffer, subscriber fan-out, and coalescing
- * for a single live generation run.
- */
+/** Owns execution lifecycle, ring buffer, subscriber fan-out, and coalescing for a run. */
 export class GenerationRun {
   readonly generationId: string;
   readonly conversationId: string;
@@ -176,6 +167,7 @@ export class GenerationRun {
   /** File parts opened in order — the fallback association for an index-less `artifact_emitted`. */
   private readonly openFilePartIds: string[] = [];
   private readonly completedFilePartIds = new Set<string>();
+  private providerAccepted = false;
   private providerRequestId: string | null = null;
   private capturedUsage?: TokenUsage | undefined;
   /** Wall-clock start of the provider call and the first text delta, for the TTFT histogram. */
@@ -263,10 +255,7 @@ export class GenerationRun {
     return this.status === 'completed' || this.status === 'cancelled' || this.status === 'failed';
   }
 
-  /**
-   * Attaches a new subscriber to this run.
-   * If `lastEventSeq` is provided and the buffer has rolled off, returns `{ canReplay: false }`.
-   */
+  /** Attaches a subscriber to this run, validating replay capability. */
   subscribe(
     subscriberId: string,
     lastEventSeq?: number,
@@ -320,10 +309,12 @@ export class GenerationRun {
     this.abortController.abort(reason);
   }
 
-  /**
-   * Begins execution of the generation.
-   * Resolves when execution has completed and all terminal hooks have run.
-   */
+  /** Exposed so long-running side work (artifact downloads) obeys run cancellation. */
+  get abortSignal(): AbortSignal {
+    return this.abortController.signal;
+  }
+
+  /** Begins generation execution, streaming events until completion or error. */
   async start(): Promise<void> {
     if (this.status !== 'pending') return;
     this.status = 'generating';
@@ -412,6 +403,9 @@ export class GenerationRun {
   }
 
   private async handlePALEvent(event: GenerationEvent): Promise<void> {
+    if (event.type !== 'error') {
+      this.providerAccepted = true;
+    }
     switch (event.type) {
       case 'started':
         if (event.providerRequestId !== undefined) {
@@ -553,11 +547,7 @@ export class GenerationRun {
     }
   }
 
-  /**
-   * Opens a non-text (file/image) part. The part is persisted with status `streaming` so the
-   * ArtifactSink can set `file_id` + `complete` atomically once the bytes are stored
-   * (persist-before-expose: the client only sees a `downloadUrl` after hydration).
-   */
+  /** Opens a non-text (file or image) part in streaming status. */
   private async openFilePart(
     index: number,
     partType: 'image' | 'file',
@@ -597,11 +587,7 @@ export class GenerationRun {
     return this.openFilePartIds.find((id) => !this.completedFilePartIds.has(id)) ?? null;
   }
 
-  /**
-   * Hydrates a provider-emitted artifact: the hook downloads + stores + links it, and only
-   * then is `part.completed` (with a `downloadUrl`) emitted. On failure the part is marked
-   * `failed`; the generation itself is unaffected.
-   */
+  /** Hydrates a provider artifact and emits completion frame with download URL. */
   private async hydrateArtifact(event: {
     readonly providerFileId: string;
     readonly filename: string;
@@ -674,6 +660,15 @@ export class GenerationRun {
         finishReason = 'cancelled';
         cancelReason = String(abortReason);
         this.emitFrame('generation.cancelled', { reason: String(abortReason) });
+      } else if (abortReason === 'timeout') {
+        this.status = 'failed';
+        finishReason = 'timeout';
+        const code = 'generation_timeout';
+        const msg = 'The generation timed out.';
+        this.emitFrame('generation.failed', {
+          error: { code, message: msg, retryable: true },
+        });
+        error = { code, message: msg, retryable: true };
       } else {
         this.status = 'failed';
         finishReason = abortReason === 'shutdown' ? 'interrupted' : 'error';
@@ -719,6 +714,7 @@ export class GenerationRun {
           error,
           accumulatedText: this.accumulatedText,
           usage: this.capturedUsage,
+          providerAccepted: this.providerAccepted,
           ...(cancelReason !== undefined ? { cancelReason } : {}),
           ...(this.currentPartId !== null ? { fallbackPartId: this.currentPartId } : {}),
         });
@@ -781,7 +777,9 @@ export class GenerationRun {
           });
         }
         if (this.hooks?.onHeartbeat !== undefined) {
-          void this.hooks.onHeartbeat(this.generationId);
+          // A transient DB failure here is retried on the next beat; it must never become
+          // an unhandled rejection from the floating interval callback.
+          this.hooks.onHeartbeat(this.generationId).catch(() => {});
         }
       }
     }, intervalMs);

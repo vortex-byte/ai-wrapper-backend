@@ -39,6 +39,8 @@ export async function login(deps: AuthDeps, input: LoginInput): Promise<LoginSuc
 
   const block = authenticationBlock(user, now);
   if (block !== null) {
+    // Equalize timing: verify password anyway so locked accounts do not leak via fast returns.
+    await deps.hasher.verify(input.password, user.passwordHash);
     await deps.audit.append({
       actorUserId: user.id,
       action: AUDIT_ACTIONS.failedLogin,

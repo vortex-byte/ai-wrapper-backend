@@ -1,14 +1,4 @@
-/**
- * Text extraction for input documents.
- *
- * Engine: `@firecrawl/anydoc`, a Rust converter (DOCX/DOC, XLSX, PPTX, PDF, CSV, RTF, ODF, EPUB
- * → Markdown) whose bindings run on the libuv thread pool, so conversions never block the event
- * loop. Format detection is content-based, so one dependency replaces per-format parsers.
- *
- * Upload hardening runs before anydoc sees the bytes; `ocr: 'reject'` keeps scanned PDFs on the
- * VPS; output is capped so extracted text cannot blow up the context. Extraction is read-only —
- * binary document generation is never performed locally.
- */
+/** Text extraction for input documents into bounded Markdown text. */
 
 import { formatFromExtension, toMarkdownBytes } from '@firecrawl/anydoc';
 import type { Format } from '@firecrawl/anydoc';
@@ -62,10 +52,7 @@ export interface ExtractInput {
   readonly bytes: Uint8Array;
 }
 
-/**
- * Extracts bounded Markdown text for the detected kind. Never throws — every
- * failure mode maps to a `failed`/`unsupported` result the caller persists.
- */
+/** Extracts bounded Markdown text for the detected kind. */
 export async function extractTextForKind(input: ExtractInput): Promise<ExtractionResult> {
   // Plain text needs no conversion; a plain decode is correct and cheapest.
   if (input.kind === 'text') {

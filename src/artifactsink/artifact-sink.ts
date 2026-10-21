@@ -1,4 +1,5 @@
 import type { Clock, IdGenerator } from '@/clock/index.ts';
+import { withTransaction, type TransactionContext } from '@/db/tx.ts';
 import { getLogger } from '@/observability/logger.ts';
 import type { StorageProviderPort } from '@/storage/ports/storage-provider.ts';
 import {
@@ -9,20 +10,13 @@ import {
 import type { AttachmentRepository } from '@/attachments/ports/attachment-repository.ts';
 import type { ProviderArtifact } from '@/providers/ports/provider-adapter.ts';
 
-/**
- * Hydrates provider-generated binaries into local storage.
- *
- * Persist before expose: a file becomes visible (via `part.completed` with a `downloadUrl`) only
- * once its bytes and the `attachments` row exist, and the stored bytes are re-measured rather than
- * trusted. A failed download marks the part `failed` and returns `null`; the generation itself
- * completes normally.
- */
+/** Hydrates provider-generated binaries into local storage before exposing to clients. */
 
-/** Anthropic cloud containers live 30 days, so generated files default to the same horizon. */
+/** Default retention for generated files (30 days). */
 export const GENERATED_FILE_RETENTION_DAYS = 30;
-/** Hard cap on one hydrated artifact — a runaway container cannot fill the VPS disk. */
+/** Hard cap on generated artifact size. */
 export const MAX_GENERATED_ARTIFACT_BYTES = 50 * 1024 * 1024;
-/** Files-API download timeout; a hung provider request must not wedge finalization. */
+/** Timeout for provider artifact downloads. */
 export const ARTIFACT_FETCH_TIMEOUT_MS = 60_000;
 
 export interface ArtifactHydrationInput {
@@ -34,22 +28,16 @@ export interface ArtifactHydrationInput {
   readonly filename: string;
   readonly mimeType?: string | undefined;
   readonly sizeBytes?: number | undefined;
-  /**
-   * Bytes the provider already handed back in the response (OpenAI's hosted image tool returns
-   * base64). When present there is nothing to download and no retry loop.
-   */
+  /** In-band bytes from provider response (skips network download when present). */
   readonly bytes?: Uint8Array | undefined;
 }
 
-/** Fetches the provider-side bytes; supplied per generation (it closes over adapter + secrets). */
+/** Fetches provider-side bytes for a generated file. */
 export type ArtifactFetcher = (providerFileId: string) => Promise<ProviderArtifact>;
 
-/**
- * The slice of the conversations module the sink needs: link the stored bytes to the awaiting
- * part, or mark it failed. Declared narrowly so the sink depends on a capability, not a module.
- */
+/** Minimal interface for linking stored artifacts to message parts. */
 export interface ArtifactPartLinker {
-  attachPartFile(partId: string, fileId: string): Promise<void>;
+  attachPartFile(partId: string, fileId: string, tx?: TransactionContext): Promise<void>;
   updatePart(partId: string, updates: { readonly status: 'failed' }): Promise<void>;
 }
 
@@ -81,6 +69,10 @@ function byteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 }
 
 /** Provider errors carry the retry verdict; anything else is treated as transient. */
+function isAbortError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError';
+}
+
 function isNonRetryableProviderError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   if (!('retryable' in err) || !('category' in err)) return false;
@@ -146,10 +138,7 @@ function guessMime(mimeType: string | undefined, filename: string): string {
 export class ArtifactSink {
   constructor(private readonly deps: ArtifactSinkDeps) {}
 
-  /**
-   * Downloads → stores → records → links. Returns the new attachment id, or `null` when the
-   * artifact could not be hydrated (the calling part is then marked failed).
-   */
+  /** Downloads, stores, records, and links an artifact to a message part. */
   async hydrate(
     input: ArtifactHydrationInput,
     fetchArtifact: ArtifactFetcher,
@@ -176,6 +165,9 @@ export class ArtifactSink {
         break;
       } catch (err) {
         lastError = err;
+        // The run was cancelled/timed out/shut down: retrying a download whose signal is
+        // already aborted would only stall cancellation for the remaining backoff window.
+        if (isAbortError(err)) break;
         // A permanent failure (404, bad handle) must not cost two more attempts inside the
         // stream loop.
         if (isNonRetryableProviderError(err)) break;
@@ -252,8 +244,10 @@ export class ArtifactSink {
     };
 
     try {
-      await attachments.insert(attachment, null);
-      await conversations.attachPartFile(input.partId, id);
+      await withTransaction(async (tx) => {
+        await attachments.insert(attachment, null, tx);
+        await conversations.attachPartFile(input.partId, id, tx);
+      });
     } catch (err) {
       // Either the row or the link failed; drop both the blob and any row already written so
       // the part can never point at bytes that a `ready` attachment claims to own.

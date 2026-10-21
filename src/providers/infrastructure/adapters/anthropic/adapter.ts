@@ -56,10 +56,7 @@ const defaultFactory: AnthropicClientFactory = (options) =>
     maxRetries: options.maxRetries,
   });
 
-/**
- * Anthropic's server-side code-execution tool. The version is pinned here but overridable through
- * provider config, because Anthropic ships new tool versions with new identifiers.
- */
+/** Server-side code-execution tool identifier, overridable through provider config. */
 const DEFAULT_CODE_EXECUTION_TOOL_TYPE = 'code_execution_20250825';
 
 /** Hard cap on `pause_turn` continuations, so a provider cannot loop us forever. */
@@ -67,10 +64,7 @@ const MAX_PAUSE_TURNS = 8;
 
 const DEFAULT_OUTPUT_DIR_ENV = 'OUTPUT_DIR';
 
-/**
- * Claude must write artifacts into `$OUTPUT_DIR` or the Files API never captures them. Appended
- * only while a container is active, and worded as a hard requirement.
- */
+/** Output directory instruction appended to system prompt when a container is active. */
 function outputDirAddendum(envVar: string): string {
   return (
     `\n\nCRITICAL: Always copy or save all generated files (PDF, DOCX, XLSX, PPTX, images) ` +
@@ -107,10 +101,7 @@ interface DocumentBlock {
     readonly data: string;
   };
 }
-/**
- * A provider block replayed verbatim on a `pause_turn` continuation. The docs require passing
- * the paused response content back "as-is", server tool calls and their results included.
- */
+/** Provider block replayed verbatim on a pause_turn continuation. */
 type ReplayBlock = { readonly type: string } & Record<string, unknown>;
 
 type OutgoingBlock =
@@ -121,10 +112,7 @@ interface OutgoingMessage {
   content: string | OutgoingBlock[];
 }
 
-/**
- * Folds two same-role contents together. Anthropic expects alternating roles, so consecutive
- * turns are merged rather than sent as two messages.
- */
+/** Merges consecutive turns with the same role into alternating message blocks. */
 function mergeContent(
   left: OutgoingMessage['content'],
   right: OutgoingMessage['content'],
@@ -135,11 +123,7 @@ function mergeContent(
   return [...asBlocks(left), ...asBlocks(right)];
 }
 
-/**
- * The paused turn's content, replayed verbatim on the continuation request. The docs require the
- * response content "as-is" — server tool calls and their result blocks included, otherwise the
- * model loses the container state it paused on.
- */
+/** Replays paused response content verbatim on continuation. */
 function replayContent(runState: RunState): string | OutgoingBlock[] {
   const blocks = runState.turnBlockOrder
     .map((index) => runState.turnBlocks.get(index))
@@ -159,15 +143,12 @@ interface RunState {
   readonly turnBlocks: Map<number, ReplayBlock>;
   inputTokens: number;
   outputTokens: number;
+  priorTurnsOutputTokens: number;
   cachedInputTokens: number | undefined;
   stopReason: string;
 }
 
-/**
- * Walks a tool-result `content` payload for entries that reference a provider `file_id`.
- * Anthropic nests these a few ways (`content[].file_id`, `content[].content[].file_id`), so the
- * walk is recursive and tolerant of both shapes and unknown extra fields.
- */
+/** Recursively extracts generated file references from tool-result content. */
 function extractGeneratedFiles(
   content: unknown,
 ): Array<{ fileId: string; filename: string; mimeType?: string; sizeBytes?: number }> {
@@ -203,10 +184,7 @@ function extractGeneratedFiles(
   return found;
 }
 
-/**
- * Reads the stdout/stderr pair out of a server tool-result block. The API nests them under
- * `content_block.content`; the older flat shape put them on the block itself.
- */
+/** Extracts stdout/stderr strings from server tool-result block. */
 function toolResultOutput(block: RawAnthropicStreamEvent['content_block']): {
   stdout?: string;
   stderr?: string;
@@ -291,10 +269,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     };
   }
 
-  /**
-   * The system prompt, with the `$OUTPUT_DIR` addendum appended while a container is active.
-   * Never a filesystem path — only the sandbox's own env var name.
-   */
+  /** Formats system prompt with output directory instructions when container is enabled. */
   private buildSystem(req: NormalizedChatRequest): string | undefined {
     const base = req.system !== undefined && req.system.trim().length > 0 ? req.system : undefined;
     if (!this.containerEnabled(req)) return base;
@@ -302,13 +277,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     return base === undefined ? addendum.trimStart() : `${base}${addendum}`;
   }
 
-  /**
-   * Attaches the sandbox tool + skills when the request asks for document generation. The
-   * `container` object carries either a reused `id` (multi-turn continuity) or fresh `skills`.
-   *
-   * The code-execution tool is always declared while a container is active: skills run *through*
-   * that tool, so a skills-only request without it would be rejected by the API.
-   */
+  /** Attaches sandbox code execution tool and skills when document generation is requested. */
   private buildContainer(req: NormalizedChatRequest): {
     readonly tools?: readonly unknown[];
     readonly container?: unknown;
@@ -354,14 +323,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       : DEFAULT_CODE_EXECUTION_TOOL_TYPE;
   }
 
-  /**
-   * Builds the outgoing turns. Input files are mounted with `container_upload` blocks on the
-   * final user turn only — the provider keeps them in the container for later turns, so
-   * re-mounting every turn would duplicate work.
-   *
-   * `media[index]` carries the inline blocks resolved for that turn (images, PDFs, extracted
-   * document text); the sync `toProviderRequest` passes none, the streaming path fills them.
-   */
+  /** Builds outgoing message turns, mounting container files on the final user turn. */
   private buildMessages(
     req: NormalizedChatRequest,
     media: readonly (readonly OutgoingBlock[])[] = [],
@@ -417,11 +379,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     return messages;
   }
 
-  /**
-   * Renders the current turn's binaries. Anthropic takes base64 images and PDF documents;
-   * every other format must be converted to text first (`.docx`/`.xlsx` are not valid document
-   * blocks), so the anydoc extraction is sent as text inside `<attached_document>`.
-   */
+  /** Resolves media blocks (base64 images and PDFs) for outbound messages. */
   private async resolveMediaBlocks(req: NormalizedChatRequest): Promise<OutgoingBlock[][]> {
     const perMessage: OutgoingBlock[][] = [];
 
@@ -560,7 +518,7 @@ export class AnthropicAdapter implements ProviderAdapter {
               if (ev.delta.stop_reason === 'pause_turn') paused = true;
             }
             if (ev.usage?.output_tokens !== undefined) {
-              runState.outputTokens = ev.usage.output_tokens;
+              runState.outputTokens = runState.priorTurnsOutputTokens + ev.usage.output_tokens;
             }
           }
         }
@@ -630,6 +588,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       turnBlocks: new Map<number, ReplayBlock>(),
       inputTokens: 0,
       outputTokens: 0,
+      priorTurnsOutputTokens: 0,
       cachedInputTokens: undefined,
       stopReason: 'end_turn',
     };
@@ -637,6 +596,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /** Clears per-turn state. Block indices restart at 0 for every request in the pause loop. */
   private resetTurn(runState: RunState): void {
+    runState.priorTurnsOutputTokens = runState.outputTokens;
     runState.openBlocks.clear();
     runState.toolBlocks.clear();
     runState.blockTypes.clear();
@@ -775,11 +735,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
   }
 
-  /**
-   * Mines a `*_tool_result` block for stdout and generated `file_id`s. The API nests the payload
-   * (`content_block.content.{stdout,stderr,content[]}`); older sketches put `stdout` directly on
-   * the block, so both shapes are accepted.
-   */
+  /** Processes tool-result events, extracting output chunks and generated file references. */
   private *handleToolResult(
     ev: RawAnthropicStreamEvent,
     blockType: string,
@@ -1065,12 +1021,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     });
   }
 
-  /**
-   * Downloads a provider-generated file so the `ArtifactSink` can persist it.
-   *
-   * Uses the Files API over `fetch` rather than the SDK: the SDK's `files` surface varies by
-   * version, and the endpoint is a plain authenticated GET. Secrets never leave the header.
-   */
+  /** Downloads a provider-generated file via the Files API for storage hydration. */
   async fetchArtifactStream(
     providerFileId: string,
     ctx: FilesApiContext,
@@ -1108,10 +1059,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     };
   }
 
-  /**
-   * Uploads an input binary to the Files API so it can be mounted with `container_upload`.
-   * The caller caches the returned id in `attachments.metadata` so a file uploads once.
-   */
+  /** Uploads an input binary to the Files API for container mounting. */
   async uploadInputFile(file: InputFileUpload, ctx: FilesApiContext): Promise<UploadedInputFile> {
     const apiKey = ctx.provider.secrets['apiKey'];
     if (apiKey === undefined || apiKey === '') {

@@ -252,6 +252,78 @@ describe('Jobs Runtime & Reaper (P2-8)', () => {
     expect(streamText).toContain('Partial text before crash...');
   });
 
+  it('touchHeartbeat advances live rows and never resurrects terminal rows', async () => {
+    const pool = getPool();
+    const user = await seedUser(`hb-${Bun.randomUUIDv7().slice(0, 8)}@corp.example`);
+    const providerId = Bun.randomUUIDv7();
+    const modelId = Bun.randomUUIDv7();
+    const conversationId = Bun.randomUUIDv7();
+    const messageId = Bun.randomUUIDv7();
+    const generationId = Bun.randomUUIDv7();
+
+    await pool.query(
+      `INSERT INTO ai_providers (id, key, display_name, adapter, secret_ref)
+       VALUES ($1, $2, 'Fixture', 'fake', 'FAKE_KEY')`,
+      [providerId, `p-${providerId}`],
+    );
+    await pool.query(
+      `INSERT INTO ai_models (id, provider_id, key, api_model_id, display_name, status,
+                              capabilities, context_window, max_output_tokens, default_max_output_tokens)
+       VALUES ($1, $2, $3, $4, 'Fixture Model', 'active', '{"schemaVersion":1}', 8192, 1024, 1024)`,
+      [modelId, providerId, `m-${modelId}`, `api-${modelId}`],
+    );
+    await pool.query(`INSERT INTO conversations (id, user_id, model_id) VALUES ($1, $2, $3)`, [
+      conversationId,
+      user.id,
+      modelId,
+    ]);
+    await pool.query(
+      `INSERT INTO messages (id, conversation_id, seq, role, status)
+       VALUES ($1, $2, 1, 'assistant', 'streaming')`,
+      [messageId, conversationId],
+    );
+    await pool.query(
+      `INSERT INTO generation_jobs
+         (id, request_id, user_id, conversation_id, assistant_message_id, model_id, provider_id,
+          status, max_output_tokens, started_at, heartbeat_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'generating', 1024, now() - interval '60 seconds',
+               now() - interval '60 seconds')`,
+      [generationId, `req-${generationId}`, user.id, conversationId, messageId, modelId, providerId],
+    );
+
+    const firstBeat = new Date(Date.now() + 5 * 60_000);
+    await services.generationRepository.touchHeartbeat(generationId, firstBeat);
+    const { rows: afterFirst } = await pool.query<{ heartbeat_at: Date }>(
+      'SELECT heartbeat_at FROM generation_jobs WHERE id = $1',
+      [generationId],
+    );
+    const firstRow = afterFirst[0];
+    const firstHeartbeat = firstRow?.heartbeat_at;
+    const firstDelta = firstHeartbeat
+      ? Math.abs(firstHeartbeat.getTime() - firstBeat.getTime())
+      : Number.POSITIVE_INFINITY;
+    expect(firstDelta).toBeLessThan(200);
+
+    await pool.query(
+      `UPDATE generation_jobs SET status = 'completed', finished_at = now() WHERE id = $1`,
+      [generationId],
+    );
+    const { rows: beforeSecond } = await pool.query<{ heartbeat_at: Date }>(
+      'SELECT heartbeat_at FROM generation_jobs WHERE id = $1',
+      [generationId],
+    );
+
+    // A late heartbeat from a still-running worker must not move a terminal row forward.
+    const secondBeat = new Date(Date.now() + 10 * 60_000);
+    await services.generationRepository.touchHeartbeat(generationId, secondBeat);
+    const { rows: afterSecond } = await pool.query<{ status: string; heartbeat_at: Date }>(
+      'SELECT status, heartbeat_at FROM generation_jobs WHERE id = $1',
+      [generationId],
+    );
+    expect(afterSecond[0]?.status).toBe('completed');
+    expect(afterSecond[0]?.heartbeat_at?.getTime()).toBe(beforeSecond[0]?.heartbeat_at?.getTime());
+  });
+
   it('fail() applies capped exponential backoff and marks exhausted jobs dead', async () => {
     const pool = getPool();
     const jobId = await services.jobQueue.enqueue({

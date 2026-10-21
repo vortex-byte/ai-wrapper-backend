@@ -1,12 +1,7 @@
 import type { TransactionContext } from '@/db/tx.ts';
 import type { GenerationStatus } from '../domain/generation.ts';
 
-/**
- * Persistence for generation records.
- *
- * Writes take the caller's transaction context so mutations stay atomic
- * with associated messages and state updates.
- */
+/** Persistence port for generation lifecycle records and idempotency keys. */
 
 export interface GenerationRecord {
   readonly id: string;
@@ -82,12 +77,14 @@ export interface StaleGenerationRow {
   readonly status: string;
 }
 
+export interface GenerationUsageSnapshot {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly quotaTokens: number;
+}
+
 export interface GenerationRepository {
-  /**
-   * Insert a new generation in the live `pending` state. Throws on the partial unique index
-   * (SQLSTATE 23505) when the conversation already has a live generation — the caller maps that to
-   * `409 generation_in_progress`.
-   */
+  /** Inserts a generation in pending status. */
   insert(input: InsertGenerationInput, tx: TransactionContext): Promise<GenerationRecord>;
 
   /**
@@ -107,13 +104,18 @@ export interface GenerationRepository {
 
   checkpointText(input: CheckpointTextInput, tx?: TransactionContext): Promise<void>;
 
-  /**
-   * Atomically transitions a generation from live ('pending' | 'generating') to terminal.
-   * Returns true if this caller won the race and updated the row; false if already terminal.
-   */
+  /** Advances heartbeat timestamp to signal liveness during non-streaming phases. */
+  touchHeartbeat(generationId: string, heartbeatAt: Date, tx?: TransactionContext): Promise<void>;
+
+  /** Atomically transitions generation from live to terminal status. */
   transitionToTerminal(input: TransitionTerminalInput, tx?: TransactionContext): Promise<boolean>;
 
   markGenerating(id: string, startedAt: Date, tx?: TransactionContext): Promise<void>;
+
+  findUsage(
+    generationId: string,
+    tx?: TransactionContext,
+  ): Promise<GenerationUsageSnapshot | null>;
 
   findStaleGenerations(
     criteria: {
@@ -124,10 +126,7 @@ export interface GenerationRepository {
     tx?: TransactionContext,
   ): Promise<readonly StaleGenerationRow[]>;
 
-  /**
-   * Claims an idempotency key. Returns `{ claimed: true }` when this caller
-   * is the first to use the key, or the previously stored response when the key exists.
-   */
+  /** Claims idempotency key or returns previously stored response. */
   claimIdempotencyKey(
     input: {
       readonly userId: string;
@@ -142,10 +141,7 @@ export interface GenerationRepository {
     | { readonly claimed: false; readonly stored: StoredIdempotentResponse }
   >;
 
-  /**
-   * Persist the response for an already-claimed key, so a later replay returns identical bytes.
-   * Only the row owned by this user/key is updated; a no-op when nothing matches.
-   */
+  /** Stores idempotent response payload for a claimed key. */
   storeIdempotentResponse(
     input: {
       readonly userId: string;

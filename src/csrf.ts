@@ -35,10 +35,7 @@ function constantTimeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-/**
- * Verify a token's signature and age. Returns `{ok:false, reason}` for anything wrong
- * so callers (and tests) can distinguish a malformed token from an expired one.
- */
+/** Verifies token signature and age, returning validation status with failure reason. */
 export function verifyCsrfToken(
   secret: string,
   token: string,

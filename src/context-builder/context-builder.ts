@@ -7,13 +7,10 @@ import type {
   ProviderRuntimeConfig,
 } from '@/providers/index.ts';
 import type { MessageWithParts } from '@/conversations/domain/conversation.ts';
-import { estimateTextTokens } from '@/estimation.ts';
+import { estimateMediaTokens, estimateTextTokens } from '@/estimation.ts';
 import { AppError } from '@/errors.ts';
 
-/**
- * Context Builder: turns conversation history and system instructions into a
- * `NormalizedChatRequest`, dropping the oldest history first when the budget is exceeded.
- */
+/** Builds normalized chat request from history, truncating oldest turns when exceeding budget. */
 
 export interface ContextBuilderInput {
   readonly requestId: string;
@@ -69,8 +66,14 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
 
   const systemTokens = systemPrompt ? estimateTextTokens(systemPrompt) : 0;
 
-  const newUserText = extractPartsText(newParts);
-  const newUserTokens = estimateTextTokens(newUserText) + 8;
+  let newUserTokens = 8;
+  for (const part of newParts) {
+    if (part.type === 'text') {
+      newUserTokens += estimateTextTokens(part.text);
+    } else {
+      newUserTokens += estimateMediaTokens(part);
+    }
+  }
 
   if (systemTokens + newUserTokens > availableInputTokens) {
     throw new AppError('context_too_large', 'Prompt and new message exceed model context window.');
@@ -100,14 +103,41 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
       continue;
     }
 
-    const messageText = extractPartsText(
-      item.parts.map((p) => {
-        if (p.type === 'text') {
-          return { type: 'text', text: p.textContent ?? '' };
+    const historyParts: NormalizedPart[] = [];
+    for (const p of item.parts) {
+      if (p.type === 'text') {
+        historyParts.push({ type: 'text', text: p.textContent ?? '' });
+      } else if (p.type === 'document') {
+        const text =
+          p.textContent ??
+          (typeof p.data['extractedText'] === 'string' ? p.data['extractedText'] : null);
+        if (text) {
+          const fileName = typeof p.data['filename'] === 'string' ? p.data['filename'] : 'document';
+          historyParts.push({
+            type: 'document',
+            file: {
+              fileId: p.fileId ?? p.id,
+              name: fileName,
+              mimeType: 'text/plain',
+              sizeBytes: Buffer.byteLength(text, 'utf-8'),
+              read: () => Promise.resolve(Buffer.from(text, 'utf-8')),
+              stream: () =>
+                Promise.resolve(
+                  new ReadableStream<Uint8Array>({
+                    start(controller) {
+                      controller.enqueue(Buffer.from(text, 'utf-8'));
+                      controller.close();
+                    },
+                  }),
+                ),
+            },
+            extractedText: text,
+            preferNative: false,
+          });
         }
-        return { type: 'text', text: '' };
-      }),
-    );
+      }
+    }
+    const messageText = extractPartsText(historyParts);
     const msgTokens = estimateTextTokens(messageText) + 8;
 
     if (budgetRemaining >= msgTokens) {

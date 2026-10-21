@@ -1,7 +1,4 @@
-/**
- * Quota accounting port: reservation inside send transactions, idempotent settlement and release
- * at finalization.
- */
+/** Quota port for token reservations, settlements, and releases. */
 
 import type { TransactionContext } from '@/db/tx.ts';
 

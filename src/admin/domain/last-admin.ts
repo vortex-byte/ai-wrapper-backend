@@ -1,9 +1,15 @@
-import type { User, UserRole, UserStatus } from '@/auth/domain/user.ts';
+export type SafeguardRole = 'user' | 'admin' | 'super_admin';
+export type SafeguardStatus = 'active' | 'disabled';
+
+export interface SafeguardTargetUser {
+  readonly role: SafeguardRole;
+  readonly status: SafeguardStatus;
+}
 
 export interface SafeguardCheckInput {
-  readonly targetUser: User;
-  readonly newRole?: UserRole | undefined;
-  readonly newStatus?: UserStatus | undefined;
+  readonly targetUser: SafeguardTargetUser;
+  readonly newRole?: SafeguardRole | undefined;
+  readonly newStatus?: SafeguardStatus | undefined;
   readonly activeSuperAdminCount: number;
 }
 

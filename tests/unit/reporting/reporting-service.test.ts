@@ -84,7 +84,7 @@ describe('ReportingService.usage', () => {
     expect(query?.groupBy).toBe('day');
   });
 
-  it('renders usage as RFC 4180 CSV with a stable header', async () => {
+  it('renders usage as standard CSV with a stable header', async () => {
     const repository = new FakeReportingRepository();
     repository.usageRows = [
       {
@@ -108,6 +108,27 @@ describe('ReportingService.usage', () => {
     expect(row).toContain('"Claude, ""Sonnet"""');
     expect(row).toContain(',3,1,100,20,120,0.000123,0.500000,0.500000');
     expect(csv.endsWith('\r\n')).toBe(true);
+  });
+
+  it('neutralizes formula injection characters in CSV fields', async () => {
+    const repository = new FakeReportingRepository();
+    repository.usageRows = [
+      {
+        key: { modelId: 'm-2', displayName: '=cmd|"/C calc"!A0', provider: '@evil' },
+        requests: 1,
+        failedRequests: 0,
+        inputTokens: 10,
+        outputTokens: 10,
+        quotaTokens: 20,
+        estimatedCostUsd: 0.00001,
+        usageSource: { provider: 1, estimated: 0 },
+      },
+    ];
+
+    const csv = await service(repository).usageCsv({ groupBy: 'model' });
+    const [, row] = csv.split('\r\n');
+    expect(row).toContain("'=cmd");
+    expect(row).toContain("'@evil");
   });
 });
 

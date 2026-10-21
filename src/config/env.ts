@@ -1,16 +1,5 @@
 import { z } from 'zod';
 
-const boolish = (defaultValue: boolean) =>
-  z.preprocess((value) => {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'string') {
-      const v = value.trim().toLowerCase();
-      if (['true', '1', 'yes', 'on'].includes(v)) return true;
-      if (['false', '0', 'no', 'off', ''].includes(v)) return false;
-    }
-    return value;
-  }, z.boolean().default(defaultValue));
-
 const csv = z
   .string()
   .default('')
@@ -20,12 +9,6 @@ const csv = z
       .map((s) => s.trim())
       .filter((s) => s.length > 0),
   );
-
-/** An optional string env var: an empty value means "unset", not "" (env files set `KEY=` to disable). */
-const optionalUrl = z.preprocess(
-  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
-  z.string().url().optional(),
-);
 
 const optionalString = z.preprocess(
   (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
@@ -45,7 +28,6 @@ export const EnvSchema = z
     TEST_DATABASE_URL: optionalString,
     // Consumed **only** by the migration CLI (src/cli/migration-env.ts) — never by the server.
     MIGRATION_DATABASE_URL: optionalString,
-    REDIS_URL: optionalString,
     SHUTDOWN_DRAIN_SECONDS: z.coerce.number().int().min(0).max(600).default(120),
 
     SESSION_COOKIE_NAME: z.literal('__Host-session').default('__Host-session'),
@@ -54,10 +36,7 @@ export const EnvSchema = z
     SESSION_SECRET: z.string().min(32),
 
     STORAGE_LOCAL_ROOT: z.string().min(1).default('./.var/files'),
-    STORAGE_WRITE_PROVIDER: z.enum(['local']).default('local'),
     STORAGE_MIN_FREE_MIB: z.coerce.number().int().min(0).default(512),
-
-    TOKENIZER_CACHE_DIR: z.string().min(1).default('./.cache/tokenizer'),
 
     QUOTA_TIMEZONE: z
       .string()
@@ -71,7 +50,6 @@ export const EnvSchema = z
           return false;
         }
       }, 'Invalid IANA time zone'),
-    SERVICE_BUSY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.9),
 
     MAX_ACTIVE_GENERATIONS: z.coerce.number().int().min(1).default(200),
     GENERATION_DETACH_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(900).default(60),
@@ -81,12 +59,10 @@ export const EnvSchema = z
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).default(15),
 
     FILE_RETENTION_HOURS: z.coerce.number().int().min(1).default(24),
-    RETAIN_EXTRACTIONS: boolish(true),
 
     LOG_LEVEL: z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
       .default('info'),
-    LOG_CONTENT: boolish(false),
     LOG_DIR: z.string().min(1).default('./.var/logs'),
     LOG_FILE_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(14),
     LOG_MAX_SIZE: z.string().min(1).default('20m'),
@@ -103,8 +79,6 @@ export const EnvSchema = z
       },
       z.boolean().optional(),
     ),
-
-    OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
 
     ALLOWED_ORIGINS: csv,
 
@@ -127,13 +101,6 @@ export const EnvSchema = z
         code: 'custom',
         path: ['SESSION_ABSOLUTE_MINUTES'],
         message: 'SESSION_ABSOLUTE_MINUTES must be >= SESSION_IDLE_MINUTES.',
-      });
-    }
-    if (env.NODE_ENV === 'production' && env.LOG_CONTENT) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['LOG_CONTENT'],
-        message: 'LOG_CONTENT must be false in production.',
       });
     }
   });

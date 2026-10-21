@@ -1,12 +1,7 @@
 import type { ModelCapabilities } from './capabilities.ts';
 import type { NormalizedPart } from './pal.ts';
 
-/**
- * Capability-driven validation. The context builder and the send path ask
- * "can this model take this content?" — never "which provider is this?". Mismatches raise
- * `unsupported_for_model` *before* quota reservation.
- * 
- */
+/** Capability-driven validation for checking request parts against model limits. */
 
 export type CapabilityViolation = 'image_not_supported' | 'document_not_supported' | 'too_many_images';
 

@@ -579,7 +579,17 @@ export class DrizzleConversationRepository implements ConversationRepository {
     const purgeable = await runDb(tx)
       .select({ id: conversations.id })
       .from(conversations)
-      .where(and(lt(conversations.deletedAt, cutoff), sql`${conversations.deletedAt} IS NOT NULL`))
+      .where(
+        and(
+          lt(conversations.deletedAt, cutoff),
+          sql`${conversations.deletedAt} IS NOT NULL`,
+          sql`NOT EXISTS (
+            SELECT 1 FROM generation_jobs
+            WHERE generation_jobs.conversation_id = ${conversations.id}
+              AND generation_jobs.status IN ('pending', 'generating')
+          )`,
+        ),
+      )
       .orderBy(conversations.deletedAt)
       .limit(limit);
     return purgeable.map((row) => row.id);

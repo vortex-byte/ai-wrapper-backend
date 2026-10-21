@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { issueCsrfToken } from '@/csrf.ts';
 import { AppError } from '@/errors.ts';
 import { ok } from '@/http/envelope.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
@@ -29,6 +30,7 @@ export function meRoutes(deps: MeRoutesDeps): Hono<AppEnv> {
         divisionId: user.divisionId,
         mustChangePassword: user.mustChangePassword,
         createdAt: user.createdAt.toISOString(),
+        csrfToken: issueCsrfToken(config.SESSION_SECRET),
       }),
     );
   });

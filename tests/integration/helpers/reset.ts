@@ -1,17 +1,6 @@
 import { getPool } from '@/db/index.ts';
 
-/**
- * Reset identity data between integration tests, preserving platform seed rows.
- *
- * Deliberately uses ordered `DELETE`s rather than `TRUNCATE ... CASCADE`: `users` is
- * referenced by `system_settings.updated_by`, so a cascading truncate would also wipe
- * the `quota.timezone` default seeded by migration 0005. Safe only because the setup
- * refuses to run against a database whose name does not contain "test".
- *
- * Generation finalizers settle quota asynchronously, so a previous test's
- * finalizer may still be writing `usage_events` while this reset runs. FK violations
- * from that race are retried briefly — by the time the writer is done the deletes pass.
- */
+/** Resets identity and conversational data between tests while preserving seed settings. */
 const RESET_STATEMENTS = [
   'DELETE FROM audit_logs',
   'DELETE FROM error_events',

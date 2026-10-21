@@ -9,10 +9,7 @@ export interface ModelPriceRow {
   readonly currency: string;
 }
 
-/**
- * Micro-USD cost for a settled generation. Cached input is billed at the (cheaper) cached rate
- * when the price row publishes one, otherwise at the normal input rate.
- */
+/** Calculates micro-currency cost for token counts using model price rates. */
 export function costMicros(
   price: ModelPriceRow,
   inputTokens: number,

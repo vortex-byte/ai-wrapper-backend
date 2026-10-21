@@ -4,10 +4,7 @@ import type { TransactionContext } from '@/db/tx.ts';
 import { getLogger } from '@/observability/logger.ts';
 import type { ErrorEventEntry, ErrorEventWriter } from '../ports/error-event-writer.ts';
 
-/**
- * Writes `error_events` rows. Telemetry is best-effort: a failure to record an error must never
- * mask or replace the original failure, so this swallows and logs its own errors.
- */
+/** Best-effort writer for error_events records. */
 export class DrizzleErrorEventWriter implements ErrorEventWriter {
   async record(entry: ErrorEventEntry, tx?: TransactionContext): Promise<void> {
     try {

@@ -228,19 +228,28 @@ revoked**, and the caller's session **rotated** (a fresh `__Host-session` cookie
 `csrfToken` returned. `401 unauthenticated` if `currentPassword` is wrong; `400 invalid_request` if the
 new password fails policy (min length 12).
 
+### 2.5 `GET /api/auth/csrf` — user
+
+Returns a fresh stateless CSRF token for the authenticated session without reloading profile data.
+
+```json
+{ "status": "ok", "message": "", "data": { "csrfToken": "0fT2….9c1a…" } }
+```
+
 ---
 
 ## 3. Me
 
 ### 3.1 `GET /api/me`
 
-Returns the profile and account status of the currently authenticated user. Requires no request parameters.
+Returns the profile and account status of the currently authenticated user, along with a fresh CSRF token. Requires no request parameters.
 
 ```json
 { "status": "ok", "message": "", "data": {
     "id": "0192…", "email": "ada@corp.example", "displayName": "Ada L.",
     "role": "user", "status": "active", "divisionId": "0192…",
-    "mustChangePassword": false, "createdAt": "2026-01-02T10:00:00Z" } }
+    "mustChangePassword": false, "createdAt": "2026-01-02T10:00:00Z",
+    "csrfToken": "0fT2….9c1a…" } }
 ```
 
 ### 3.2 `GET /api/me/quota`
@@ -1348,6 +1357,7 @@ Provider health is **not** part of readiness. (The `/metrics` endpoint is remove
 | `file_processing_failed` | 422 | no | corrupt/encrypted/unsafe file |
 | `generation_timeout` | terminal event | yes (manual retry) | |
 | `generation_cancelled` | terminal event | — | user/system cancel |
+| `generation_interrupted` | terminal event | yes (manual retry) | server shutdown or worker crash recovery |
 | `service_busy` | 503 | yes | node at generation capacity |
 | `storage_unavailable` | 503 | yes | disk full/unavailable |
 | `internal_error` | 500 | maybe | `message` is generic; `trace` only in development |

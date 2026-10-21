@@ -1,11 +1,7 @@
 import { z } from 'zod';
 import { decodeSeqCursor } from '@/cursor.ts';
 
-/**
- * Zod schemas for the conversation endpoints. Query strings arrive as
- * text; `limit` is coerced and bounded, `cursor` is validated as a well-formed opaque token
- * so a corrupt one becomes `400 invalid_request` instead of a silent first page.
- */
+/** Zod schemas and cursor validators for conversation endpoints. */
 
 const CursorSchema = z
   .string()

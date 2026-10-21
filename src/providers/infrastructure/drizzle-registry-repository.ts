@@ -15,11 +15,7 @@ import type {
   UpsertPriceInput,
 } from '../ports/registry-repository.ts';
 
-/**
- * Drizzle implementation of the registry persistence port. Explicit column lists only
- * (never `SELECT *`); JSONB blobs are parsed at this boundary so nothing above holds an
- * untyped object.
- */
+/** Drizzle implementation of registry persistence port. */
 
 const providerColumns = {
   id: aiProviders.id,
@@ -282,7 +278,15 @@ export class DrizzleRegistryRepository implements RegistryRepository {
 
   async listPrices(modelId: string, tx?: TransactionContext): Promise<ModelPrice[]> {
     const rows = await runDb(tx)
-      .select()
+      .select({
+        id: aiModelPrices.id,
+        modelId: aiModelPrices.modelId,
+        effectiveFrom: aiModelPrices.effectiveFrom,
+        inputMicrosPerMtok: aiModelPrices.inputMicrosPerMtok,
+        outputMicrosPerMtok: aiModelPrices.outputMicrosPerMtok,
+        cachedInputMicrosPerMtok: aiModelPrices.cachedInputMicrosPerMtok,
+        currency: aiModelPrices.currency,
+      })
       .from(aiModelPrices)
       .where(eq(aiModelPrices.modelId, modelId))
       .orderBy(desc(aiModelPrices.effectiveFrom));

@@ -4,9 +4,14 @@ import { OpenAIAdapter } from './adapters/openai/adapter.ts';
 import { FakeProvider } from './fake/fake-provider.ts';
 import { InMemoryProviderRegistry } from './registry.ts';
 
-export function createDefaultProviderRegistry(): InMemoryProviderRegistry {
+export function createDefaultProviderRegistry(options?: {
+  readonly includeFake?: boolean;
+}): InMemoryProviderRegistry {
   const registry = new InMemoryProviderRegistry();
-  registry.register(new FakeProvider());
+  const includeFake = options?.includeFake ?? process.env['NODE_ENV'] !== 'production';
+  if (includeFake) {
+    registry.register(new FakeProvider());
+  }
   registry.register(new OpenAIAdapter());
   registry.register(new AnthropicAdapter());
   registry.register(new GeminiAdapter());

@@ -3,15 +3,7 @@ import type { AttachmentRepository } from '@/attachments/ports/attachment-reposi
 import type { StorageProviderPort } from '@/storage/ports/storage-provider.ts';
 import type { Clock } from '@/clock/index.ts';
 
-/**
- * Attachment lifecycle jobs:
- * - `attachments.expire`: tombstone rows past `expires_at`, then delete their blobs.
- * - `attachments.purge_orphans`: uploads never attached to a message within the grace window are
- *   expired early, so failed sends don't leak disk.
- *
- * Rows are marked before bytes are deleted, so a crash leaves at worst a tombstone whose blob is
- * re-deleted on the next run. Neither job holds a transaction while deleting.
- */
+/** Attachment lifecycle jobs: tombstones expired/orphaned uploads and removes their blobs. */
 
 const ORPHAN_GRACE_MINUTES = 60;
 const BATCH = 100;

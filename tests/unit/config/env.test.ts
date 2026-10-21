@@ -20,9 +20,9 @@ describe('loadConfig', () => {
     expect(config.LOGIN_MAX_FAILURES).toBe(8);
     expect(config.ALLOWED_ORIGINS).toEqual([]);
     expect(config.SHUTDOWN_DRAIN_SECONDS).toBe(120);
-    expect(config.TOKENIZER_CACHE_DIR).toBe('./.cache/tokenizer');
     expect(config.MIGRATION_DATABASE_URL).toBeUndefined();
-    expect(config.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
+    expect(config.JOB_POLL_INTERVAL_MS).toBe(1000);
+    expect(config.JOB_POLL_INTERVAL_IDLE_MS).toBe(5000);
   });
 
   it('treats an empty optional value as unset, not as an invalid string', () => {
@@ -30,30 +30,9 @@ describe('loadConfig', () => {
       ...validEnv,
       MIGRATION_DATABASE_URL: '',
       TEST_DATABASE_URL: '',
-      REDIS_URL: '',
-      OTEL_EXPORTER_OTLP_ENDPOINT: '',
     });
     expect(config.MIGRATION_DATABASE_URL).toBeUndefined();
     expect(config.TEST_DATABASE_URL).toBeUndefined();
-    expect(config.REDIS_URL).toBeUndefined();
-    expect(config.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
-  });
-
-  it('accepts a valid OTLP endpoint and rejects a malformed one', () => {
-    expect(
-      loadConfig({ ...validEnv, OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318' })
-        .OTEL_EXPORTER_OTLP_ENDPOINT,
-    ).toBe('http://127.0.0.1:4318');
-    expect(() =>
-      loadConfig({ ...validEnv, OTEL_EXPORTER_OTLP_ENDPOINT: 'not-a-url' }),
-    ).toThrowError(ConfigError);
-  });
-
-  it('coerces booleans from every documented spelling', () => {
-    expect(loadConfig({ ...validEnv, RETAIN_EXTRACTIONS: 'false' }).RETAIN_EXTRACTIONS).toBe(false);
-    expect(loadConfig({ ...validEnv, RETAIN_EXTRACTIONS: '0' }).RETAIN_EXTRACTIONS).toBe(false);
-    expect(loadConfig({ ...validEnv, LOG_CONTENT: 'true' }).LOG_CONTENT).toBe(true);
-    expect(loadConfig({ ...validEnv, LOG_CONTENT: 'off' }).LOG_CONTENT).toBe(false);
   });
 
   it('parses comma-separated origins', () => {
@@ -85,12 +64,6 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...validEnv, SESSION_SECRET: 'too-short' })).toThrowError(
       ConfigError,
     );
-  });
-
-  it('rejects LOG_CONTENT=true in production', () => {
-    expect(() =>
-      loadConfig({ ...validEnv, NODE_ENV: 'production', LOG_CONTENT: 'true' }),
-    ).toThrowError(ConfigError);
   });
 
   it('rejects an absolute session timeout shorter than the idle timeout', () => {

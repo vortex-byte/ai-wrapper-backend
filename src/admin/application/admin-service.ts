@@ -6,15 +6,11 @@ import { withTransaction } from '@/db/index.ts';
 import { AppError, isUniqueViolation } from '@/errors.ts';
 import type { RequestMeta } from '@/request-context.ts';
 import { canUpdateUserRoleOrStatus } from '../domain/last-admin.ts';
-import { generateTemporaryPassword } from '../domain/password-generator.ts';
+import { generateTemporaryPassword } from '@/crypto.ts';
 import type { Division } from '../ports/division-repository.ts';
 import type { AdminDeps } from './deps.ts';
 
-/**
- * User projection exposed by the admin surface. Deliberately omits `passwordHash` (and
- * the login-failure counters) so a future admin/reporting caller cannot serialize the
- * hash. Only the auth login/password paths may see the hash.
- */
+/** User projection for the admin surface; omits password hashes and failure counters. */
 export type PublicUser = Omit<User, 'passwordHash' | 'failedLoginAttempts' | 'lockedUntil'>;
 
 function toPublicUser(user: User): PublicUser {

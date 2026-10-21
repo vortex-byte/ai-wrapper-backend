@@ -3,14 +3,15 @@ import type { Attachment, AttachmentStatus, FileExtraction } from '../domain/att
 
 /** Repository seam for attachments + extractions. Takes `AuthContext`-scoped user ids. */
 export interface AttachmentRepository {
-  insert(attachment: Attachment, extraction?: FileExtraction | null): Promise<void>;
+  insert(
+    attachment: Attachment,
+    extraction?: FileExtraction | null,
+    tx?: TransactionContext,
+  ): Promise<void>;
 
   findByIdAndUser(attachmentId: string, userId: string): Promise<Attachment | null>;
 
-  /**
-   * Links uploaded attachments to a user message.
-   * Once linked (`message_id IS NOT NULL`), the orphan purger will never delete them.
-   */
+  /** Links uploaded attachments to a message. */
   attachToMessage(
     attachmentIds: readonly string[],
     messageId: string,
@@ -32,13 +33,7 @@ export interface AttachmentRepository {
 
   findOrphans(olderThan: Date, limit: number): Promise<Attachment[]>;
 
-  /**
-   * Keyset page over every `storage_key` that still owns a blob, ordered ascending, for the
-   * weekly `storage.reconcile` sweep. Tombstoned rows (`deleted`, `expired`) are excluded: their
-   * bytes are gone, so listing them would hide their orphans from the sweep and report them as
-   * missing blobs on every run. `cursor` is the last key of the previous page (`null` for the
-   * first); `nextCursor` is `null` once the last page is reached.
-   */
+  /** Keyset page over non-tombstoned storage keys for periodic reconciliation sweeps. */
   listStorageKeys(
     cursor: string | null,
     limit: number,

@@ -221,8 +221,10 @@ export class ReportingService {
 
 function csvCell(value: string): string {
   if (value === '') return '';
-  if (/[",\r\n]/.test(value)) return `"${value.replaceAll('"', '""')}"`;
-  return value;
+  // Neutralize CSV formula injection: prefix leading formula triggers with a single quote.
+  const sanitized = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  if (/[",\r\n]/.test(sanitized)) return `"${sanitized.replaceAll('"', '""')}"`;
+  return sanitized;
 }
 
 function toWireErrorEvent(row: ErrorEventRow): WireErrorEvent {

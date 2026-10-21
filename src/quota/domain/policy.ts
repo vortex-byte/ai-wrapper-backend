@@ -1,11 +1,7 @@
-/**
- * Quota policy resolution.
- *
- * Policies exist at three scopes: user, division, and global.
- * Resolution is per field: user → division → global → platform default.
- */
+/** Quota policy hierarchy resolving fields in order: user -> division -> global -> defaults. */
 
 export interface QuotaPolicyRow {
+  readonly id?: string | undefined;
   readonly scope: 'global' | 'division' | 'user';
   readonly divisionId: string | null;
   readonly userId: string | null;
@@ -35,10 +31,7 @@ export const PLATFORM_DEFAULT_POLICY: ResolvedPolicy = {
   allowedModelIds: null,
 };
 
-/**
- * Resolve a user's effective policy. `userPolicy`/`divisionPolicy` may be null (no row at that
- * scope); `globalPolicy` may also be null (no global row yet) — then platform defaults apply.
- */
+/** Resolves effective quota policy across user, division, and global layers. */
 export function resolvePolicy(
   userPolicy: QuotaPolicyRow | null,
   divisionPolicy: QuotaPolicyRow | null,

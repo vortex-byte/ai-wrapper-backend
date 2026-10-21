@@ -8,9 +8,11 @@ export class JobRunner {
   private readonly runnerId: string;
   private readonly handlers = new Map<string, JobHandler<never>>();
 
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private isProcessing = false;
   private isStopping = false;
+  private pollIntervalMs = 1000;
+  private pollIntervalIdleMs = 5000;
 
   constructor(queue: JobQueue, runnerId: string) {
     this.queue = queue;
@@ -55,25 +57,38 @@ export class JobRunner {
     return claimedJobs.length;
   }
 
-  start(pollIntervalMs = 2000): void {
+  start(pollIntervalMs = 1000, pollIntervalIdleMs = 5000): void {
     if (this.timer !== null) return;
+    this.pollIntervalMs = pollIntervalMs;
+    this.pollIntervalIdleMs = pollIntervalIdleMs;
     this.isStopping = false;
+    this.scheduleNext(this.pollIntervalMs);
+  }
 
-    this.timer = setInterval(async () => {
+  private scheduleNext(delayMs: number): void {
+    if (this.isStopping) return;
+    this.timer = setTimeout(async () => {
       if (this.isProcessing || this.isStopping) return;
       this.isProcessing = true;
+      let nextDelay = this.pollIntervalMs;
       try {
-        await this.pollOnce();
+        const count = await this.pollOnce();
+        nextDelay = count > 0 ? this.pollIntervalMs : this.pollIntervalIdleMs;
+      } catch (err) {
+        getLogger().error({ err }, 'job poll cycle failed');
       } finally {
         this.isProcessing = false;
+        if (!this.isStopping) {
+          this.scheduleNext(nextDelay);
+        }
       }
-    }, pollIntervalMs);
+    }, delayMs);
   }
 
   async stop(): Promise<void> {
     this.isStopping = true;
     if (this.timer !== null) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
 

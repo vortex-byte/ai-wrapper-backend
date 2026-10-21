@@ -1,9 +1,4 @@
-/**
- * Usage-event persistence and reporting reads.
- *
- * `usage_events` is the source of truth (one row per settled generation); `usage_daily` is a
- * rollup maintained incrementally and rebuilt nightly.
- */
+/** Persistence port for usage events and daily reporting aggregates. */
 import type { TransactionContext } from '@/db/tx.ts';
 
 export interface UsageEventInput {
@@ -47,10 +42,7 @@ export interface UsageAggregateRow {
 }
 
 export interface UsageRepository {
-  /**
-   * Write the usage event on the settlement path. `generation_id` is UNIQUE so a replayed
-   * settlement cannot double-count; a conflicting replay is a silent no-op.
-   */
+  /** Records a settled generation usage event. */
   insertUsageEvent(input: UsageEventInput, tx: TransactionContext): Promise<void>;
 
   /** Effective-dated price rows for a model (caller picks with `effectivePriceAt`). */
@@ -70,10 +62,7 @@ export interface UsageRepository {
   /** User usage aggregates (`GET /me/usage`) from `usage_events`. */
   aggregateForUser(query: UsageQuery, tx?: TransactionContext): Promise<readonly UsageAggregateRow[]>;
 
-  /**
-   * Incremental 5-min rollup: recompute today's (or the given day's) rows from `usage_events`
-   * and upsert into `usage_daily`. Idempotent — re-running never double-counts.
-   */
+  /** Upserts aggregated daily usage rows for a given date. */
   rollupDay(day: string, tx?: TransactionContext): Promise<number>;
 
   /** Division of a user (for usage_events.division_id at settlement time). */

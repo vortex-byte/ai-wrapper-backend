@@ -1,11 +1,6 @@
 import type { TransactionContext } from '@/db/tx.ts';
 
-/**
- * Sanitized system-error records for error telemetry and reporting.
- *
- * The writer must never receive raw provider response bodies, prompts,
- * message text, keys or stack traces — only normalized categories and scalar metadata.
- */
+/** Sanitized error telemetry records for administrative reporting. */
 export interface ErrorEventEntry {
   readonly component: string;
   readonly category: string;

@@ -46,6 +46,8 @@ const SECRET_KEY_EXACT = new Set([
   'idtoken',
   'bearertoken',
   'token',
+  'email',
+  'useremail',
 ]);
 
 const SECRET_KEY_SUFFIXES = [

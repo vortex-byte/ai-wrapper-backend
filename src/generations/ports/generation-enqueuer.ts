@@ -10,6 +10,7 @@ export interface EnqueueGenerationInput {
     readonly truncated: boolean;
     readonly droppedMessageCount?: number | undefined;
   };
+  readonly timeoutMs?: number | undefined;
 }
 
 export interface GenerationEnqueuer {

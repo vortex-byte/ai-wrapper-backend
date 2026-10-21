@@ -13,6 +13,7 @@ import {
   type GenerationStatus,
 } from '../domain/generation.ts';
 import { getLogger } from '@/observability/logger.ts';
+import { toolTariff } from '@/quota/domain/tariffs.ts';
 
 export interface FinalizeInput {
   readonly generationId: string;
@@ -22,10 +23,9 @@ export interface FinalizeInput {
     { readonly code: string; readonly message: string; readonly retryable: boolean } | undefined;
   readonly accumulatedText: string;
   readonly usage?: TokenUsage | undefined;
-  /**
-   * Stored in `generation_jobs.cancel_reason`, which only accepts `user_cancel` | `detached` |
-   * `shutdown`. Distinct from `finishReason`, the wire-level reason.
-   */
+  /** Whether the upstream provider accepted the request (stream connection established / started event). */
+  readonly providerAccepted?: boolean | undefined;
+  /** Stored cancel reason: user_cancel, detached, or shutdown. */
   readonly cancelReason?: string | undefined;
   readonly fallbackPartId?: string | undefined;
   readonly durationMs?: number | null | undefined;
@@ -40,10 +40,7 @@ export interface FinalizerDeps {
   readonly clock: Clock;
 }
 
-/**
- * Terminal settlement for one generation, idempotent: the second caller gets `false` and nothing
- * is written.
- */
+/** Idempotent terminal settlement for a generation, reconciling messages, parts, and quota. */
 export class Finalizer {
   private readonly generations: GenerationRepository;
   private readonly conversations: ConversationRepository;
@@ -125,15 +122,29 @@ export class Finalizer {
 
       if (messageWithParts !== null) {
         const textParts = messageWithParts.parts.filter((part) => part.type === 'text');
-        for (const part of textParts) {
-          await this.conversations.updatePart(
-            part.id,
-            {
-              status: partStatus,
-              textContent: resolvedText,
-            },
-            tx,
-          );
+        if (textParts.length === 1) {
+          const singlePart = textParts[0];
+          if (singlePart !== undefined) {
+            await this.conversations.updatePart(
+              singlePart.id,
+              {
+                status: partStatus,
+                textContent: resolvedText,
+              },
+              tx,
+            );
+          }
+        } else {
+          for (const part of textParts) {
+            await this.conversations.updatePart(
+              part.id,
+              {
+                status: partStatus,
+                ...(part.textContent !== null ? { textContent: part.textContent } : {}),
+              },
+              tx,
+            );
+          }
         }
 
         // Non-text parts stay `streaming` until the ArtifactSink links their bytes, and the DB
@@ -180,7 +191,20 @@ export class Finalizer {
       };
 
       const started = generationRecord.startedAt !== null;
-      const shouldSettle = started || resolvedText.length > 0;
+      const shouldSettle =
+        input.status === 'completed' ||
+        (input.providerAccepted === false ? false : started || resolvedText.length > 0);
+
+      const hasCompletedImage =
+        messageWithParts?.parts.some(
+          (part) =>
+            (part.type === 'image' || part.type === 'generated_file') &&
+            (part.status === 'complete' || part.fileId !== null),
+        ) ?? false;
+      const imageTariffTokens = hasCompletedImage
+        ? (toolTariff('image_generation')?.tokens ?? 0)
+        : 0;
+
       const durationMs =
         input.durationMs ??
         (generationRecord.startedAt !== null
@@ -191,7 +215,9 @@ export class Finalizer {
         {
           generationId: generationRecord.id,
           outcome: shouldSettle ? 'settled' : 'released',
-          actualTokens: shouldSettle ? usage.inputTokens + usage.outputTokens : 0,
+          actualTokens: shouldSettle
+            ? usage.inputTokens + usage.outputTokens + imageTariffTokens
+            : 0,
           usage: {
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,

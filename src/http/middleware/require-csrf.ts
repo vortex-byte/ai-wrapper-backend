@@ -5,31 +5,10 @@ import { AppError } from '@/errors.ts';
 import type { AppEnv } from '../types.ts';
 import { isAllowedOrigin } from './cors.ts';
 
-/**
- * CSRF protection for state-changing requests. Two independent
- * checks:
- *
- * 1. `Origin` — when present it must be an allowed SPA origin; this alone blocks the
- *    classic cross-site form post / fetch, because a browser always attaches `Origin`
- *    to cross-origin non-GET requests and our session cookie is `SameSite=Lax`.
- * 2. `X-CSRF-Token` — a valid, unexpired signature made with `SESSION_SECRET`.
- *
- * `POST /api/auth/login` cannot carry a token yet (it is what issues it), so that route
- * uses `enforceOrigin` only — a deliberate "login CSRF" trade-off bounded by the
- * same-site `SameSite=Lax` cookie and the strict origin allow-list. Because that is the
- * sole defense there, an *absent* `Origin` is rejected on the login path too.
- */
+/** CSRF protection combining allowed Origin enforcement and X-CSRF-Token verification. */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-/**
- * Step 1 only — origin validation. Used by the login route.
- *
- * Login cannot carry a CSRF token (it issues one), so the `Origin` check is the whole
- * defense. A missing `Origin` on a non-GET request is therefore rejected, not waved
- * through: browsers always attach `Origin` to cross-origin non-GET requests, so a
- * well-behaved SPA never trips this, while a cross-site form post (which may omit the
- * header) is blocked. `OPTIONS`/`GET`/`HEAD` stay exempt.
- */
+/** Enforces that non-safe requests arrive from an allowed origin. */
 export function enforceOrigin(config: Config): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (!SAFE_METHODS.has(c.req.method)) {

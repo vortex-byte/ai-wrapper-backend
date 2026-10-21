@@ -85,6 +85,7 @@ export type StreamErrorCode =
   | 'content_filtered'
   | 'generation_timeout'
   | 'generation_cancelled'
+  | 'generation_interrupted'
   | 'interrupted';
 
 export type ErrorCode = HttpErrorCode | StreamErrorCode;
@@ -117,11 +118,7 @@ export function isAppError(value: unknown): value is AppError {
   return value instanceof AppError;
 }
 
-/**
- * True when a database error is a unique-constraint violation (PostgreSQL SQLSTATE
- * 23505). Used to turn a raced duplicate insert into `409 conflict` instead of a 500.
- * Never inspects the message text (it may embed the offending value).
- */
+/** Returns true when the error is a PostgreSQL unique constraint violation (SQLSTATE 23505). */
 export function isUniqueViolation(value: unknown): boolean {
   return (
     typeof value === 'object' &&
@@ -131,17 +128,7 @@ export function isUniqueViolation(value: unknown): boolean {
   );
 }
 
-/**
- * True when a PostgreSQL unique-constraint violation (23505) names a specific constraint.
- *
- * Used where several unique constraints can fire on one insert and the caller must react
- * differently to each (e.g. the one-active-generation partial index → 409, a duplicate
- * `request_id` → a genuine bug). `constraint` is the constraint/index name PostgreSQL reports;
- * it is never user data, so comparing it is safe.
- *
- * Walks the `cause` chain because ORMs (Drizzle) wrap the driver error: the SQLSTATE and
- * `constraint` fields live on the inner `pg` error, not the thrown wrapper.
- */
+/** Returns true when a PostgreSQL unique constraint violation matches a specific constraint name. */
 export function isUniqueViolationOf(value: unknown, constraint: string): boolean {
   let current: unknown = value;
   for (let depth = 0; depth < 10 && current !== null && current !== undefined; depth++) {

@@ -33,12 +33,7 @@ import {
 
 type FinishReason = 'stop' | 'length' | 'content_filter' | 'tool_use' | 'other';
 
-/**
- * Google Gemini adapter, spoken over the public REST API.
- *
- * SDK-free on purpose: the whole HTTP layer is injectable, so unit tests script SSE frames
- * without a network or a mock module.
- */
+/** Google Gemini adapter over the public REST API with injectable HTTP transport. */
 
 /** Public REST host; `provider.baseUrl` overrides it (proxy or self-hosted gateway). */
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
@@ -46,16 +41,9 @@ const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 const API_VERSION = 'v1beta';
 /** Gemini rejects oversized inline parts; 15 MB leaves headroom for the base64 wrapper. */
 const MAX_INLINE_BYTES = 15 * 1024 * 1024;
-/**
- * Inline (in-band base64) generated files have no Files API handle to re-fetch later, so the
- * adapter emits the decoded bytes on the `artifact_emitted` event and uses a small label as
- * `providerFileId` — the payload itself must never be persisted as an identifier.
- */
+/** Prefix for in-band base64 generated file identifiers. */
 const INLINE_ARTIFACT_PREFIX = 'gemini-inline:';
-/**
- * Legacy self-describing handle (`data:<mime>;base64,…`) still accepted by
- * `fetchArtifactStream`, so artifacts emitted before the inline-bytes switch stay readable.
- */
+/** Legacy self-describing data URL handle (`data:<mime>;base64,...`) for backwards compatibility. */
 const INLINE_DATA_URL_PREFIX = 'data:';
 
 /** Minimal structural view of a `fetch` Response, so the adapter owns SSE parsing. */
@@ -100,15 +88,18 @@ const defaultFactory: GeminiClientFactory = (options) => async (request) => {
     else callerSignal.addEventListener('abort', relayAbort, { once: true });
   }
   try {
-    return (await fetch(request.url, {
+    const res = (await fetch(request.url, {
       method: request.method,
       headers: request.headers,
       ...(request.body !== undefined ? { body: request.body } : {}),
       signal: controller.signal,
     })) as GeminiResponseLike;
+    return res;
+  } catch (err) {
+    callerSignal?.removeEventListener('abort', relayAbort);
+    throw err;
   } finally {
     clearTimeout(timer);
-    callerSignal?.removeEventListener('abort', relayAbort);
   }
 };
 
@@ -181,10 +172,7 @@ const SAFETY_FINISH_REASONS: ReadonlySet<string> = new Set([
   'SPII',
 ]);
 
-/**
- * Gemini sends one JSON object per `data:` line under `alt=sse`. Parsed here (not by the
- * transport) so the injected test transport and the real `fetch` body share one parser.
- */
+/** Parses Server-Sent Events stream from Gemini into JSON chunks. */
 async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<unknown> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -290,10 +278,7 @@ export class GeminiAdapter implements ProviderAdapter {
 
   constructor(private readonly clientFactory: GeminiClientFactory = defaultFactory) {}
 
-  /**
-   * Pure transform used by tests and token estimation: text-only, no network. Media parts are
-   * resolved in `execute` because `ResolvedFile.read()` is asynchronous (see `buildContents`).
-   */
+  /** Builds provider request without asynchronous media parts. */
   toProviderRequest(req: NormalizedChatRequest): unknown {
     return this.assembleRequest(req, this.textContents(req));
   }
@@ -514,6 +499,12 @@ export class GeminiAdapter implements ProviderAdapter {
     } catch (err) {
       yield { type: 'error', error: this.translateError(err) };
       return;
+    } finally {
+      try {
+        await response.body.cancel();
+      } catch {
+        // stream already closed or mock response
+      }
     }
 
     if (!started) {
@@ -648,11 +639,7 @@ export class GeminiAdapter implements ProviderAdapter {
     if (first.role !== 'user') contents.unshift({ role: 'user', parts: [{ text: ' ' }] });
   }
 
-  /**
-   * Code execution rides along whenever the model declares `tools`; Google Search grounding is
-   * opt-in per model/provider config, because grounding changes answers (and cost) even when the
-   * model merely *can* ground.
-   */
+  /** Declares tool configurations (code execution by default; search grounding when configured). */
   private buildTools(req: NormalizedChatRequest): unknown[] {
     if (!req.model.capabilities.tools) return [];
     const tools: unknown[] = [];
@@ -669,10 +656,7 @@ export class GeminiAdapter implements ProviderAdapter {
     return fallback;
   }
 
-  /**
-   * In-band `inlineData` arrives as base64 with no file handle, so the artifact carries the
-   * decoded bytes and a small label. `fileData` keeps the Files API id for later download.
-   */
+  /** Extracts artifact reference from inline base64 or fileData. */
   private artifactFrom(
     part: RawGeminiPart,
     sequence: number,
@@ -717,10 +701,7 @@ export class GeminiAdapter implements ProviderAdapter {
     };
   }
 
-  /**
-   * `STOP` after a client-side `functionCall` means "the turn ended because I need tool results",
-   * which is the PAL's `tool_use`; server-side grounding/code execution keeps `stop`.
-   */
+  /** Maps provider finish reason to normalized FinishReason. */
   private mapFinishReason(reason: string | null, sawFunctionCall: boolean): FinishReason {
     if (reason === null) return sawFunctionCall ? 'tool_use' : 'stop';
     switch (reason) {
@@ -927,10 +908,7 @@ export class GeminiAdapter implements ProviderAdapter {
     }
   }
 
-  /**
-   * Downloads a provider-generated file. In-band (`inlineData`) artifacts are decoded locally —
-   * they have no Files API handle — while `fileData` artifacts hit `files/{id}?alt=media`.
-   */
+  /** Downloads or decodes a provider-generated file artifact stream. */
   async fetchArtifactStream(
     providerFileId: string,
     ctx: FilesApiContext,

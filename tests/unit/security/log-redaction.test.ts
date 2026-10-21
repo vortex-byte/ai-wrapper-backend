@@ -115,6 +115,13 @@ describe('log payload security', () => {
     expect(headers['x-api-key']).toBe('[redacted]');
   });
 
+  it('redacts email properties to prevent PII exposure in operational logs', () => {
+    const serialized = serializeLogPayload(buildPayload());
+    const user = serialized['user'] as Record<string, unknown>;
+
+    expect(user['email']).toBe('[redacted]');
+  });
+
   it('scrubs credentials inside a free-text stack trace', () => {
     const stack = scrubString(
       `Error: boom\n    at login (auth.ts:9:1) password=${CANARY.password} ` +

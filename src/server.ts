@@ -2,7 +2,7 @@ import { createApp } from './app.ts';
 import { ConfigError, getConfig } from './config/index.ts';
 import { closePool } from './db/index.ts';
 import { setShuttingDown } from './health/readyz.ts';
-import { getLogger } from './observability/logger.ts';
+import { closeLogger, getLogger } from './observability/logger.ts';
 import { createServices } from './services.ts';
 
 function boot(): void {
@@ -39,17 +39,14 @@ function boot(): void {
   }
 
   if (config.ROLE === 'worker' || config.ROLE === 'all') {
-    services.jobRunner.start();
+    services.jobRunner.start(config.JOB_POLL_INTERVAL_MS, config.JOB_POLL_INTERVAL_IDLE_MS);
     services.scheduler.start();
     logger.info({ role: config.ROLE, env: config.NODE_ENV }, 'worker started');
   }
 
-  /**
-   * Graceful shutdown: fail readiness, drain in-flight requests and streams, then cancel whatever
-   * is still running once the drain window expires.
-   */
+  /** Graceful shutdown: fails readiness, drains active work, and releases resources. */
   let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
+  const shutdown = async (signal: string, exitCode = 0): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
 
@@ -59,7 +56,10 @@ function boot(): void {
     const drainMs = config.SHUTDOWN_DRAIN_SECONDS * 1_000;
     logger.info({ signal, drainSeconds: config.SHUTDOWN_DRAIN_SECONDS }, 'shutting down');
 
+    // Allow probes observing /readyz (poll interval ~2s) to observe the transition
+    // before stopping the HTTP listener.
     if (server) {
+      await Bun.sleep(2000);
       server.stop();
     }
 
@@ -88,7 +88,11 @@ function boot(): void {
     }
 
     if (config.ROLE === 'worker' || config.ROLE === 'all') {
-      services.scheduler.stop();
+      try {
+        await services.scheduler.stop();
+      } catch (error) {
+        logger.error({ err: error }, 'error stopping scheduler');
+      }
       try {
         await services.jobRunner.stop();
       } catch (error) {
@@ -101,11 +105,27 @@ function boot(): void {
     } catch (error) {
       logger.error({ err: error }, 'error during shutdown');
     }
-    process.exit(0);
+
+    try {
+      closeLogger();
+    } catch {
+      // Best-effort logger flush
+    }
+    process.exit(exitCode);
   };
 
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  // A fatal fault must not kill the process with a raw crash: log through winston, drain, and
+  // exit non-zero so systemd restarts the unit.
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ err: reason }, 'unhandled promise rejection');
+    void shutdown('unhandledRejection', 1);
+  });
+  process.on('uncaughtException', (error) => {
+    logger.error({ err: error }, 'uncaught exception');
+    void shutdown('uncaughtException', 1);
+  });
 }
 
 boot();

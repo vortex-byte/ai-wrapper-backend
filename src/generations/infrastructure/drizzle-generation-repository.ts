@@ -1,13 +1,14 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
-import { generationJobs, idempotencyKeys, messageParts } from '@/db/schema.ts';
-import { withTransaction, type TransactionContext } from '@/db/tx.ts';
+import { generationJobs, idempotencyKeys, messageParts, usageEvents } from '@/db/schema.ts';
+import type { TransactionContext } from '@/db/tx.ts';
 import type { GenerationStatus } from '../domain/generation.ts';
 import type {
   CheckpointTextInput,
   GenerationRecord,
   GenerationRepository,
   InsertGenerationInput,
+  GenerationUsageSnapshot,
   StaleGenerationRow,
   StoredIdempotentResponse,
   TransitionTerminalInput,
@@ -167,31 +168,36 @@ export class DrizzleGenerationRepository implements GenerationRepository {
   }
 
   async checkpointText(input: CheckpointTextInput, tx?: TransactionContext): Promise<void> {
-    const execute = async (context: TransactionContext | undefined) => {
-      if (input.chunk.length > 0) {
-        await runDb(context)
-          .update(messageParts)
-          .set({
-            textContent: sql`COALESCE(${messageParts.textContent}, '') || ${input.chunk}`,
-            updatedAt: new Date(),
-          })
-          .where(eq(messageParts.id, input.partId));
-      }
-
-      await runDb(context)
-        .update(generationJobs)
+    const db = runDb(tx);
+    if (input.chunk.length > 0) {
+      await db
+        .update(messageParts)
         .set({
-          heartbeatAt: input.heartbeatAt,
-          lastEventSeq: input.lastEventSeq,
+          textContent: sql`COALESCE(${messageParts.textContent}, '') || ${input.chunk}`,
+          updatedAt: new Date(),
         })
-        .where(eq(generationJobs.id, input.generationId));
-    };
-
-    if (tx) {
-      await execute(tx);
-    } else {
-      await withTransaction(async (innerTx) => execute(innerTx));
+        .where(eq(messageParts.id, input.partId));
     }
+
+    await db
+      .update(generationJobs)
+      .set({
+        heartbeatAt: input.heartbeatAt,
+        lastEventSeq: input.lastEventSeq,
+      })
+      .where(eq(generationJobs.id, input.generationId));
+  }
+
+  async touchHeartbeat(generationId: string, heartbeatAt: Date, tx?: TransactionContext): Promise<void> {
+    await runDb(tx)
+      .update(generationJobs)
+      .set({ heartbeatAt })
+      .where(
+        and(
+          eq(generationJobs.id, generationId),
+          sql`${generationJobs.status} IN ('pending', 'generating')`,
+        ),
+      );
   }
 
   async transitionToTerminal(
@@ -315,6 +321,29 @@ export class DrizzleGenerationRepository implements GenerationRepository {
       .from(generationJobs)
       .where(sql`${generationJobs.status} IN ('pending','generating')`);
     return rows[0]?.count ?? 0;
+  }
+
+  async findUsage(
+    generationId: string,
+    tx?: TransactionContext,
+  ): Promise<GenerationUsageSnapshot | null> {
+    const rows = await runDb(tx)
+      .select({
+        inputTokens: usageEvents.inputTokens,
+        outputTokens: usageEvents.outputTokens,
+        quotaTokens: usageEvents.quotaTokens,
+      })
+      .from(usageEvents)
+      .where(eq(usageEvents.generationId, generationId))
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      quotaTokens: Number(row.quotaTokens),
+    };
   }
 
   async findStaleGenerations(

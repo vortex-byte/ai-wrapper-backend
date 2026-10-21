@@ -241,10 +241,7 @@ export const messageParts = pgTable('message_parts', {
     .default(sql`now()`),
 });
 
-/**
- * Binary artifacts — user uploads (`origin=input`) and provider-generated files hydrated
- * by the ArtifactSink (`origin=generated`). See migrations/0013_attachments.sql.
- */
+/** Binary artifacts table for user uploads and hydrated generated files. */
 export const attachments = pgTable(
   'attachments',
   {
@@ -303,10 +300,7 @@ export const fileExtractions = pgTable('file_extractions', {
     .default(sql`now()`),
 });
 
-/**
- * The generation execution and job record. One live generation per conversation
- * is enforced by a database partial unique index.
- */
+/** Generation jobs and execution records. */
 export const generationJobs = pgTable('generation_jobs', {
   id: uuid('id').primaryKey(),
   requestId: text('request_id').notNull().unique(),

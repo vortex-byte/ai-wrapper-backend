@@ -5,12 +5,7 @@ import type { ModelRegistry, ResolvedModel } from '../ports/model-registry.ts';
 import type { RegistryRepository } from '../ports/registry-repository.ts';
 import type { SecretResolver } from '../ports/secret-resolver.ts';
 
-/**
- * Read-through cache in front of the registry repository: a snapshot is
- * refreshed lazily and no older than `ttlMs` (30 s). An admin write in this process calls
- * `invalidate()` so a disabled model stops accepting new generations immediately; other
- * nodes converge within the TTL. In-flight generations keep the config they started with.
- */
+/** Read-through cached registry for models and providers with TTL invalidation. */
 
 interface Snapshot {
   readonly models: readonly ModelRecord[];

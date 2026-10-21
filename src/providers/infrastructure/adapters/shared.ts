@@ -1,14 +1,7 @@
-import type { ProviderError } from '../../domain/errors.ts';
-import { providerError } from '../../domain/errors.ts';
 import type { EstimateResult, HealthCheckResult } from '../../ports/provider-adapter.ts';
 
-/**
- * Shared helpers for real provider adapters. Kept SDK-agnostic so each adapter owns its
- * own client types; nothing here imports a provider SDK (only the adapter does, which is
- * the one directory allowed to).
- */
+/** Helpers shared by provider adapters. */
 
-/** The PAL `config` blob for adapters is open; each adapter validates what it reads. */
 export function numberFromConfig(
   config: Readonly<Record<string, unknown>>,
   key: string,
@@ -18,32 +11,15 @@ export function numberFromConfig(
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-export function stringFromConfig(
-  config: Readonly<Record<string, unknown>>,
-  key: string,
-  fallback: string,
-): string {
-  const value = config[key];
-  return typeof value === 'string' && value.length > 0 ? value : fallback;
-}
-
-/** A health check that failed before any network call (e.g. no key configured). */
+/** Health check result when credentials are not configured. */
 export function healthNotConfigured(detail: string): HealthCheckResult {
   return { ok: false, latencyMs: 0, detail };
 }
 
-/** Map an unexpected adapter exception to a sanitized health result (never the raw body). */
+/** Maps an adapter exception to a sanitized health result. */
 export function healthFailed(error: unknown, latencyMs = 0): HealthCheckResult {
   const detail = error instanceof Error ? error.message || error.name : 'unknown_error';
   return { ok: false, latencyMs, detail };
-}
-
-/** Creates a standard provider error for unimplemented operations. */
-export function notImplementedError(provider: string): ProviderError {
-  return providerError('provider_unavailable', 'The model provider is unavailable.', {
-    retryable: true,
-    internalMessage: `${provider} adapter execute() is not implemented`,
-  });
 }
 
 export function approximateEstimate(textLength: number): EstimateResult {
@@ -64,11 +40,7 @@ export function parseRetryAfter(header: string | null | undefined): number | und
   return undefined;
 }
 
-/**
- * Transport-level cancellation detection shared by real adapters. Provider SDKs
- * surface aborts as classes that never set `err.name` (they inherit "Error"),
- * so match on the SDK class plus message content.
- */
+/** Detects abort and cancellation errors across provider SDK exceptions. */
 export function isAbortLikeError(
   err: unknown,
   abortClasses: ReadonlyArray<new (...args: never[]) => Error> = [],
@@ -86,11 +58,7 @@ export function isAbortLikeError(
   return false;
 }
 
-/**
- * Transport-level timeout detection shared by real adapters. Both SDKs throw
- * `APIConnectionTimeoutError` with the message "Request timed out." (no custom
- * `name`), so a plain `includes('timeout')` check misses it.
- */
+/** Detects connection and request timeout errors across provider SDK exceptions. */
 export function isTimeoutLikeError(
   err: unknown,
   timeoutClasses: ReadonlyArray<new (...args: never[]) => Error> = [],

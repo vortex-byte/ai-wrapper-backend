@@ -24,3 +24,29 @@ export function safeEqual(a: string, b: string): boolean {
   if (bufA.length !== bufB.length) return false;
   return timingSafeEqual(bufA, bufB);
 }
+
+const PASSWORD_CHARS = '23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ';
+const PASSWORD_BLOCK_SIZE = 4;
+const PASSWORD_BLOCKS = 3;
+
+function uniformPasswordIndex(): number {
+  const limit = 256 - (256 % PASSWORD_CHARS.length);
+  for (;;) {
+    const byte = randomBytes(1)[0];
+    if (byte !== undefined && byte < limit) {
+      return byte % PASSWORD_CHARS.length;
+    }
+  }
+}
+
+function getPasswordBlock(): string {
+  let str = '';
+  for (let i = 0; i < PASSWORD_BLOCK_SIZE; i++) {
+    str += PASSWORD_CHARS[uniformPasswordIndex()];
+  }
+  return str;
+}
+
+export function generateTemporaryPassword(): string {
+  return Array.from({ length: PASSWORD_BLOCKS }, getPasswordBlock).join('-');
+}

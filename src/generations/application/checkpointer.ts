@@ -12,10 +12,7 @@ export interface CheckpointerOptions {
 const DEFAULT_INTERVAL_MS = 1000;
 const DEFAULT_MAX_BUFFER_BYTES = 2048;
 
-/**
- * Buffers text deltas and flushes them to `message_parts` in short transactions while touching
- * heartbeat and sequence markers; streams hold no DB connection between flushes.
- */
+/** Buffers streaming text deltas and periodically flushes them with heartbeat updates. */
 export class Checkpointer {
   private readonly generationId: string;
   private readonly generationRepo: GenerationRepository;
@@ -55,10 +52,7 @@ export class Checkpointer {
     }
   }
 
-  /**
-   * Flushes buffered text and touches `heartbeat_at`. Concurrent callers coalesce onto the single
-   * in-flight flush, so only a caller that needs the post-condition must await the promise.
-   */
+  /** Flushes buffered text chunks and updates heartbeat timestamp. */
   flush(): Promise<void> {
     if (this.inFlight !== null) return this.inFlight;
     if (this.partBuffers.size === 0) return Promise.resolve();
@@ -93,13 +87,7 @@ export class Checkpointer {
     return promise;
   }
 
-  /**
-   * Disposes the checkpointer timer and performs a final, *complete* flush.
-   *
-   * Waits for any in-flight flush to settle and then drains whatever accumulated meanwhile, so no
-   * delta is dropped and no late write can land after the finalizer has persisted the final text
-   * (which would duplicate the tail).
-   */
+  /** Disposes interval timer and awaits a final complete buffer flush. */
   async dispose(): Promise<void> {
     if (this.timer !== null) {
       clearInterval(this.timer);

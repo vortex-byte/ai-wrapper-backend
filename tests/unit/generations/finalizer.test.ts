@@ -319,6 +319,117 @@ describe('Finalizer', () => {
     expect(settlements[0]?.actualTokens).toBe(0);
   });
 
+  it('releases quota when providerAccepted is explicitly false even if startedAt was stamped', async () => {
+    const settlements: Settlement[] = [];
+    const startedRecord: GenerationRecord = { ...createDummyRecord('gen-reject'), startedAt: new Date() };
+
+    const mockGenerations: Partial<GenerationRepository> = {
+      transitionToTerminal: async () => true,
+      findById: async () => startedRecord,
+    };
+
+    const mockConversations: Partial<ConversationRepository> = {
+      updateMessage: async () => {},
+      findMessageForUser: async () => null,
+    };
+
+    const mockQuota: Partial<QuotaPort> = {
+      settleOrRelease: async (settlement) => {
+        settlements.push(settlement);
+      },
+    };
+
+    const finalizer = new Finalizer({
+      generations: mockGenerations as GenerationRepository,
+      conversations: mockConversations as ConversationRepository,
+      quota: mockQuota as QuotaPort,
+      errorEvents: { record: async () => {} } as ErrorEventWriter,
+      clock,
+    });
+
+    const result = await finalizer.finalize({
+      generationId: 'gen-reject',
+      status: 'failed',
+      finishReason: 'error',
+      providerAccepted: false,
+      error: { code: 'provider_auth_error', message: 'Invalid API key', retryable: false },
+      accumulatedText: '',
+    });
+
+    expect(result).toBe(true);
+    expect(settlements[0]?.outcome).toBe('released');
+    expect(settlements[0]?.actualTokens).toBe(0);
+  });
+
+  it('charges tool tariff on settlement when a generated image part is completed', async () => {
+    const settlements: Settlement[] = [];
+    const mockGenerations: Partial<GenerationRepository> = {
+      transitionToTerminal: async () => true,
+      findById: async (id) => createDummyRecord(id),
+    };
+
+    const messageWithImage: MessageWithParts = {
+      message: {
+        id: 'm-assistant',
+        conversationId: 'c-1',
+        seq: 2,
+        role: 'assistant',
+        status: 'complete',
+        finishReason: 'stop',
+        supersededBy: null,
+        metadata: {},
+        createdAt: new Date(),
+        completedAt: null,
+      },
+      parts: [
+        {
+          id: 'p-img',
+          messageId: 'm-assistant',
+          position: 0,
+          type: 'image',
+          status: 'complete',
+          textContent: null,
+          data: {},
+          fileId: 'att-1',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    };
+
+    const mockConversations: Partial<ConversationRepository> = {
+      updateMessage: async () => {},
+      findMessageForUser: async () => messageWithImage,
+      updatePart: async () => {},
+    };
+
+    const mockQuota: Partial<QuotaPort> = {
+      settleOrRelease: async (settlement) => {
+        settlements.push(settlement);
+      },
+    };
+
+    const finalizer = new Finalizer({
+      generations: mockGenerations as GenerationRepository,
+      conversations: mockConversations as ConversationRepository,
+      quota: mockQuota as QuotaPort,
+      errorEvents: { record: async () => {} } as ErrorEventWriter,
+      clock,
+    });
+
+    await finalizer.finalize({
+      generationId: 'gen-img',
+      status: 'completed',
+      finishReason: 'stop',
+      accumulatedText: '',
+      usage: { inputTokens: 10, outputTokens: 20, source: 'provider' },
+    });
+
+    expect(settlements[0]?.outcome).toBe('settled');
+    // 10 input + 20 output + 3,500 image generation tool tariff = 3,530 tokens
+    expect(settlements[0]?.actualTokens).toBe(3530);
+  });
+
   it('marks a failure with partial content as `incomplete` and keeps the finish_reason `error` (mapOutcome)', async () => {
     const messageUpdates: Array<Record<string, unknown>> = [];
 

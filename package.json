@@ -18,6 +18,7 @@
     "format:check": "prettier --check .",
     "depcruise": "depcruise src",
     "test": "bun --bun run vitest run",
+    "test:coverage": "bun --bun run vitest run --coverage",
     "test:watch": "bun --bun run vitest",
     "test:integration": "bun --bun run vitest run --config vitest.integration.config.ts",
     "verify": "bun run typecheck && bun run lint && bun run depcruise && bun run test",

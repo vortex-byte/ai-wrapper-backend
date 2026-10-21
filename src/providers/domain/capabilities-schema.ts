@@ -1,13 +1,7 @@
 import { z } from 'zod';
 import type { ModelCapabilities } from './capabilities.ts';
 
-/**
- * Zod schemas for the open JSON blobs stored in the registry (`ai_models.capabilities`,
- * `ai_providers.config`, `ai_models.config`). Parsed at the repository boundary so nothing
- * above infrastructure ever holds an untyped JSON object.
- *
- * These are pure: no I/O, no Drizzle.
- */
+/** Zod schemas for validating model capabilities and runtime configurations. */
 
 /** Current capability blob version. Bump when a required key changes meaning. */
 export const CAPABILITIES_SCHEMA_VERSION = 1;
@@ -19,11 +13,7 @@ const DocumentCapabilitiesSchema = z
   })
   .strict();
 
-/**
- * Normalized capabilities. `contextWindow`/`maxOutputTokens`
- * duplicate the dedicated columns on purpose: the orchestrator needs one object, and the
- * columns are the authoritative copy the registry syncs from.
- */
+/** Schema for normalized model capabilities. */
 export const ModelCapabilitiesSchema = z
   .object({
     schemaVersion: z.number().int().positive().default(CAPABILITIES_SCHEMA_VERSION),

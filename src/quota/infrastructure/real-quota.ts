@@ -33,6 +33,7 @@ export interface RealQuotaDeps {
   readonly clock: Clock;
   readonly idGen: IdGenerator;
   readonly quotaTimezone: string;
+  readonly reservationTtlMs?: number | undefined;
 }
 
 export class RealQuota implements QuotaPort {
@@ -42,6 +43,7 @@ export class RealQuota implements QuotaPort {
   private readonly clock: Clock;
   private readonly idGen: IdGenerator;
   private readonly quotaTimezone: string;
+  private readonly reservationTtlMs: number;
 
   constructor(deps: RealQuotaDeps) {
     this.accounts = deps.accounts;
@@ -50,6 +52,7 @@ export class RealQuota implements QuotaPort {
     this.clock = deps.clock;
     this.idGen = deps.idGen;
     this.quotaTimezone = deps.quotaTimezone;
+    this.reservationTtlMs = deps.reservationTtlMs ?? RESERVATION_TTL_MS;
   }
 
   /** Resolve the effective policy for a user (user → division → global, per field). */
@@ -73,10 +76,11 @@ export class RealQuota implements QuotaPort {
 
     const policy = await this.resolvePolicyForUser(ctx.userId, tx);
 
-    if (
-      ctx.maxInputTokensForRequest !== undefined &&
-      ctx.estimatedInputTokens > ctx.maxInputTokensForRequest
-    ) {
+    const effectiveMaxInput = Math.min(
+      policy.maxInputTokensPerRequest,
+      ctx.maxInputTokensForRequest ?? Number.POSITIVE_INFINITY,
+    );
+    if (ctx.estimatedInputTokens > effectiveMaxInput) {
       throw new AppError(
         'context_too_large',
         'The prompt exceeds the per-request input token limit.',
@@ -98,17 +102,6 @@ export class RealQuota implements QuotaPort {
       },
       tx,
     );
-
-    const activeCount = await tx.client.query<{ count: string }>(
-      `SELECT count(*) AS count FROM generation_jobs
-        WHERE user_id = $1 AND id <> $2 AND status IN ('pending','generating')`,
-      [ctx.userId, ctx.generationId],
-    );
-    if (Number.parseInt(activeCount.rows[0]?.count ?? '0', 10) >= policy.maxConcurrentGenerations) {
-      throw new AppError('concurrency_limit', 'Too many generations are already running.', {
-        details: { maxConcurrentGenerations: policy.maxConcurrentGenerations },
-      });
-    }
 
     const limitTokens = account.baseLimitTokens + account.adjustmentTokens;
     const decision = computeReservation({
@@ -150,6 +143,19 @@ export class RealQuota implements QuotaPort {
       });
     }
 
+    // Serialized concurrency check: holding the `quota_accounts` row lock acquired by `reserveAtomic`
+    // guarantees concurrent requests cannot race past this check.
+    const activeCount = await tx.client.query<{ count: string }>(
+      `SELECT count(*) AS count FROM generation_jobs
+        WHERE user_id = $1 AND id <> $2 AND status IN ('pending','generating')`,
+      [ctx.userId, ctx.generationId],
+    );
+    if (Number.parseInt(activeCount.rows[0]?.count ?? '0', 10) >= policy.maxConcurrentGenerations) {
+      throw new AppError('concurrency_limit', 'Too many generations are already running.', {
+        details: { maxConcurrentGenerations: policy.maxConcurrentGenerations },
+      });
+    }
+
     await this.accounts.insertReservation(
       {
         id: this.idGen.uuidv7(),
@@ -157,7 +163,7 @@ export class RealQuota implements QuotaPort {
         userId: ctx.userId,
         accountId: account.id,
         reservedTokens: decision.reservedTokens,
-        expiresAt: new Date(now.getTime() + RESERVATION_TTL_MS),
+        expiresAt: new Date(now.getTime() + this.reservationTtlMs),
       },
       tx,
     );
@@ -212,7 +218,8 @@ export class RealQuota implements QuotaPort {
       tx,
     );
     if (account === null) {
-      throw new Error(
+      throw new AppError(
+        'internal_error',
         `quota account ${reservation.accountId} vanished during settlement of ${settlement.generationId}`,
       );
     }

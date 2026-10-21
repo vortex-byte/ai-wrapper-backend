@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from 'hono';
 import type { Config } from '@/config/index.ts';
 import { AppError } from '@/errors.ts';
+import { getLogger } from '@/observability/logger.ts';
 import { clientIp, requestMeta } from '../request-meta.ts';
 import type { RateLimiter } from '../ports/rate-limiter.ts';
 import type { AppEnv } from '../types.ts';
@@ -37,15 +38,19 @@ export function rateLimitLogin(
 
       if (audit) {
         const meta = requestMeta(c, rawIp);
-        await audit.append({
-          actorUserId: null,
-          action: AUDIT_ACTIONS.loginRateLimited,
-          targetType: 'ip',
-          targetId: rawIp ?? '0.0.0.0',
-          requestId: meta.requestId,
-          ip: meta.ip,
-          userAgentHash: meta.userAgentHash,
-        });
+        try {
+          await audit.append({
+            actorUserId: null,
+            action: AUDIT_ACTIONS.loginRateLimited,
+            targetType: 'ip',
+            targetId: rawIp ?? '0.0.0.0',
+            requestId: meta.requestId,
+            ip: meta.ip,
+            userAgentHash: meta.userAgentHash,
+          });
+        } catch (err) {
+          getLogger().warn({ err }, 'failed to append audit log for login rate limit');
+        }
       }
 
       throw new AppError('rate_limited', 'Too many login attempts from this IP. Try again shortly.', {

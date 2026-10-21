@@ -85,6 +85,10 @@ export function authRoutes(deps: AuthRoutesDeps): Hono<AppEnv> {
     return c.json(okEmpty('Signed out.'));
   });
 
+  routes.get('/auth/csrf', requireAuth(auth, config), (c) => {
+    return c.json(ok({ csrfToken: issueCsrfToken(config.SESSION_SECRET) }));
+  });
+
   routes.post('/me/password', requireCsrf(config), requireAuth(auth, config), async (c) => {
     const current = c.get('auth');
     if (current === undefined) throw new AppError('unauthenticated');

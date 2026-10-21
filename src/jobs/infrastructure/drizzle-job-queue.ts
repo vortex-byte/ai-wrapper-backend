@@ -101,10 +101,23 @@ export class DrizzleJobQueue implements JobQueue {
     const client = tx?.client ?? getPool();
 
     const query = `
-      WITH due_jobs AS (
+      WITH dead_stale AS (
+        UPDATE jobs
+        SET status = 'dead',
+            finished_at = now(),
+            last_error = COALESCE(last_error, 'stale running lease expired'),
+            locked_by = NULL,
+            locked_at = NULL
+        WHERE status = 'running'
+          AND locked_at < (now() - interval '5 minutes')
+          AND attempts >= max_attempts
+        RETURNING id
+      ),
+      due_jobs AS (
         SELECT id
         FROM jobs
-        WHERE status = 'queued' AND run_at <= (now() + interval '100 milliseconds')
+        WHERE (status = 'queued' AND run_at <= (now() + interval '100 milliseconds'))
+           OR (status = 'running' AND locked_at < (now() - interval '5 minutes') AND attempts < max_attempts)
         ORDER BY run_at ASC
         LIMIT $1
         FOR UPDATE SKIP LOCKED

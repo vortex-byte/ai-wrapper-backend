@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { runDb } from '@/db/client.ts';
 import { users } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
+import { AppError } from '@/errors.ts';
 import { USER_ROLES, USER_STATUSES, type User, type UserRole, type UserStatus } from '../domain/user.ts';
 import type {
   CreateUserInput,
@@ -68,7 +69,7 @@ function decodeCursor(cursor: string): { createdAt: Date; id: string } {
   const [iso, id] = decoded.split('|');
   const createdAt = iso ? new Date(iso) : new Date(Number.NaN);
   if (!iso || !id || Number.isNaN(createdAt.getTime())) {
-    throw new Error('invalid keyset cursor');
+    throw new AppError('invalid_request', 'Invalid keyset cursor');
   }
   return { createdAt, id };
 }
@@ -228,6 +229,8 @@ export class DrizzleUserRepository implements UserRepository {
         passwordHash: update.passwordHash,
         passwordUpdatedAt: update.at,
         mustChangePassword: update.mustChangePassword,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
         updatedAt: update.at,
       })
       .where(eq(users.id, update.id));

@@ -235,4 +235,79 @@ describe('Context Builder', () => {
     });
     expect(result.truncation.droppedMessageCount).toBe(1);
   });
+
+  it('incorporates historical document extracted text into context message text', () => {
+    const history = [
+      {
+        message: {
+          id: 'msg-doc',
+          conversationId: 'c-1',
+          seq: 1,
+          role: 'user' as const,
+          status: 'complete' as const,
+          finishReason: null,
+          supersededBy: null,
+          metadata: {},
+          createdAt: new Date(),
+          completedAt: new Date(),
+        },
+        parts: [
+          {
+            id: 'p-doc',
+            messageId: 'msg-doc',
+            position: 0,
+            type: 'document' as const,
+            status: 'complete' as const,
+            textContent: null,
+            data: { filename: 'report.pdf', extractedText: 'Annual revenue was 5M.' },
+            fileId: 'file-123',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      },
+      {
+        message: {
+          id: 'msg-ans',
+          conversationId: 'c-1',
+          seq: 2,
+          role: 'assistant' as const,
+          status: 'complete' as const,
+          finishReason: 'stop' as const,
+          supersededBy: null,
+          metadata: {},
+          createdAt: new Date(),
+          completedAt: new Date(),
+        },
+        parts: [
+          {
+            id: 'p-ans',
+            messageId: 'msg-ans',
+            position: 0,
+            type: 'text' as const,
+            status: 'complete' as const,
+            textContent: 'Understood.',
+            data: {},
+            fileId: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      },
+    ];
+
+    const result = buildContext({
+      requestId: 'req-hist-doc',
+      generationId: 'gen-hist-doc',
+      model: mockModel,
+      provider: mockProvider,
+      newParts: [{ type: 'text', text: 'What was the revenue?' }],
+      history,
+      userIdHash: 'hash-1',
+    });
+
+    expect(result.request.messages).toHaveLength(3);
+    const firstMsgText = (result.request.messages[0]?.parts[0] as { text: string }).text;
+    expect(firstMsgText).toContain('Annual revenue was 5M.');
+  });
 });

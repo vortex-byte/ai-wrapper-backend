@@ -9,11 +9,7 @@ import type {
   PartStatus,
 } from '../domain/conversation.ts';
 
-/**
- * Persistence port for conversations, messages and parts. Writes take the transaction handle
- * so create operations and read paths share one connection. Every read is scoped to `user_id`
- * in the caller or the repository — cross-user access surfaces as "not found".
- */
+/** Persistence port for conversations, messages, and message parts. */
 
 export interface ListConversationsQuery {
   readonly userId: string;
@@ -62,10 +58,7 @@ export interface ConversationRepository {
 
   softDelete(id: string, userId: string, tx?: TransactionContext): Promise<boolean>;
 
-  /**
-   * Allocates `message_count + 2` and returns both sequence numbers (user then assistant).
-   * The `UPDATE ... RETURNING` row lock serializes concurrent sends per conversation.
-   */
+  /** Allocates sequential pair (user then assistant) and increments message count. */
   allocateSeqPair(
     conversationId: string,
     tx?: TransactionContext,
@@ -110,10 +103,7 @@ export interface ConversationRepository {
     tx?: TransactionContext,
   ): Promise<void>;
 
-  /**
-   * Attaches a stored binary to a part and marks it complete — the ArtifactSink's final step
-   * (persist-before-expose: the `file_id` only exists once the bytes are safely in storage).
-   */
+  /** Attaches stored file id to a part and marks it complete. */
   attachPartFile(
     partId: string,
     fileId: string,

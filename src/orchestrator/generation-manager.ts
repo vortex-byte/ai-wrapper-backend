@@ -26,6 +26,7 @@ export interface EnqueueInput {
     readonly truncated: boolean;
     readonly droppedMessageCount?: number | undefined;
   };
+  readonly timeoutMs?: number | undefined;
   readonly hooks?: GenerationRunHooks | undefined;
 }
 
@@ -49,6 +50,7 @@ export interface GenerationManagerDeps {
 
 export class GenerationManager {
   private readonly runs = new Map<string, GenerationRun>();
+  private readonly providerActiveRuns = new Map<string, number>();
   private readonly providerRegistry: ProviderRegistry;
   private readonly clock: Clock;
   private readonly idGen: IdGenerator;
@@ -91,6 +93,21 @@ export class GenerationManager {
       });
     }
 
+    const providerId = input.chatRequest.provider.providerId;
+    const providerMaxConcurrency =
+      typeof input.chatRequest.provider.config['maxConcurrency'] === 'number'
+        ? (input.chatRequest.provider.config['maxConcurrency'] as number)
+        : undefined;
+
+    if (providerMaxConcurrency !== undefined && providerMaxConcurrency > 0) {
+      const currentActive = this.providerActiveRuns.get(providerId) ?? 0;
+      if (currentActive >= providerMaxConcurrency) {
+        throw new AppError('service_busy', 'Provider concurrency limit reached', {
+          details: { retryAfterSeconds: 5, provider: input.chatRequest.provider.key },
+        });
+      }
+    }
+
     const adapter = this.providerRegistry.get(input.chatRequest.provider.adapter);
     if (adapter === null) {
       throw new AppError(
@@ -108,7 +125,8 @@ export class GenerationManager {
           })
         : undefined;
 
-    const run = new GenerationRun({
+    // Explicit annotation: the hooks reference `run`, which would be circular for inference.
+    const run: GenerationRun = new GenerationRun({
       generation: input.generation,
       userMessageId: input.userMessageId,
       assistantMessageId: input.assistantMessageId,
@@ -119,6 +137,7 @@ export class GenerationManager {
       idGen: this.idGen,
       config: {
         detachTimeoutSeconds: this.config.GENERATION_DETACH_TIMEOUT_SECONDS,
+        ...(input.timeoutMs !== undefined ? { generationTimeoutMs: input.timeoutMs } : {}),
       },
       hooks: {
         onStart: async (genId) => {
@@ -180,7 +199,12 @@ export class GenerationManager {
               }
               return await fetchArtifactStream(providerFileId, {
                 provider,
-                signal: AbortSignal.timeout(ARTIFACT_FETCH_TIMEOUT_MS),
+                // A hung download must obey run cancel/timeout/shutdown; a fetch-only timeout
+                // of 60 s x 3 attempts otherwise ignores the run's abort and starves the heartbeat.
+                signal: AbortSignal.any([
+                  run.abortSignal,
+                  AbortSignal.timeout(ARTIFACT_FETCH_TIMEOUT_MS),
+                ]),
               });
             },
           );
@@ -193,6 +217,11 @@ export class GenerationManager {
           if (checkpointer !== undefined) {
             await checkpointer.flush();
           }
+          // Text-free phases never flush, so prove liveness on its own; without this the
+          // reaper finalizes healthy thinking/tool runs after 45 s and the answer is lost.
+          if (this.generationRepo !== undefined) {
+            await this.generationRepo.touchHeartbeat(genId, this.clock.now());
+          }
           if (input.hooks?.onHeartbeat !== undefined) {
             await input.hooks.onHeartbeat(genId);
           }
@@ -202,22 +231,43 @@ export class GenerationManager {
             await checkpointer.dispose();
           }
 
-          if (this.finalizer !== undefined) {
-            await this.finalizer.finalize({
-              generationId: run.generationId,
-              status: outcome.status,
-              finishReason: outcome.finishReason,
-              error: outcome.error,
-              accumulatedText: outcome.accumulatedText,
-              usage: outcome.usage,
-              ...(outcome.cancelReason !== undefined ? { cancelReason: outcome.cancelReason } : {}),
-              ...(outcome.fallbackPartId !== undefined
-                ? { fallbackPartId: outcome.fallbackPartId }
-                : {}),
-            });
+          // A throwing finalizer (DB stress, pool exhaustion) must not leak this run into the
+          // manager's map: a leaked entry grows activeCount forever and eventually wedges
+          // admission and shutdown drain.
+          try {
+            if (this.finalizer !== undefined) {
+              await this.finalizer.finalize({
+                generationId: run.generationId,
+                status: outcome.status,
+                finishReason: outcome.finishReason,
+                error: outcome.error,
+                accumulatedText: outcome.accumulatedText,
+                usage: outcome.usage,
+                ...(outcome.providerAccepted !== undefined
+                  ? { providerAccepted: outcome.providerAccepted }
+                  : {}),
+                ...(outcome.cancelReason !== undefined ? { cancelReason: outcome.cancelReason } : {}),
+                ...(outcome.fallbackPartId !== undefined
+                  ? { fallbackPartId: outcome.fallbackPartId }
+                  : {}),
+              });
+            }
+          } catch (err) {
+            getLogger().error(
+              { err, generationId: run.generationId },
+              'finalization failed; the reaper remains the backstop',
+            );
+          } finally {
+            this.runs.delete(run.generationId);
+            if (providerMaxConcurrency !== undefined && providerMaxConcurrency > 0) {
+              const current = this.providerActiveRuns.get(providerId) ?? 0;
+              if (current <= 1) {
+                this.providerActiveRuns.delete(providerId);
+              } else {
+                this.providerActiveRuns.set(providerId, current - 1);
+              }
+            }
           }
-
-          this.runs.delete(run.generationId);
 
           const providerKey = input.chatRequest.provider.key;
           const modelKey = input.chatRequest.model.apiModelId;
@@ -245,6 +295,9 @@ export class GenerationManager {
       },
     });
 
+    if (providerMaxConcurrency !== undefined && providerMaxConcurrency > 0) {
+      this.providerActiveRuns.set(providerId, (this.providerActiveRuns.get(providerId) ?? 0) + 1);
+    }
     this.runs.set(run.generationId, run);
 
     getLogger().info(
@@ -285,10 +338,7 @@ export class GenerationManager {
     return true;
   }
 
-  /**
-   * Initiates graceful shutdown: rejects new admissions, allows runs to finish naturally
-   * within the drain window, and then aborts any remaining active runs with reason 'shutdown'.
-   */
+  /** Initiates graceful shutdown, draining active runs before aborting remaining executions. */
   async shutdown(drainTimeoutSeconds?: number): Promise<void> {
     this.isDraining = true;
     const timeout = (drainTimeoutSeconds ?? this.config.SHUTDOWN_DRAIN_SECONDS) * 1000;

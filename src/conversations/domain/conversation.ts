@@ -62,10 +62,7 @@ export interface MessageWithParts {
 export const MAX_TITLE_LENGTH = 200;
 const DEFAULT_TITLE = 'New conversation';
 
-/**
- * Derive a conversation title from the first user message's text. Collapses whitespace and
- * truncates; falls back to the default when there is no usable text.
- */
+/** Derives conversation title from first user message text, collapsing whitespace. */
 export function deriveTitleFromText(text: string): string {
   const collapsed = text.replace(/\s+/g, ' ').trim();
   if (collapsed.length === 0) return DEFAULT_TITLE;

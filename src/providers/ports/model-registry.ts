@@ -1,13 +1,7 @@
 import type { ModelRuntimeConfig, ProviderRuntimeConfig } from '../domain/capabilities.ts';
 import type { ModelRecord, ProviderRecord } from '../domain/registry.ts';
 
-/**
- * Read side of the provider/model registry as consumed by other modules. 
- * Capability questions are answered here, never by branching on provider identity.
- *
- * Writes go through the admin application service; this port is intentionally read-only so
- * no feature can mutate the registry by accident.
- */
+/** Read-only registry port for retrieving models, providers, and runtime configurations. */
 
 /** A model's runtime config plus the provider it belongs to, resolved together. */
 export interface ResolvedModel {
@@ -36,10 +30,7 @@ export interface ModelRegistry {
   /** Resolve one provider, or `null` when unknown. */
   getProvider(providerId: string): Promise<ProviderRecord | null>;
 
-  /**
-   * Resolve the PAL runtime config for a generation. `null` when the model or provider is
-   * unknown; the caller maps that to `model_unavailable`.
-   */
+  /** Resolves runtime model and provider configuration for execution. */
   getRuntimeConfig(modelId: string): Promise<ResolvedModel | null>;
 
   /** Drop the in-process cache (called after an admin write in the same process). */

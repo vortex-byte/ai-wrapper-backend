@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
 import { divisions } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
+import { AppError } from '@/errors.ts';
 import type {
   CreateDivisionInput,
   Division,
@@ -49,7 +50,7 @@ export class DrizzleDivisionRepository implements DivisionRepository {
       })
       .returning(divisionColumns);
     const row = rows[0];
-    if (!row) throw new Error('insert into divisions returned no row');
+    if (!row) throw new AppError('internal_error', 'insert into divisions returned no row');
     return row;
   }
 
@@ -64,7 +65,7 @@ export class DrizzleDivisionRepository implements DivisionRepository {
       .where(eq(divisions.id, input.id))
       .returning(divisionColumns);
     const row = rows[0];
-    if (!row) throw new Error(`division not found: ${input.id}`);
+    if (!row) throw new AppError('not_found', `division not found: ${input.id}`);
     return row;
   }
 }

@@ -6,11 +6,7 @@ import { errorEnvelope, envelopeFromError } from './envelope.ts';
 import { AppError, isAppError } from '../errors.ts';
 import type { AppEnv } from './types.ts';
 
-/**
- * The single place errors become responses. `trace` is emitted
- * only when `NODE_ENV=development`; anything that is not an `AppError` is logged and
- * reported as a generic `internal_error` so internals never leak.
- */
+/** Central HTTP error handler mapping thrown errors to standard envelopes. */
 export function onError(config: Config) {
   return (error: Error, c: Context<AppEnv>): Response => {
     const includeTrace = config.NODE_ENV === 'development';

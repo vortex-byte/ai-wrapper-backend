@@ -57,11 +57,7 @@ export interface ProgressPayload {
   readonly percent?: number;
 }
 
-/**
- * Cloud-container tool activity. `partId` is the message part the tool ran for (empty when the
- * provider emits tool activity before any text part); `toolCallId` lets clients correlate
- * `tool.started` → `tool.delta*` → `tool.completed`.
- */
+/** Tool activity payload correlating started, delta, and completion events. */
 export interface ToolStartedPayload {
   readonly partId: string;
   readonly toolCallId: string;

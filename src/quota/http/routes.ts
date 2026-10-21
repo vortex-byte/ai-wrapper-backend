@@ -25,7 +25,7 @@ export const PolicyUpsertBodySchema = z.object({
   maxOutputTokensPerRequest: z.number().int().min(1).nullable().optional(),
   maxConcurrentGenerations: z.number().int().min(1).nullable().optional(),
   allowedModelIds: z.array(z.uuid()).nullable().optional(),
-  applyToCurrentPeriod: z.boolean().optional().default(false),
+  applyToCurrentPeriod: z.boolean().optional().default(true),
   reason: z.string().min(1).max(500).optional(),
 });
 
@@ -126,13 +126,6 @@ export function quotaRoutes(deps: QuotaRoutesDeps): Hono<AppEnv> {
       applyToCurrentPeriod: body.applyToCurrentPeriod,
       reason: body.reason,
       actorUserId: current.user.id,
-    });
-    await audit.append({
-      actorUserId: current.user.id,
-      action: 'quota.policy.updated',
-      targetType: 'quota_policy',
-      targetId: `${scope}:${targetId ?? 'global'}`,
-      after: saved,
       requestId: c.get('requestId'),
       ip: clientIp(c, config),
       userAgentHash: requestMeta(c, clientIp(c, config)).userAgentHash,

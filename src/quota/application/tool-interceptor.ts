@@ -1,9 +1,6 @@
 import { checkToolQuota, type ToolTariff } from '../domain/tariffs.ts';
 
-/**
- * Charges a tariffed tool's token cost before the call runs; without budget the caller gets a
- * synthetic error result instead of executing the tool.
- */
+/** Enforces token tariffs on tool calls before execution. */
 export interface ToolCallVerdict {
   readonly allowed: boolean;
   readonly toolName: string;

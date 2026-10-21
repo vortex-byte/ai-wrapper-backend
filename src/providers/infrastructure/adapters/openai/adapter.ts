@@ -72,10 +72,7 @@ export interface OpenAIClientLike {
       create(params: unknown, options?: { signal?: AbortSignal }): Promise<AsyncIterable<unknown>>;
     };
   };
-  /**
-   * Responses API. Only needed for cloud-container document generation (`req.container`);
-   * Chat Completions stays the default path. Optional so text-only fakes stay small.
-   */
+  /** Responses API used for cloud-container document generation. */
   responses?: {
     create(params: unknown, options?: { signal?: AbortSignal }): Promise<AsyncIterable<unknown>>;
   };
@@ -120,14 +117,7 @@ interface RawOpenAIChunk {
   } | null;
 }
 
-/**
- * Cloud containers (Responses API) — the document-generation path.
- *
- * Hosted shell/code-interpreter sandboxes report generated files either as
- * `container_file_citation` annotations (code interpreter) or through the container files
- * API (both). A container file therefore needs *two* ids to be downloadable, so the adapter
- * hands the orchestrator one opaque handle and parses it again on fetch.
- */
+/** Cloud containers (Responses API): packs container and file IDs into an opaque handle. */
 const CONTAINER_FILE_PREFIX = 'container:';
 
 /** Builds the opaque handle stored as `providerFileId` for a container file. */
@@ -146,17 +136,10 @@ export function parseContainerFileHandle(
   return { containerId: rest.slice(0, separator), fileId: rest.slice(separator + 1) };
 }
 
-/**
- * The shell container's artifact directory: `/mnt/data` is the path the provider makes
- * user-downloadable. Adapters never interpolate our own filesystem paths — this one belongs to
- * the provider sandbox.
- */
+/** Provider sandbox directory for user-downloadable output artifacts. */
 const OPENAI_OUTPUT_DIR = '/mnt/data';
 
-/**
- * PAL skill ids → OpenAI curated skill ids. Only `openai-spreadsheets` is documented by id;
- * a registry can pin more via `model.config.openaiSkills` (see `resolveSkills`).
- */
+/** Mapping from PAL skill identifiers to OpenAI curated skill identifiers. */
 const CURATED_SKILL_IDS: Readonly<Record<string, string>> = {
   xlsx: 'openai-spreadsheets',
 };
@@ -179,11 +162,7 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   zip: 'application/zip',
 };
 
-/**
- * Cap on artifacts pulled from one turn's container sweep. A runaway sandbox must not be able
- * to fill local storage by writing hundreds of files; citations streamed during the turn are
- * not subject to this bound (they arrive one per generated file anyway).
- */
+/** Maximum artifacts captured from a single container sweep. */
 const MAX_CONTAINER_ARTIFACTS = 20;
 
 /** Hard cap for one inline image, matching the sink's per-artifact storage limit. */
@@ -191,11 +170,7 @@ const MAX_IMAGE_ARTIFACT_BYTES = 50 * 1024 * 1024;
 /** Base64 inflates by 4/3; a payload above this cannot decode under the cap. */
 const MAX_IMAGE_BASE64_LENGTH = Math.ceil((MAX_IMAGE_ARTIFACT_BYTES * 4) / 3);
 
-/**
- * Hosted `image_generation` results arrive as base64 on the output item — there is no provider
- * file id to download. The handle stored as `providerFileId` is therefore a small, stable
- * label, never the payload (it is persisted in attachment metadata).
- */
+/** Prefix for inline generated image file identifiers. */
 const IMAGE_FILE_PREFIX = 'image:';
 
 /** Provider-owned image knobs a registry may pin; anything else is dropped, not forwarded. */
@@ -359,11 +334,7 @@ interface ApiErrorShape {
   readonly error?: unknown;
 }
 
-/**
- * Read the structured `code`/`type` from an APIError body. The SDK unwraps the
- * response envelope (`{error: {...}}`) for real calls, but direct constructor
- * use keeps the envelope — accept both shapes.
- */
+/** Extracts code or type fields from SDK APIError responses. */
 function readBodyField(err: ApiErrorShape, field: 'code' | 'type'): string | undefined {
   const direct = err[field];
   if (typeof direct === 'string' && direct.length > 0) return direct;
@@ -379,11 +350,7 @@ function readBodyField(err: ApiErrorShape, field: 'code' | 'type'): string | und
   return undefined;
 }
 
-/**
- * Reasoning models reject `temperature`/`top_p` when reasoning is active. Explicit registry
- * config wins; fall back to the model-family prefix so a misconfigured registry still fails
- * safe-ish.
- */
+/** Checks whether model configuration supports sampling parameters (temperature, top_p). */
 function supportsSamplingParams(model: ModelRuntimeConfig): boolean {
   const override = model.config['supportsSamplingParams'];
   if (typeof override === 'boolean') return override;
@@ -406,10 +373,7 @@ interface OpenAIMessage {
   content: string | OpenAIContentPart[];
 }
 
-/**
- * Folds two same-role turns. OpenAI tolerates consecutive same-role messages, but merging keeps
- * the prompt tight and preserves the prior behaviour for text-only requests.
- */
+/** Merges consecutive same-role messages into a single message content. */
 function mergeOpenAIContent(
   left: OpenAIMessage['content'],
   right: OpenAIMessage['content'],
@@ -429,10 +393,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return this.buildRequest(req, messages ?? this.buildMessages(req));
   }
 
-  /**
-   * Builds the Chat Completions payload. `reasoning_effort` is forwarded only when the registry
-   * pins it: reasoning models accept it, and a value the model does not support is a 400.
-   */
+  /** Builds Chat Completions request payload. */
   private buildRequest(
     req: NormalizedChatRequest,
     messages: OpenAIMessage[],
@@ -494,11 +455,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return messages;
   }
 
-  /**
-   * Renders the current turn's binaries for Chat Completions, which accepts inline `image_url`
-   * parts and PDF `file` parts only. Every other format (docx/xlsx/pptx/…) is not accepted as a
-   * file part by this API, so the anydoc extraction is sent as text instead.
-   */
+  /** Resolves media blocks (inline images and PDFs) for Chat Completions. */
   private async resolveMediaBlocks(req: NormalizedChatRequest): Promise<OpenAIContentPart[][]> {
     const perMessage: OpenAIContentPart[][] = [];
 
@@ -540,11 +497,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return perMessage;
   }
 
-  /**
-   * Builds the Responses payload used for container turns. Unlike Chat Completions it takes
-   * `instructions` for the system prompt and `input` items that can carry `input_file` parts
-   * (PDF *and* Office formats — Chat Completions accepts PDFs only).
-   */
+  /** Builds payload for OpenAI Responses API when container execution is requested. */
   private async buildResponsesRequest(
     req: NormalizedChatRequest,
   ): Promise<Record<string, unknown>> {
@@ -579,12 +532,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     };
   }
 
-  /**
-   * Turns the PAL conversation into Responses `input` items. Assistant turns are replayed as
-   * plain text (media is never re-sent), user turns carry `input_text`/`input_image`/
-   * `input_file` parts. Mounted input files ride on the final user turn — the provider keeps
-   * them in the container for later turns.
-   */
+  /** Converts normalized chat conversation into Responses input items. */
   private async buildResponsesInput(req: NormalizedChatRequest): Promise<unknown[]> {
     const items: unknown[] = [];
     const lastUserIndex = req.messages.reduce(
@@ -660,17 +608,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return items;
   }
 
-  /**
-   * Declares the hosted tools. `image_generation` runs entirely on OpenAI's side (we never
-   * render images locally) and is independent of the sandbox.
-   *
-   * Skills (document generation) only exist on the hosted **shell** container, so a skills
-   * request gets `shell`; a plain code-execution request gets the `code_interpreter` tool,
-   * whose file citations stream as annotations.
-   *
-   * One container per request: declaring both tools with separate auto containers would give
-   * the model two sandboxes that cannot see each other's files.
-   */
+  /** Declares hosted tools: image_generation and sandbox container (shell for skills, code_interpreter otherwise). */
   private buildResponsesTools(req: NormalizedChatRequest): unknown[] {
     const tools: unknown[] = [];
     if (this.imageGenerationEnabled(req)) tools.push(this.imageGenerationTool(req));
@@ -703,11 +641,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return tools;
   }
 
-  /**
-   * The hosted image tool. Generation options are provider-owned knobs: a registry pins them
-   * with `model.config.imageGenerationOptions`, and unrecognized keys are dropped rather than
-   * forwarded blindly (a typo must not turn into a 400 for every request).
-   */
+  /** Builds image_generation tool declaration from validated model config options. */
   private imageGenerationTool(req: NormalizedChatRequest): Record<string, unknown> {
     const tool: Record<string, unknown> = { type: 'image_generation' };
     const configured = req.model.config['imageGenerationOptions'];
@@ -720,11 +654,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return tool;
   }
 
-  /**
-   * Resolves the skill references to attach. A registry can pin exact ids with
-   * `model.config.openaiSkills` (`string[]` or `{id, version}[]`); otherwise the documented
-   * curated ids are used, and unmapped PAL skills simply run with the shell's own toolchain.
-   */
+  /** Resolves skill references from model configuration. */
   private resolveSkills(req: NormalizedChatRequest): Array<Record<string, unknown>> {
     const configured = req.model.config['openaiSkills'];
     if (Array.isArray(configured)) {
@@ -905,11 +835,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
   }
 
-  /**
-   * Container generation is requested only when a model is registry-marked for document
-   * generation (`send-service` attaches `req.container`). A provider that fronts OpenAI with
-   * Chat Completions only can opt out with `config.useChatCompletions = true`.
-   */
+  /** Whether containerized code execution/skills are active and enabled for this request. */
   private containerEnabled(req: NormalizedChatRequest): boolean {
     const container = req.container;
     if (container === undefined) return false;
@@ -917,13 +843,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return container.codeExecution || (container.skills?.length ?? 0) > 0;
   }
 
-  /**
-   * Image generation uses the hosted `image_generation` tool, which only exists on the
-   * Responses API. It is request-scoped: the client opts in per turn via
-   * `options.tools.imageGeneration`, which the context builder turns into the `image` output
-   * modality. The registry flag says the model *can* do it; `model.config.imageGeneration:
-   * false` and `provider.config.useChatCompletions` are the opt-outs.
-   */
+  /** Whether image generation is requested, capable, and allowed by provider/model config. */
   private imageGenerationEnabled(req: NormalizedChatRequest): boolean {
     if (!req.model.capabilities.imageGeneration) return false;
     if (!req.responseModalities.includes('image')) return false;
@@ -936,15 +856,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     return this.containerEnabled(req) || this.imageGenerationEnabled(req);
   }
 
-  /**
-   * Runs a document-generation turn on the Responses API and translates its semantic events
-   * into PAL events.
-   *
-   * Files surface two ways: `container_file_citation` annotations (code interpreter) and the
-   * container files API (hosted shell, whose docs say artifacts are retrieved "using the same
-   * container/files APIs as code interpreter"). Both are harvested before `finished` so the
-   * orchestrator can persist-and-link before the client sees the turn complete.
-   */
+  /** Runs a Responses API turn, mapping events and harvesting generated files before finish. */
   private async *executeResponses(
     req: NormalizedChatRequest,
     ctx: ExecuteContext,
@@ -1224,10 +1136,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     yield { type: 'tool_completed', toolCallId, status };
   }
 
-  /**
-   * Emits a generated image as an artifact carrying its bytes. MIME and extension come from
-   * the decoded magic bytes, not from configuration — the provider may ignore `output_format`.
-   */
+  /** Emits generated image bytes as an artifact event. */
   private *imageArtifact(
     item: RawResponsesItem,
     state: ResponsesRunState,
@@ -1323,11 +1232,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     };
   }
 
-  /**
-   * Emits images from the terminal `response.output` array. `output_item.done` normally carries
-   * the result, but the API also populates it on the final response object — the emitted set
-   * de-duplicates whichever path wins.
-   */
+  /** Emits images from terminal response output. */
   private *sweepImages(
     output: readonly RawResponsesItem[] | undefined,
     state: ResponsesRunState,
@@ -1340,11 +1245,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
   }
 
-  /**
-   * Lists each container's files and emits the ones the assistant produced. This is the
-   * documented retrieval path for hosted shell artifacts; code interpreter files are usually
-   * already covered by annotations and are de-duplicated by handle.
-   */
+  /** Emits files produced by container execution as artifacts. */
   private async *emitContainerArtifacts(
     req: NormalizedChatRequest,
     state: ResponsesRunState,
@@ -1776,13 +1677,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     });
   }
 
-  /**
-   * Downloads a provider-generated file so the `ArtifactSink` can persist it.
-   *
-   * Container files need both ids, which the adapter packed into one handle; a plain file id
-   * falls back to the Files API. Uses `fetch` rather than the SDK so the path is explicit and
-   * the key never leaks outside the Authorization header.
-   */
+  /** Downloads a provider-generated artifact file stream. */
   async fetchArtifactStream(
     providerFileId: string,
     ctx: FilesApiContext,
@@ -1826,10 +1721,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     };
   }
 
-  /**
-   * Uploads an input binary to the Files API so it can be mounted into a container
-   * (`purpose: "user_data"` is the flexible Responses API purpose).
-   */
+  /** Uploads an input binary to the Files API for container mounting. */
   async uploadInputFile(file: InputFileUpload, ctx: FilesApiContext): Promise<UploadedInputFile> {
     const apiKey = ctx.provider.secrets['apiKey'];
     if (apiKey === undefined || apiKey === '') {

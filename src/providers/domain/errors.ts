@@ -1,11 +1,4 @@
-/**
- * Normalized error vocabulary for providers. Adapters translate every
- * documented upstream condition into one of these categories via `translateError`
- * The vocabulary is shared by the API envelope, SSE events, logs and
- * metrics — hence it lives with the PAL rather than in any single provider.
- *
- * Pure: string-literal unions and interfaces only.
- */
+/** Normalized provider error vocabulary and translation types. */
 
 export type AppErrorCategory =
   | 'invalid_request'

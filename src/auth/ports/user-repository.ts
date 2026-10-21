@@ -48,11 +48,7 @@ export interface UpdateUserInput {
   readonly at?: Date | undefined;
 }
 
-/**
- * Persistence port for users. Every method returns plain domain objects; the domain
- * never sees a table. `tx` carries the Unit of Work handle when the
- * caller needs it; the repository never opens a transaction itself.
- */
+/** Persistence port for users. Methods return domain entities. */
 export interface UserRepository {
   findById(id: string, tx?: TransactionContext): Promise<User | null>;
   findByEmail(email: string, tx?: TransactionContext): Promise<User | null>;

@@ -2,11 +2,7 @@ import type { TransactionContext } from '@/db/tx.ts';
 import type { ModelRecord, ProviderRecord } from '../domain/registry.ts';
 import type { ModelCapabilities } from '../domain/capabilities.ts';
 
-/**
- * Persistence port for the registry (implemented by Drizzle in `infrastructure/`).
- * Reads are consumed through `ModelRegistry`; writes only by the admin application service.
- * Every write takes the transaction handle so the audit row commits with the change.
- */
+/** Persistence port for provider and model registry entities. */
 
 export interface CreateProviderInput {
   readonly id: string;

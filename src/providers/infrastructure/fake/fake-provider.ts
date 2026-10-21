@@ -13,11 +13,7 @@ import type {
   ProviderAdapter,
 } from '@/providers/ports/provider-adapter.ts';
 
-/**
- * Deterministic in-memory adapter used by tests and by `ROLE=all` dev runs.
- * It performs **no network I/O** and supports fault injection so the
- * orchestrator's error/cancel/timeout paths can be exercised without a real provider.
- */
+/** In-memory test adapter supporting fault injection and deterministic execution. */
 
 export type FakeScenario =
   | 'success'

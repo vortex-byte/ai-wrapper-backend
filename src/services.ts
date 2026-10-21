@@ -75,6 +75,7 @@ import { Scheduler } from './jobs/application/scheduler.ts';
 import { createReaperHandler } from './jobs/application/handlers/reaper-handler.ts';
 import {
   createIdempotencyPurgeHandler,
+  createJobsPurgeHandler,
   createSessionsPurgeHandler,
 } from './jobs/application/handlers/purge-handler.ts';
 import { createConversationPurgeHandler } from './jobs/application/handlers/conversation-purge-handler.ts';
@@ -121,7 +122,9 @@ export function createServices(config: Config): Services {
   const audit = new DrizzleAuditLogRepository();
   const hasher = new BunPasswordHasher();
   const rateLimiter = new MemoryRateLimiter(systemClock);
-  const providers = createDefaultProviderRegistry();
+  const providers = createDefaultProviderRegistry({
+    includeFake: config.NODE_ENV !== 'production',
+  });
   const registryRepository = new DrizzleRegistryRepository();
   const secrets = new EnvSecretResolver(process.env);
   const registry = new CachedModelRegistry({
@@ -215,11 +218,14 @@ export function createServices(config: Config): Services {
     clock: systemClock,
     idGen: uuidv7Generator,
     quotaTimezone: config.QUOTA_TIMEZONE,
+    reservationTtlMs: config.GENERATION_DETACH_TIMEOUT_SECONDS * 1000 + 15 * 60 * 1000,
   });
   const quota: QuotaPort = realQuota;
   const quotaService: QuotaServiceType = new QuotaService({
     accounts: quotaAccountsRepo,
     policies: quotaPoliciesRepo,
+    usage: usageRepo,
+    audit,
     idGen: () => uuidv7Generator.uuidv7(),
     quotaTimezone: config.QUOTA_TIMEZONE,
   });
@@ -255,6 +261,8 @@ export function createServices(config: Config): Services {
     orchestrator,
     attachments,
     attachmentRepo: attachmentRepository,
+    finalizer,
+    settings,
   });
 
   const jobQueue = new DrizzleJobQueue(systemClock, uuidv7Generator);
@@ -282,6 +290,7 @@ export function createServices(config: Config): Services {
   const reaperHandler = createReaperHandler({ finalizer, generations: generationRepository });
   const idempotencyPurgeHandler = createIdempotencyPurgeHandler();
   const sessionsPurgeHandler = createSessionsPurgeHandler();
+  const jobsPurgeHandler = createJobsPurgeHandler();
   const conversationPurgeHandler = createConversationPurgeHandler({
     conversations: conversationRepository,
     storage,
@@ -317,6 +326,7 @@ export function createServices(config: Config): Services {
   jobRunner.registerHandler('generation.reaper', async () => reaperHandler());
   jobRunner.registerHandler('idempotency.purge', async () => idempotencyPurgeHandler());
   jobRunner.registerHandler('sessions.purge', async () => sessionsPurgeHandler());
+  jobRunner.registerHandler('jobs.purge', async () => jobsPurgeHandler());
   jobRunner.registerHandler('conversations.purge_soft_deleted', async () =>
     conversationPurgeHandler(),
   );

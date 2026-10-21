@@ -33,6 +33,34 @@ interface AccountRowShape {
   updatedAt: Date;
 }
 
+const accountColumns = {
+  id: quotaAccounts.id,
+  userId: quotaAccounts.userId,
+  scopeType: quotaAccounts.scopeType,
+  scopeId: quotaAccounts.scopeId,
+  periodStart: quotaAccounts.periodStart,
+  periodEnd: quotaAccounts.periodEnd,
+  baseLimitTokens: quotaAccounts.baseLimitTokens,
+  adjustmentTokens: quotaAccounts.adjustmentTokens,
+  usedTokens: quotaAccounts.usedTokens,
+  reservedTokens: quotaAccounts.reservedTokens,
+  limits: quotaAccounts.limits,
+  updatedAt: quotaAccounts.updatedAt,
+};
+
+const reservationColumns = {
+  id: quotaReservations.id,
+  generationId: quotaReservations.generationId,
+  userId: quotaReservations.userId,
+  accountId: quotaReservations.accountId,
+  reservedTokens: quotaReservations.reservedTokens,
+  settledTokens: quotaReservations.settledTokens,
+  status: quotaReservations.status,
+  expiresAt: quotaReservations.expiresAt,
+  createdAt: quotaReservations.createdAt,
+  finalizedAt: quotaReservations.finalizedAt,
+};
+
 function toNumber(value: string | number): number {
   return typeof value === 'number' ? value : Number.parseInt(value, 10);
 }
@@ -139,7 +167,7 @@ export class DrizzleQuotaAccountRepository implements QuotaAccountRepository {
     tx: TransactionContext,
   ): Promise<QuotaAccountRow | null> {
     const rows = await runDb(tx)
-      .select()
+      .select(accountColumns)
       .from(quotaAccounts)
       .where(and(eq(quotaAccounts.userId, userId), eq(quotaAccounts.periodStart, periodStart)))
       .limit(1);
@@ -153,7 +181,7 @@ export class DrizzleQuotaAccountRepository implements QuotaAccountRepository {
     tx?: TransactionContext,
   ): Promise<QuotaAccountRow | null> {
     const rows = await runDb(tx)
-      .select()
+      .select(accountColumns)
       .from(quotaAccounts)
       .where(
         and(
@@ -318,7 +346,7 @@ export class DrizzleQuotaAccountRepository implements QuotaAccountRepository {
     tx?: TransactionContext,
   ): Promise<readonly QuotaAccountRow[]> {
     const rows = await runDb(tx)
-      .select()
+      .select(accountColumns)
       .from(quotaAccounts)
       .where(eq(quotaAccounts.userId, userId))
       .orderBy(desc(quotaAccounts.periodStart));
@@ -331,7 +359,7 @@ export class DrizzleQuotaAccountRepository implements QuotaAccountRepository {
     tx?: TransactionContext,
   ): Promise<readonly QuotaAccountRow[]> {
     const rows = await runDb(tx)
-      .select()
+      .select(accountColumns)
       .from(quotaAccounts)
       .where(and(lte(quotaAccounts.periodStart, now), gt(quotaAccounts.periodEnd, now)))
       .limit(limit);
@@ -344,7 +372,7 @@ export class DrizzleQuotaAccountRepository implements QuotaAccountRepository {
     tx?: TransactionContext,
   ): Promise<readonly QuotaReservationRow[]> {
     const rows = await runDb(tx)
-      .select()
+      .select(reservationColumns)
       .from(quotaReservations)
       .where(and(eq(quotaReservations.status, 'active'), lt(quotaReservations.expiresAt, now)))
       .limit(limit);

@@ -1,14 +1,4 @@
-/**
- * The binary-artifact seam.
- *
- * Consumers: `attachments/` (upload pipeline), `artifactsink/` (generated files), cleanup jobs.
- * Implemented by `storage/infrastructure/` (local now, S3 later).
- *
- * Rules the port protects:
- * - keys are opaque, app-generated strings — never filesystem paths;
- * - implementations must be idempotent on delete (a missing key is success);
- * - `putStream` computes SHA-256 while streaming so the DB row reflects the exact stored bytes.
- */
+/** Storage port for persisting, reading, and listing binary artifact streams. */
 
 export interface PutStreamResult {
   readonly key: string;
@@ -42,11 +32,7 @@ export interface StorageProviderPort {
   /** Idempotent: deleting a missing key resolves successfully. */
   delete(key: string): Promise<void>;
 
-  /**
-   * Every stored key under `prefix`, relative to the root and `/`-separated (e.g. `files/2026/10/<uuid>`).
-   * Used only by the weekly `storage.reconcile` sweep to find orphaned blobs; returns `[]` when nothing
-   * is stored under the prefix (a missing root is not an error).
-   */
+  /** Lists stored keys under a prefix for reconciliation. */
   listKeys(prefix: string): Promise<string[]>;
 }
 

@@ -4,11 +4,7 @@ import type { Context } from 'hono';
 import type { Config } from '@/config/index.ts';
 import type { AppEnv } from '../types.ts';
 
-/**
- * The session cookie. `__Host-` requires `Secure`, `Path=/` and **no**
- * `Domain`; because the SPA and API are same-*site* subdomains, `SameSite=Lax` is
- * enough to have the browser send it on API calls.
- */
+/** Session cookie helpers with Secure, HttpOnly, and SameSite=Lax defaults. */
 
 function baseOptions(config: Config): CookieOptions {
   return {

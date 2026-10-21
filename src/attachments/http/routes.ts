@@ -14,7 +14,7 @@ import { FILE_LIMITS, sanitizeDisplayName, type Attachment } from '../domain/att
 
 const MAX_FILES_PER_REQUEST = 5;
 
-/** Parses `Range: bytes=a-b` (RFC 7233). Single ranges only; suffix form supported. */
+/** Parses `Range: bytes=a-b`. Single ranges and suffix forms supported. */
 export function parseRangeHeader(
   header: string | undefined,
 ): { start: number; end?: number } | { suffixLength: number } | null {
@@ -98,10 +98,7 @@ export function attachmentRoutes(input: {
     message: 'Too many uploads. Try again shortly.',
   });
 
-  /**
-   * Auth and CSRF are bound to this exact route so an unmatched path under the shared `/api`
-   * tree falls through to `404` instead of `401`.
-   */
+  /** Uploads one or more attachments to a conversation. */
   routes.post(
     '/conversations/:id/attachments',
     requireAuth(input.auth, input.config),
@@ -185,10 +182,7 @@ export function attachmentRoutes(input: {
     );
   });
 
-  /**
-   * Content serving: ownership-scoped, with RFC 7233 byte ranges, `nosniff`, a sanitized filename
-   * and a private cache.
-   */
+  /** Content serving with byte ranges, nosniff, sanitized filename, and private cache. */
   routes.get(
     '/files/:id/content',
     requireAuth(input.auth, input.config),

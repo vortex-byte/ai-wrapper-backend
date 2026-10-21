@@ -30,11 +30,31 @@ module.exports = {
       from: { path: '(^|/)domain/' },
       to: {
         path: [
-          '(^|/)(infrastructure|http)/',
+          '(^|/)(infrastructure|http|application)/',
           '(^|/)db/',
-          '^node:',
           'node_modules/(drizzle-orm|pg|postgres|hono|pino|@hono/)',
+          '@/errors\\.ts',
         ],
+        dependencyTypes: ['core'],
+      },
+    },
+    {
+      name: 'no-cross-module-domain',
+      severity: 'error',
+      comment: 'domain/ cannot import from another feature module domain.',
+      from: { path: '^src/([^/]+)/domain/' },
+      to: { path: '^src/(?!$1/domain/)[^/]+/domain/' },
+    },
+    {
+      name: 'no-cross-module-infrastructure',
+      severity: 'error',
+      comment: "No module may reach into another module's infrastructure internals.",
+      from: {
+        path: '^src/([^/]+)/',
+        pathNot: '^src/(services\\.ts|app\\.ts|cli/)',
+      },
+      to: {
+        path: '^src/(?!$1/)[^/]+/infrastructure/',
       },
     },
     {

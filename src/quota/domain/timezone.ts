@@ -28,12 +28,7 @@ function zoneParts(instant: Date, timeZone: string): ZoneParts {
   return { year: get('year'), month: get('month'), day: get('day') };
 }
 
-/**
- * Convert a wall-clock time (local midnight) in `timeZone` to the exact UTC instant.
- * Two-pass approach: guess with the zone offset measured at the naive UTC date, then verify by
- * formatting the candidate back into the zone — if it doesn't land on the requested local date,
- * re-measure the offset at the candidate (this is what makes DST transition days correct).
- */
+/** Converts local wall-clock midnight in target timeZone to exact UTC instant with DST correction. */
 function wallClockToInstant(
   year: number,
   month: number,

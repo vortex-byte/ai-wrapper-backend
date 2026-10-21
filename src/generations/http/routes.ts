@@ -210,6 +210,9 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
                   position: p.position,
                   type: p.type,
                   text: p.textContent ?? '',
+                  ...(p.fileId !== null && p.fileId !== undefined
+                    ? { fileId: p.fileId, downloadUrl: `/api/files/${p.fileId}/content` }
+                    : {}),
                 })),
               },
             }),
@@ -243,15 +246,25 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
               caller.user.id,
             );
             const finishReason = assistantMsg?.message.finishReason ?? 'stop';
+            const usageSnapshot = await generations.findUsage(currentRecord.id);
+            const usage =
+              usageSnapshot !== null
+                ? {
+                    input: usageSnapshot.inputTokens,
+                    output: usageSnapshot.outputTokens,
+                    quotaTokens: usageSnapshot.quotaTokens,
+                  }
+                : {
+                    input: currentRecord.estInputTokens ?? 0,
+                    output: Math.ceil((lastEmittedText?.length ?? 0) / 4),
+                    quotaTokens: null,
+                  };
+
             await stream.writeSSE({
               event: 'generation.completed',
               data: JSON.stringify({
                 finishReason,
-                usage: {
-                  input: currentRecord.estInputTokens ?? 0,
-                  output: Math.ceil((lastEmittedText?.length ?? 0) / 4),
-                  quotaTokens: 0,
-                },
+                usage,
                 remainingQuota: null,
               }),
             });

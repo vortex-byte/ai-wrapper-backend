@@ -31,6 +31,7 @@ const reconciliationHandler = createReconciliationHandler({ accounts, clock: sys
 const quotaService = new QuotaService({
   accounts,
   policies,
+  usage,
   idGen: () => uuidv7Generator.uuidv7(),
   quotaTimezone: 'Asia/Jakarta',
 });
@@ -524,6 +525,136 @@ describe('quota reservation concurrency', () => {
     expect(account).not.toBeNull();
     expect(account?.baseLimitTokens).toBe(2_000_000);
     expect(account?.limits).toMatchObject({ maxConcurrentGenerations: 5 });
+  });
+
+  it('reconciliation ignores base-limit rebase ledger entries and reports no mismatch', async () => {
+    const { userId, modelId, providerId } = await seedUserAndModel();
+    const globalPolicyId = Bun.randomUUIDv7();
+    await getPool().query(
+      `INSERT INTO quota_policies (id, scope, monthly_tokens, max_concurrent_generations)
+       VALUES ($1, 'global', 100000, 100)`,
+      [globalPolicyId],
+    );
+
+    const genA = await seedGeneration(userId, modelId, providerId);
+    await withTransaction(reserveFor(userId, genA, modelId, providerId, 4_000, 4_000));
+    await withTransaction((tx) =>
+      quota.settleOrRelease(
+        {
+          generationId: genA,
+          outcome: 'settled',
+          actualTokens: 6_000,
+          usage: { inputTokens: 3_000, outputTokens: 3_000, source: 'provider' },
+        },
+        tx,
+      ),
+    );
+
+    // Admin updates the policy with applyToCurrentPeriod: true (rebases base_limit_tokens from 100k to 150k)
+    await quotaService.updatePolicy({
+      scope: 'global',
+      targetId: null,
+      fields: { monthlyTokens: 150_000 },
+      applyToCurrentPeriod: true,
+      reason: 'Mid-month bump',
+      actorUserId: null,
+    });
+
+    const result = await reconciliationHandler();
+    const userMismatches = result.mismatches.filter((m) => m.userId === userId);
+    expect(userMismatches).toHaveLength(0);
+  });
+
+  it('enforces policy max_input_tokens_per_request even when model context window is larger', async () => {
+    const { userId, modelId, providerId } = await seedUserAndModel();
+    await getPool().query(
+      `INSERT INTO quota_policies (id, scope, monthly_tokens, max_input_tokens_per_request, max_concurrent_generations)
+       VALUES ($1, 'global', 100000, 500, 100)`,
+      [Bun.randomUUIDv7()],
+    );
+    const gen = await seedGeneration(userId, modelId, providerId);
+    // Model context window is 128,000, but policy cap is 500. A 600-token prompt must fail.
+    await expect(
+      withTransaction(reserveFor(userId, gen, modelId, providerId, 600, 500)),
+    ).rejects.toThrowError(AppError);
+  });
+
+  it('resolves division policy when resolving policy for a user with division', async () => {
+    const pool = getPool();
+    const divId = Bun.randomUUIDv7();
+    await pool.query(`INSERT INTO divisions (id, name) VALUES ($1, 'Div Engineering')`, [divId]);
+    const { userId } = await seedUserAndModel();
+    await pool.query(`UPDATE users SET division_id = $1 WHERE id = $2`, [divId, userId]);
+
+    await pool.query(
+      `INSERT INTO quota_policies (id, scope, division_id, monthly_tokens, max_input_tokens_per_request)
+       VALUES ($1, 'division', $2, 500000, 2500)`,
+      [Bun.randomUUIDv7(), divId],
+    );
+
+    const resolved = await quotaService.resolvePolicyFor(userId);
+    expect(resolved.monthlyTokens).toBe(500000);
+    expect(resolved.maxInputTokensPerRequest).toBe(2500);
+  });
+
+  it('merges policy updates with tri-state semantics and rebases user account directly', async () => {
+    const { userId, modelId, providerId } = await seedUserAndModel();
+
+    // 1. Initial policy update for user: set both monthlyTokens and maxInputTokensPerRequest
+    await quotaService.updatePolicy({
+      scope: 'user',
+      targetId: userId,
+      fields: {
+        monthlyTokens: 500_000,
+        maxInputTokensPerRequest: 10_000,
+      },
+      applyToCurrentPeriod: true,
+      reason: 'Initial user policy',
+      actorUserId: userId,
+    });
+
+    // Create current account via reservation
+    const gen = await seedGeneration(userId, modelId, providerId);
+    await withTransaction(reserveFor(userId, gen, modelId, providerId, 100, 100));
+
+    let acc = await accounts.findCurrentAccount(userId, new Date());
+    expect(acc?.baseLimitTokens).toBe(500_000);
+
+    // 2. Partial update: modify monthlyTokens to 750k; leave maxInputTokensPerRequest as undefined
+    await quotaService.updatePolicy({
+      scope: 'user',
+      targetId: userId,
+      fields: {
+        monthlyTokens: 750_000,
+        // maxInputTokensPerRequest undefined -> should preserve 10,000
+      },
+      applyToCurrentPeriod: true,
+      reason: 'Partial update',
+      actorUserId: userId,
+    });
+
+    const userPolicyAfterPartial = await policies.findPolicy('user', userId);
+    expect(userPolicyAfterPartial?.monthlyTokens).toBe(750_000);
+    expect(userPolicyAfterPartial?.maxInputTokensPerRequest).toBe(10_000);
+
+    acc = await accounts.findCurrentAccount(userId, new Date());
+    expect(acc?.baseLimitTokens).toBe(750_000);
+
+    // 3. Unset maxInputTokensPerRequest with null
+    await quotaService.updatePolicy({
+      scope: 'user',
+      targetId: userId,
+      fields: {
+        maxInputTokensPerRequest: null,
+      },
+      applyToCurrentPeriod: false,
+      reason: 'Unset input cap',
+      actorUserId: userId,
+    });
+
+    const userPolicyAfterNull = await policies.findPolicy('user', userId);
+    expect(userPolicyAfterNull?.monthlyTokens).toBe(750_000);
+    expect(userPolicyAfterNull?.maxInputTokensPerRequest).toBeNull();
   });
 });
 

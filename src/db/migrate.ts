@@ -41,11 +41,7 @@ async function applyOne(client: PoolClient, migration: MigrationFile): Promise<v
   }
 }
 
-/**
- * Apply every pending migration, newest last, under an advisory lock. Runs as a
- * pre-deploy job — never on application boot. Editing an already
- * applied migration is rejected (checksum drift); add a new file instead.
- */
+/** Applies pending forward-only migrations under PostgreSQL advisory lock. */
 export async function runMigrations(dir?: string): Promise<MigrationRunResult> {
   const logger = getLogger();
   const migrations = await listMigrations(dir);

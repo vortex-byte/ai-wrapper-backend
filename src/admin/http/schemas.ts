@@ -1,11 +1,7 @@
 import { z } from 'zod';
 import { USER_ROLES, USER_STATUSES } from '@/auth/domain/user.ts';
 
-/**
- * A keyset cursor is `base64url("<iso-created-at>|<uuid>")` (see the user repository's
- * codec). Validating its shape here turns a corrupt cursor into `400 invalid_request`
- * instead of silently returning the first page.
- */
+/** Validates `base64url("<iso-created-at>|<uuid>")` cursor format. */
 const CursorSchema = z
   .string()
   .refine((value) => {

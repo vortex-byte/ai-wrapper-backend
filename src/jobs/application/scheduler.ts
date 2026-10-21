@@ -22,6 +22,7 @@ const DEFAULT_TASKS: readonly SchedulerTask[] = [
   { name: 'attachments-orphans', jobType: 'attachments.purge_orphans', intervalMs: 3_600_000 },
   { name: 'storage-reconcile', jobType: 'storage.reconcile', intervalMs: 604_800_000 },
   { name: 'conversations-purge', jobType: 'conversations.purge_soft_deleted', intervalMs: 86_400_000 },
+  { name: 'jobs-purge', jobType: 'jobs.purge', intervalMs: 86_400_000 },
 ];
 
 export class Scheduler {
@@ -29,6 +30,7 @@ export class Scheduler {
   private readonly tasks: readonly SchedulerTask[];
   private timers: Array<ReturnType<typeof setInterval>> = [];
   private isRunning = false;
+  private readonly inFlightTicks = new Set<Promise<unknown>>();
 
   constructor(queue: JobQueue, tasks: readonly SchedulerTask[] = DEFAULT_TASKS) {
     this.queue = queue;
@@ -68,24 +70,37 @@ export class Scheduler {
     if (this.isRunning) return;
     this.isRunning = true;
 
+    const runTick = (task: SchedulerTask): void => {
+      if (!this.isRunning) return;
+      const promise = this.scheduleTask(task);
+      this.inFlightTicks.add(promise);
+      void promise.finally(() => {
+        this.inFlightTicks.delete(promise);
+      });
+    };
+
     for (const task of this.tasks) {
       setTimeout(() => {
-        if (this.isRunning) void this.scheduleTask(task);
+        runTick(task);
       }, 1000);
 
       const timer = setInterval(() => {
-        if (this.isRunning) void this.scheduleTask(task);
+        runTick(task);
       }, task.intervalMs);
 
       this.timers.push(timer);
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.isRunning = false;
     for (const timer of this.timers) {
       clearInterval(timer);
     }
     this.timers = [];
+
+    if (this.inFlightTicks.size > 0) {
+      await Promise.allSettled(Array.from(this.inFlightTicks));
+    }
   }
 }

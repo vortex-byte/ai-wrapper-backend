@@ -1,10 +1,4 @@
-/**
- * Opaque keyset cursors for list endpoints. A cursor encodes the sort tuple the next page
- * continues after; clients treat it as an opaque string.
- *
- * Format: `base64url("<sort-key>|<id>")`, where `<sort-key>` is either an ISO timestamp or a
- * numeric sequence depending on the list.
- */
+/** Keyset cursor codec encoding `<sort-key>|<id>` into base64url. */
 
 export interface KeyedCursor {
   readonly sortKey: string;

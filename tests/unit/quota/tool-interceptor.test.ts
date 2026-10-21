@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { interceptToolCall } from '@/quota/application/tool-interceptor.ts';
 
-/**
- * Tool interception tests (phase-3 plan Task 3.6.4): a model attempting an image-generation
- * tool call with insufficient quota is intercepted with a synthetic error tool_result — the
- * provider's billing endpoint is never reached.
- */
+/** Tests tool call quota interception before provider billing execution. */
 describe('interceptToolCall (pre-execution tool quota gate)', () => {
   it('allows a tariffed tool when remaining quota covers the tariff', () => {
     const verdict = interceptToolCall('image_generation', 3_500);

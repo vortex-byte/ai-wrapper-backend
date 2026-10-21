@@ -50,15 +50,7 @@ export interface UploadedInputFile {
   readonly providerFileId: string;
 }
 
-/**
- * The adapter contract every provider implements. Owned by the consumers
- * (`generations/`, `orchestrator/`) and implemented under `providers/adapters/<name>/`.
- *
- * Rules:
- * - config and secrets arrive by injection; adapters never read env or the DB;
- * - `execute` MUST honor `signal` and MUST emit exactly one terminal event;
- * - adapters never persist anything and never touch storage.
- */
+/** Provider adapter contract implemented by each upstream model provider. */
 export interface ProviderAdapter {
   readonly adapterKey: string;
 
@@ -73,20 +65,13 @@ export interface ProviderAdapter {
 
   healthCheck(ctx: HealthCheckContext): Promise<HealthCheckResult>;
 
-  /**
-   * Downloads a provider-generated file (Anthropic/OpenAI Files API) so the `ArtifactSink`
-   * can persist it locally. Optional: adapters without a Files API simply omit it, and the
-   * orchestrator marks the file part failed.
-   */
+  /** Downloads a provider-generated artifact file stream. */
   fetchArtifactStream?(
     providerFileId: string,
     ctx: FilesApiContext,
   ): Promise<ProviderArtifact>;
 
-  /**
-   * Uploads an input binary to the provider's Files API so it can be mounted into the cloud
-   * container (Anthropic `container_upload`, OpenAI `purpose: "responses"`). Optional.
-   */
+  /** Uploads an input file to the provider's file storage API for container mounting. */
   uploadInputFile?(
     file: InputFileUpload,
     ctx: FilesApiContext,

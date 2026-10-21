@@ -53,9 +53,17 @@ describe('login', () => {
   it('refuses a locked account even with the correct password', async () => {
     const harness = createHarness();
     harness.users.seed(makeUser({ lockedUntil: new Date('2026-05-01T10:05:00Z') }));
+    let verifyCalled = false;
+    const originalVerify = harness.deps.hasher.verify.bind(harness.deps.hasher);
+    harness.deps.hasher.verify = async (plain, hash) => {
+      verifyCalled = true;
+      return originalVerify(plain, hash);
+    };
+
     await expectUnauthenticated(() =>
       login(harness.deps, { email: 'ada@corp.example', password: CORRECT, meta }),
     );
+    expect(verifyCalled).toBe(true);
     expect(harness.audit.entries[0]?.after).toEqual({ reason: 'locked' });
     expect(harness.sessions.rows.size).toBe(0);
   });

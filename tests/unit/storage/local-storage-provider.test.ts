@@ -63,6 +63,18 @@ describe('LocalStorageProvider', () => {
     expect(await new Response(result.stream).text()).toBe('234');
   });
 
+  it('rejects range requests starting past the end of the blob with invalid_request', async () => {
+    const { provider } = await makeProvider();
+    await provider.putStream('files/2026-10/r', new TextEncoder().encode('0123456789'), {
+      contentType: 'text/plain',
+      maxBytes: 1024,
+    });
+
+    await expect(provider.getStream('files/2026-10/r', { start: 100 })).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+  });
+
   it('replaces an existing blob and leaves no temp file behind', async () => {
     const { provider, root } = await makeProvider();
     const options = { contentType: 'text/plain', maxBytes: 1024 };

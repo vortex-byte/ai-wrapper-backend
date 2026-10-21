@@ -1,6 +1,6 @@
 import { AUDIT_ACTIONS } from '../audit/actions.ts';
 import { DrizzleAuditLogRepository } from '../audit/infrastructure/drizzle-audit-log-repository.ts';
-import { generateTemporaryPassword } from '../admin/domain/password-generator.ts';
+import { generateTemporaryPassword } from '../crypto.ts';
 import { passwordProblemMessage, validatePassword } from '../auth/domain/password-policy.ts';
 import { BunPasswordHasher } from '../auth/infrastructure/bun-password-hasher.ts';
 import { DrizzleSessionRepository } from '../auth/infrastructure/drizzle-session-repository.ts';

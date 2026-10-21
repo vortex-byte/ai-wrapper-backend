@@ -8,10 +8,7 @@ export interface SubscriberOptions {
 
 const DEFAULT_MAX_QUEUE_BYTES = 1024 * 1024;
 
-/**
- * One connected SSE stream, exposed as an `AsyncIterable`. Kicks the subscriber when backpressure
- * exceeds `maxQueueBytes` so a slow client cannot grow node memory.
- */
+/** Connected SSE stream subscriber queue with bounded backpressure. */
 export class Subscriber implements AsyncIterable<SSEFrame> {
   readonly id: string;
   private readonly maxQueueBytes: number;

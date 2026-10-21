@@ -5,13 +5,7 @@ import type { AppEnv } from '../types.ts';
 import { readSessionToken } from './session-cookie.ts';
 import type { Config } from '@/config/index.ts';
 
-/**
- * Requires a valid session cookie and attaches the caller to the request context.
- *
- * The session is validated against the database on every request (no cache), so a
- * disabled user or a revoked session is rejected immediately. Anything
- * missing, unknown, expired or revoked → `401 unauthenticated`.
- */
+/** Authenticates session cookie and attaches authenticated context to request environment. */
 export function requireAuth(auth: AuthService, config: Config): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const token = readSessionToken(c, config);

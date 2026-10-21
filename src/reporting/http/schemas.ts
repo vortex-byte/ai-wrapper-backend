@@ -14,8 +14,6 @@ export const UsageQuerySchema = z.object({
   groupBy: UsageGroupBySchema.default('day'),
 });
 
-export const UsageExportQuerySchema = UsageQuerySchema;
-
 export const ListQuerySchema = z.object({
   from: ISO_DATE.optional(),
   to: ISO_DATE.optional(),

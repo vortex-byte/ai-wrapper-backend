@@ -14,11 +14,7 @@ export interface ModelRoutesDeps {
   readonly config: Config;
 }
 
-/**
- * `GET /api/models`. Returns only models the caller may pick for a
- * new conversation — active models on enabled providers. Read-only: no CSRF, but still requires a signed-in user with a
- * completed password change.
- */
+/** Model listing endpoint for authenticated users. */
 export function modelRoutes(deps: ModelRoutesDeps): Hono<AppEnv> {
   const { registry, auth, config } = deps;
   const routes = new Hono<AppEnv>();

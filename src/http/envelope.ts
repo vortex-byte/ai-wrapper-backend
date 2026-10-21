@@ -1,9 +1,6 @@
 import { AppError, HTTP_ERRORS, isAppError, type ErrorCode } from '../errors.ts';
 
-/**
- * The wire envelope. These builders are pure so they
- * can be unit-tested without an HTTP context; routes serialise them with `c.json`.
- */
+/** Standard wire envelope builders for API responses. */
 
 export interface SuccessEnvelope<T> {
   readonly status: 'ok';
@@ -60,11 +57,7 @@ export function errorEnvelope(input: ErrorEnvelopeInput): ErrorEnvelope {
   return body;
 }
 
-/**
- * Turn an unknown thrown value into an error envelope. `includeTrace` is true only
- * when `NODE_ENV=development`; the trace is the message only (never the raw stack
- * of a provider/SQL error) and is sanitised by the caller.
- */
+/** Maps an error to a structured error envelope. */
 export function envelopeFromError(
   error: unknown,
   options: { includeTrace: boolean; trace?: string | undefined } = { includeTrace: false },

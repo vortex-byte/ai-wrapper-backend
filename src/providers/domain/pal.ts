@@ -1,10 +1,4 @@
-/**
- * Provider Abstraction Layer (PAL) — the single normalized vocabulary shared by the
- * orchestrator, the context builder and every adapter.
- *
- * Pure types only: no I/O, no Drizzle, no provider SDKs, nothing from outside `domain/`.
- * Adapters translate to and from these shapes.
- */
+/** Provider Abstraction Layer (PAL) normalized vocabulary shared by orchestrator and adapters. */
 
 /** A binary the platform has resolved for this request. Bytes are fetched lazily. */
 export interface ResolvedFile {
@@ -72,10 +66,7 @@ export interface TokenUsage {
   readonly source: 'provider' | 'estimated';
 }
 
-/**
- * Adapter output stream. Exactly one terminal event (`finished` or `error`) is emitted
- * per execution.
- */
+/** Generation event stream emitted by provider adapters. */
 export type GenerationEvent =
   | { readonly type: 'started'; readonly providerRequestId?: string }
   | {
@@ -108,21 +99,13 @@ export type GenerationEvent =
       readonly fileIds?: readonly string[];
     }
   | {
-      /**
-       * A binary the platform must hydrate: the sink downloads it via the adapter, persists it,
-       * and links the `attachments` row to the message part. `providerFileId` is the provider's
-       * own file handle.
-       */
+      /** Emitted when an artifact must be downloaded and hydrated into storage. */
       readonly type: 'artifact_emitted';
       readonly providerFileId: string;
       readonly filename: string;
       readonly mimeType?: string;
       readonly sizeBytes?: number;
-      /**
-       * Inline bytes for providers that return the binary in the response instead of a
-       * downloadable handle (the hosted image tool returns base64). When present the sink stores
-       * these directly and never downloads.
-       */
+      /** In-band bytes for inline artifacts (bypasses remote download). */
       readonly bytes?: Uint8Array;
       /** Index of the `part_started` this artifact belongs to, when the provider gives one. */
       readonly index?: number;

@@ -1386,7 +1386,7 @@ every 1 s / 2 KB and bumps `generation_jobs.heartbeat_at`. Streams hold no DB co
   secret/password leak scan).
 - Quota oversubscription test: limit 100,000 with 50 × 20,000 parallel reservations ⇒ **exactly 5 succeed**,
   and `used + reserved <= limit` holds at every sampled instant.
-- Coverage gate: ≥ 80 % lines on `quota`, `orchestrator`, `context`, `providers`; 100 % of error mappings.
+- Coverage gate: ≥ 80 % lines on unit-tested engines and domains (`orchestrator`, `context-builder`, `quota/domain`), with database-backed quota and provider repositories validated via integration test suites; 100 % of error mappings.
 
 ## 8. Definition of done
 

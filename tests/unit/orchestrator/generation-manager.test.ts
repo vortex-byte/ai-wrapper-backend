@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { GenerationManager } from '@/orchestrator/generation-manager.ts';
 import { FakeProvider } from '@/providers/infrastructure/fake/fake-provider.ts';
 import { loadConfig } from '@/config/env.ts';
+import type { ProviderAdapter } from '@/providers/ports/provider-adapter.ts';
 import type { ProviderRegistry } from '@/providers/ports/provider-registry.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
-import type { GenerationRecord } from '@/generations/ports/generation-repository.ts';
+import type {
+  GenerationRecord,
+  GenerationRepository,
+} from '@/generations/ports/generation-repository.ts';
+import type { Finalizer } from '@/generations/application/finalizer.ts';
 import { captureLogs } from '../../helpers/capture-logs.ts';
 
 function createDummyRequest(): NormalizedChatRequest {
@@ -239,6 +244,76 @@ describe('GenerationManager', () => {
     }
   });
 
+  it('proves liveness on the DB when the run streams no text (reaper must not see it as stale)', async () => {
+    vi.useFakeTimers();
+    try {
+      const touched: string[] = [];
+      const repo = {
+        markGenerating: async () => {},
+        touchHeartbeat: async (generationId: string) => {
+          touched.push(generationId);
+        },
+      } as unknown as GenerationRepository;
+      const finalizations: Array<{ generationId: string; status: string }> = [];
+      const finalizer = {
+        finalize: async (input: { generationId: string; status: string }) => {
+          finalizations.push({ generationId: input.generationId, status: input.status });
+          return true;
+        },
+      } as unknown as Finalizer;
+      // An adapter that streams nothing until the run is aborted (model thinking, tool work).
+      const silentAdapter = {
+        adapterKey: 'silent',
+        execute: () => ({
+          [Symbol.asyncIterator]: () => ({
+            next: () => new Promise<never>(() => {}),
+          }),
+        }),
+      } as unknown as ProviderAdapter;
+      const silentRegistry: ProviderRegistry = {
+        register: () => {},
+        get: () => silentAdapter,
+        has: () => true,
+        keys: () => ['silent'],
+      };
+
+      const config = loadConfig({
+        DATABASE_URL: 'postgresql://aichat:changeme@127.0.0.1:5432/aichat_test',
+        SESSION_SECRET: '01234567890123456789012345678901',
+        NODE_ENV: 'test',
+      });
+      const manager = new GenerationManager({
+        providerRegistry: silentRegistry,
+        clock,
+        idGen,
+        config,
+        generationRepo: repo,
+        finalizer,
+      });
+
+      manager.enqueue({
+        generation: createDummyRecord('gen-hb'),
+        userMessageId: 'm-user',
+        assistantMessageId: 'm-assistant',
+        chatRequest: createDummyRequest(),
+        contextInfo: { truncated: false },
+      });
+
+      // Default heartbeat interval is 15 s: after one beat the DB heartbeat must have been
+      // touched even though no text was buffered (the checkpointer flush is a no-op).
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(touched).toContain('gen-hb');
+
+      manager.cancel('gen-hb', 'user_cancel');
+      await vi.advanceTimersByTimeAsync(50);
+      expect(finalizations).toHaveLength(1);
+      expect(finalizations[0]?.status).toBe('cancelled');
+      expect(manager.activeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('cancels active generation when requested', () => {
     const config = loadConfig({
       DATABASE_URL: 'postgresql://aichat:changeme@127.0.0.1:5432/aichat_test',
@@ -265,5 +340,50 @@ describe('GenerationManager', () => {
 
     const unknownCancel = manager.cancel('unknown');
     expect(unknownCancel).toBe(false);
+  });
+
+  it('enforces provider-level maxConcurrency when configured', () => {
+    const config = loadConfig({
+      DATABASE_URL: 'postgresql://aichat:changeme@127.0.0.1:5432/aichat_test',
+      SESSION_SECRET: '01234567890123456789012345678901',
+      NODE_ENV: 'test',
+    });
+    const manager = new GenerationManager({
+      providerRegistry,
+      clock,
+      idGen,
+      config,
+    });
+
+    const cappedRequest: NormalizedChatRequest = {
+      ...createDummyRequest(),
+      provider: {
+        providerId: 'p-capped',
+        key: 'capped-provider',
+        adapter: 'fake',
+        config: { maxConcurrency: 1 },
+        secrets: {},
+      },
+    };
+
+    manager.enqueue({
+      generation: createDummyRecord('gen-capped-1'),
+      userMessageId: 'm-user',
+      assistantMessageId: 'm-assistant',
+      chatRequest: cappedRequest,
+      contextInfo: { truncated: false },
+    });
+
+    expect(() =>
+      manager.enqueue({
+        generation: createDummyRecord('gen-capped-2'),
+        userMessageId: 'm-user-2',
+        assistantMessageId: 'm-assistant-2',
+        chatRequest: cappedRequest,
+        contextInfo: { truncated: false },
+      }),
+    ).toThrowError(/Provider concurrency limit reached/);
+
+    manager.cancel('gen-capped-1');
   });
 });

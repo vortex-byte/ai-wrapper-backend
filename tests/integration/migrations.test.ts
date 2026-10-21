@@ -4,10 +4,7 @@ import { runMigrations } from '@/db/migrate.ts';
 import { getMigrationState } from '@/db/migrations.ts';
 import { resetDatabase } from './helpers/reset.ts';
 
-/**
- * Requires a real PostgreSQL (TEST_DATABASE_URL). The DB is never mocked for schema
- * and transaction behaviour.
- */
+/** Integration tests for migration baseline and triggers against real PostgreSQL. */
 describe('migration baseline', () => {
   beforeAll(async () => {
     await runMigrations();
@@ -79,12 +76,7 @@ describe('migration baseline', () => {
   });
 
   describe('conversation model lock', () => {
-    /**
-     * The shared reset runs after *every* case so a failing assertion can never leak fixture
-     * rows into the next test (which is what made this suite cascade on the first failing run).
-     * The previous inline `DELETE ... WHERE key LIKE 'm-%'` cleanups were both fragile and too
-     * broad — they could delete another file's fixtures.
-     */
+    /** Resets database state between tests to prevent fixture leakage. */
     afterEach(async () => {
       await resetDatabase();
     });

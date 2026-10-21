@@ -6,6 +6,7 @@ import type { ConversationRepository } from '@/conversations/ports/conversation-
 import {
   FILE_LIMITS,
   detectUploadKind,
+  isAttachmentValidationError,
   sanitizeDisplayName,
   validateUpload,
   type Attachment,
@@ -129,11 +130,19 @@ export class AttachmentService {
       throw new AppError('unsupported_file_type');
     }
 
-    const validation = validateUpload({
-      kind,
-      bytes: input.bytes,
-      declaredMime: input.declaredMime,
-    });
+    let validation;
+    try {
+      validation = validateUpload({
+        kind,
+        bytes: input.bytes,
+        declaredMime: input.declaredMime,
+      });
+    } catch (err) {
+      if (isAttachmentValidationError(err)) {
+        throw new AppError(err.code, err.message, { status: err.status, retryable: err.retryable });
+      }
+      throw err;
+    }
 
     const id = this.idGen.uuidv7();
     const key = storageKeyFor(this.clock, this.idGen);
@@ -193,17 +202,7 @@ export class AttachmentService {
     return toView(attachment, extraction);
   }
 
-  /**
-   * Turns uploads into parts for the context builder: images stay images, everything else becomes
-   * a document part carrying the extracted text, so history stays readable without the binary.
-   *
-   * Ownership-scoped: an id that isn't the caller's is `404`. Bytes are read lazily through the
-   * storage port, so a part costs nothing until an adapter asks for them.
-   *
-   * `conversationId` pins the file to the conversation being written, so a guessed id cannot leak
-   * content across threads. `requireUnbound` rejects a file already linked to a message: the send
-   * path sets it, the retry path does not, because its files are bound to the message it retries.
-   */
+  /** Resolves upload records into message parts for context building, validating ownership and conversation binding. */
   async resolveParts(
     fileIds: readonly string[],
     userId: string,
@@ -269,12 +268,7 @@ export class AttachmentService {
     };
   }
 
-  /**
-   * Content stream for the owner. Rejects tombstoned/expired rows with 404.
-   * Byte ranges (RFC 7233): `{start, end?}` for prefix ranges, `{suffixLength}`
-   * for the last-N form. The response always carries concrete start/end/total
-   * so the HTTP layer can emit a correct `Content-Range`.
-   */
+  /** Content stream for the owner with byte-range support. Emits start, end, and total bounds. */
   async getContent(
     attachmentId: string,
     userId: string,
@@ -354,10 +348,7 @@ export class AttachmentService {
     };
   }
 
-  /**
-   * Re-reads the stored bytes for extraction. The upload path could inline them,
-   * but routing through the port keeps extraction usable from retry jobs too.
-   */
+  /** Reads stored attachment bytes from storage for text extraction. */
   private async readStoredBytes(attachment: Attachment): Promise<Uint8Array> {
     const result = await this.storage.getStream(attachment.storageKey);
     const chunks: Uint8Array[] = [];

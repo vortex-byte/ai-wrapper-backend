@@ -8,10 +8,7 @@ export interface RingBufferOptions {
 const DEFAULT_MAX_EVENTS = 2000;
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 
-/**
- * Retains SSE events for replay on reconnect and assigns monotonic sequence ids. Oldest frames
- * roll off once the event-count or byte-size cap is reached.
- */
+/** In-memory ring buffer retaining SSE frames for reconnect replay. */
 export class RingBuffer {
   private readonly maxEvents: number;
   private readonly maxBytes: number;

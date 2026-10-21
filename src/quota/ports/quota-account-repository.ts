@@ -1,11 +1,6 @@
 import type { TransactionContext } from '@/db/tx.ts';
 
-/**
- * Persistence for the quota accounting aggregate.
- *
- * Every method takes the caller's `TransactionContext`: reservation runs inside the send
- * transaction, settlement inside the finalizer transaction.
- */
+/** Persistence port for quota accounts, reservations, and ledger records. */
 
 export interface QuotaAccountRow {
   readonly id: string;
@@ -42,7 +37,8 @@ export type LedgerEntryType =
   | 'release'
   | 'expire_release'
   | 'adjust'
-  | 'grant';
+  | 'grant'
+  | 'rebase';
 
 export interface LedgerAppendInput {
   readonly userId: string;
@@ -112,10 +108,7 @@ export interface QuotaAccountRepository {
     tx: TransactionContext,
   ): Promise<void>;
 
-  /**
-   * Locks the reservation row for a generation.
-   * Returns null when absent; caller no-ops when status ≠ 'active' (idempotency).
-   */
+  /** Locks reservation row for a generation in settlement transactions. */
   lockReservationForGeneration(
     generationId: string,
     tx: TransactionContext,

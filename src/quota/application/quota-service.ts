@@ -1,8 +1,10 @@
+import type { AuditLogRepository } from '@/audit/ports/audit-log-repository.ts';
 import { withTransaction, type TransactionContext } from '@/db/tx.ts';
 import { AppError } from '@/errors.ts';
 import { periodEndFor, periodStartFor } from '../domain/timezone.ts';
 import { resolvePolicy, type QuotaPolicyRow, type ResolvedPolicy } from '../domain/policy.ts';
 import type { QuotaAccountRepository } from '../ports/quota-account-repository.ts';
+import type { UsageRepository } from '../ports/usage-repository.ts';
 import type {
   PolicyScope,
   QuotaPolicyRepository,
@@ -30,6 +32,8 @@ export interface AdjustmentResult {
 export interface QuotaServiceDeps {
   readonly accounts: QuotaAccountRepository;
   readonly policies: QuotaPolicyRepository;
+  readonly usage?: UsageRepository | undefined;
+  readonly audit?: AuditLogRepository | undefined;
   readonly idGen: () => string;
   readonly quotaTimezone: string;
 }
@@ -45,19 +49,26 @@ export interface PolicyUpdateInput {
     readonly allowedModelIds?: readonly string[] | null | undefined;
   };
   readonly applyToCurrentPeriod: boolean;
-  readonly reason: string | undefined;
-  readonly actorUserId: string | null;
+  readonly reason?: string | undefined;
+  readonly actorUserId?: string | null | undefined;
+  readonly requestId?: string | null | undefined;
+  readonly ip?: string | null | undefined;
+  readonly userAgentHash?: string | null | undefined;
 }
 
 export class QuotaService {
   private readonly accounts: QuotaAccountRepository;
   private readonly policies: QuotaPolicyRepository;
+  private readonly usage?: UsageRepository | undefined;
+  private readonly audit?: AuditLogRepository | undefined;
   private readonly idGen: () => string;
   private readonly quotaTimezone: string;
 
   constructor(deps: QuotaServiceDeps) {
     this.accounts = deps.accounts;
     this.policies = deps.policies;
+    this.usage = deps.usage;
+    this.audit = deps.audit;
     this.idGen = deps.idGen;
     this.quotaTimezone = deps.quotaTimezone;
   }
@@ -101,10 +112,13 @@ export class QuotaService {
     };
   }
 
-  async resolvePolicyFor(userId: string): Promise<ResolvedPolicy> {
-    const userPolicy = await this.policies.findPolicy('user', userId);
-    const globalPolicy = await this.policies.findPolicy('global', null);
-    return resolvePolicy(userPolicy, null, globalPolicy);
+  async resolvePolicyFor(userId: string, tx?: TransactionContext): Promise<ResolvedPolicy> {
+    const userPolicy = await this.policies.findPolicy('user', userId, tx);
+    const divisionId = this.usage !== undefined ? await this.usage.userDivisionId(userId, tx) : null;
+    const divisionPolicy =
+      divisionId !== null ? await this.policies.findPolicy('division', divisionId, tx) : null;
+    const globalPolicy = await this.policies.findPolicy('global', null, tx);
+    return resolvePolicy(userPolicy, divisionPolicy, globalPolicy);
   }
 
   async listLedger(
@@ -127,56 +141,107 @@ export class QuotaService {
   }
 
   async updatePolicy(input: PolicyUpdateInput): Promise<QuotaPolicyRow> {
-    const existing = await this.policies.findPolicy(input.scope, input.targetId);
-    const upsert: UpsertPolicyInput = {
-      id: this.idGen(),
-      scope: input.scope,
-      divisionId: input.scope === 'division' ? input.targetId : null,
-      userId: input.scope === 'user' ? input.targetId : null,
-      monthlyTokens: input.fields.monthlyTokens ?? existing?.monthlyTokens ?? null,
-      maxInputTokensPerRequest:
-        input.fields.maxInputTokensPerRequest ?? existing?.maxInputTokensPerRequest ?? null,
-      maxOutputTokensPerRequest:
-        input.fields.maxOutputTokensPerRequest ?? existing?.maxOutputTokensPerRequest ?? null,
-      maxConcurrentGenerations:
-        input.fields.maxConcurrentGenerations ?? existing?.maxConcurrentGenerations ?? null,
-      allowedModelIds:
-        input.fields.allowedModelIds !== undefined
-          ? input.fields.allowedModelIds
-          : existing?.allowedModelIds ?? null,
-      updatedBy: input.actorUserId,
-    };
-
     return withTransaction(async (tx: TransactionContext) => {
+      const existing = await this.policies.findPolicy(input.scope, input.targetId, tx);
+      const upsert: UpsertPolicyInput = {
+        id: existing?.id ?? this.idGen(),
+        scope: input.scope,
+        divisionId: input.scope === 'division' ? input.targetId : null,
+        userId: input.scope === 'user' ? input.targetId : null,
+        monthlyTokens:
+          input.fields.monthlyTokens !== undefined
+            ? input.fields.monthlyTokens
+            : existing?.monthlyTokens ?? null,
+        maxInputTokensPerRequest:
+          input.fields.maxInputTokensPerRequest !== undefined
+            ? input.fields.maxInputTokensPerRequest
+            : existing?.maxInputTokensPerRequest ?? null,
+        maxOutputTokensPerRequest:
+          input.fields.maxOutputTokensPerRequest !== undefined
+            ? input.fields.maxOutputTokensPerRequest
+            : existing?.maxOutputTokensPerRequest ?? null,
+        maxConcurrentGenerations:
+          input.fields.maxConcurrentGenerations !== undefined
+            ? input.fields.maxConcurrentGenerations
+            : existing?.maxConcurrentGenerations ?? null,
+        allowedModelIds:
+          input.fields.allowedModelIds !== undefined
+            ? input.fields.allowedModelIds
+            : existing?.allowedModelIds ?? null,
+        updatedBy: input.actorUserId ?? null,
+      };
+
       const saved = await this.policies.upsertPolicy(upsert, tx);
 
       if (input.applyToCurrentPeriod && upsert.monthlyTokens !== null) {
         const now = new Date();
-        const accounts = await this.accounts.listCurrentAccounts(now, 10_000, tx);
-        for (const account of accounts) {
-          const inherits = await this.accountInherits(account.userId, input.scope, input.targetId, tx);
-          if (!inherits) continue;
-          const oldLimit = account.baseLimitTokens;
-          const newLimit = upsert.monthlyTokens;
-          if (oldLimit === newLimit) continue;
-          await this.accounts.adjustLimit(account.id, newLimit - oldLimit, 'base', tx);
-          const updated = await this.accounts.findCurrentAccount(account.userId, now, tx);
-          await this.accounts.appendLedger(
-            {
-              userId: account.userId,
-              accountId: account.id,
-              generationId: null,
-              entryType: 'adjust',
-              tokensDelta: newLimit - oldLimit,
-              usedAfter: updated?.usedTokens ?? account.usedTokens,
-              reservedAfter: updated?.reservedTokens ?? account.reservedTokens,
-              actorUserId: input.actorUserId ?? undefined,
-              reason: input.reason ?? 'Policy update applied to current period',
-            },
-            tx,
-          );
+        if (input.scope === 'user' && input.targetId !== null) {
+          const account = await this.accounts.findCurrentAccount(input.targetId, now, tx);
+          if (account && account.baseLimitTokens !== upsert.monthlyTokens) {
+            const oldLimit = account.baseLimitTokens;
+            const newLimit = upsert.monthlyTokens;
+            await this.accounts.adjustLimit(account.id, newLimit - oldLimit, 'base', tx);
+            const updated = await this.accounts.findCurrentAccount(account.userId, now, tx);
+            await this.accounts.appendLedger(
+              {
+                userId: account.userId,
+                accountId: account.id,
+                generationId: null,
+                entryType: 'rebase',
+                tokensDelta: newLimit - oldLimit,
+                usedAfter: updated?.usedTokens ?? account.usedTokens,
+                reservedAfter: updated?.reservedTokens ?? account.reservedTokens,
+                actorUserId: input.actorUserId ?? undefined,
+                reason: input.reason ?? 'Policy update applied to current period',
+              },
+              tx,
+            );
+          }
+        } else {
+          const accounts = await this.accounts.listCurrentAccounts(now, 10_000, tx);
+          for (const account of accounts) {
+            const inherits = await this.accountInherits(account.userId, input.scope, input.targetId, tx);
+            if (!inherits) continue;
+            const oldLimit = account.baseLimitTokens;
+            const newLimit = upsert.monthlyTokens;
+            if (oldLimit === newLimit) continue;
+            await this.accounts.adjustLimit(account.id, newLimit - oldLimit, 'base', tx);
+            const updated = await this.accounts.findCurrentAccount(account.userId, now, tx);
+            await this.accounts.appendLedger(
+              {
+                userId: account.userId,
+                accountId: account.id,
+                generationId: null,
+                entryType: 'rebase',
+                tokensDelta: newLimit - oldLimit,
+                usedAfter: updated?.usedTokens ?? account.usedTokens,
+                reservedAfter: updated?.reservedTokens ?? account.reservedTokens,
+                actorUserId: input.actorUserId ?? undefined,
+                reason: input.reason ?? 'Policy update applied to current period',
+              },
+              tx,
+            );
+          }
         }
       }
+
+      if (this.audit && input.actorUserId) {
+        await this.audit.append(
+          {
+            actorUserId: input.actorUserId,
+            action: 'quota.policy.updated',
+            targetType: 'quota_policy',
+            targetId: `${input.scope}:${input.targetId ?? 'global'}`,
+            before: existing,
+            after: saved,
+            requestId: input.requestId ?? null,
+            ip: input.ip ?? null,
+            userAgentHash: input.userAgentHash ?? null,
+          },
+          tx,
+        );
+      }
+
       return saved;
     });
   }
@@ -235,6 +300,14 @@ export class QuotaService {
     }
     const now = new Date();
     return withTransaction(async (tx: TransactionContext) => {
+      const userExists = await tx.client.query<{ id: string }>(
+        `SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL`,
+        [input.userId],
+      );
+      if (userExists.rows.length === 0) {
+        throw new AppError('not_found', 'User not found.');
+      }
+
       let account = await this.accounts.findCurrentAccount(input.userId, now, tx);
       if (account === null) {
         const policy = await this.resolvePolicyFor(input.userId);

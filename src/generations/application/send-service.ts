@@ -16,11 +16,11 @@ import type { AttachmentService } from '@/attachments/application/attachment-ser
 import type { AttachmentRepository } from '@/attachments/ports/attachment-repository.ts';
 import type { Attachment, ResolvedAttachmentPart } from '@/attachments/domain/attachment.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import { validatePartsForModel } from '@/providers/domain/capability-validation.ts';
+import type { SettingsService } from '@/settings/application/settings-service.ts';
+import type { Finalizer } from './finalizer.ts';
 
-/**
- * Translates attachment-domain parts into PAL parts. Glue lives in the use case, not in
- * `attachments/`, which must not know provider vocabulary.
- */
+/** Maps attachment-domain resolved parts into normalized PAL parts. */
 function toPalParts(parts: readonly ResolvedAttachmentPart[]): NormalizedPart[] {
   return parts.map((part) =>
     part.type === 'image'
@@ -45,6 +45,8 @@ export interface SendMessageDeps {
   readonly orchestrator?: GenerationEnqueuer | undefined;
   readonly attachments?: AttachmentService | undefined;
   readonly attachmentRepo?: AttachmentRepository | undefined;
+  readonly finalizer?: Finalizer | undefined;
+  readonly settings?: SettingsService | undefined;
 }
 
 export type SendPartInput =
@@ -108,19 +110,19 @@ export interface SendService {
 const MAX_CONTENT_CHARS = 200_000;
 
 export function createSendService(deps: SendMessageDeps): SendService {
-  /**
-   * Post-commit recovery for a generation the orchestrator refused to enqueue (in-memory capacity
-   * or draining gate). The send transaction already committed, so mark it terminal here rather
-   * than waiting for the reaper sweep.
-   */
+  /** Finalizes a committed generation that could not be enqueued into the orchestrator. */
   const recoverUnenqueuedGeneration = async (generationId: string): Promise<void> => {
     try {
-      await deps.generations.transitionToTerminal({
+      await deps.finalizer?.finalize({
         generationId,
         status: 'failed',
-        errorCategory: 'service_busy',
-        errorDetail: { message: 'The server could not start this generation.', retryable: true },
-        finishedAt: deps.clock.now(),
+        finishReason: 'error',
+        accumulatedText: '',
+        error: {
+          code: 'service_busy',
+          message: 'The server could not start this generation.',
+          retryable: true,
+        },
       });
     } catch {
       // Best-effort: the reaper remains the backstop if this write fails too.
@@ -201,6 +203,15 @@ export function createSendService(deps: SendMessageDeps): SendService {
         ...resolvedAttachmentParts,
       ];
 
+      const capabilityCheck = validatePartsForModel(model.capabilities, newParts);
+      if (!capabilityCheck.ok) {
+        throw new AppError(
+          'unsupported_for_model',
+          `Content not supported by model: ${capabilityCheck.violation}`,
+          { details: { violation: capabilityCheck.violation } },
+        );
+      }
+
       if (deps.orchestrator?.isDraining) {
         throw new AppError('service_busy', 'Server is shutting down.', {
           details: { retryAfterSeconds: 5 },
@@ -249,7 +260,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           { conversationId: conversation.id, limit: 200, before: null },
           tx,
         );
-        const platformSystemPrompt = await readPlatformSystemPrompt();
+        const platformSystemPrompt = await readPlatformSystemPrompt(deps.settings);
         const maxOutputTokens = clampMaxOutputTokens(
           input.options?.maxOutputTokens,
           model.defaultMaxOutputTokens,
@@ -438,6 +449,11 @@ export function createSendService(deps: SendMessageDeps): SendService {
           );
         }
 
+        const modelTimeoutMs =
+          typeof model.config['timeoutMs'] === 'number' && model.config['timeoutMs'] > 0
+            ? (model.config['timeoutMs'] as number)
+            : undefined;
+
         enqueuePayload = {
           generation,
           userMessageId: userMessage.id,
@@ -447,6 +463,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
             truncated: built.truncation.truncated,
             droppedMessageCount: built.truncation.droppedMessageCount,
           },
+          ...(modelTimeoutMs !== undefined ? { timeoutMs: modelTimeoutMs } : {}),
         };
 
         const payload: SendMessagePayload = {
@@ -591,6 +608,15 @@ export function createSendService(deps: SendMessageDeps): SendService {
         ...resolvedFileParts,
       ];
 
+      const retryCapabilityCheck = validatePartsForModel(model.capabilities, userParts);
+      if (!retryCapabilityCheck.ok) {
+        throw new AppError(
+          'unsupported_for_model',
+          `Content not supported by model: ${retryCapabilityCheck.violation}`,
+          { details: { violation: retryCapabilityCheck.violation } },
+        );
+      }
+
       const requestHash = createHash('sha256')
         .update(JSON.stringify({ retryUserMessageId: input.userMessageId, options: input.options }))
         .digest('hex');
@@ -634,7 +660,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           },
           tx,
         );
-        const platformSystemPrompt = await readPlatformSystemPrompt();
+        const platformSystemPrompt = await readPlatformSystemPrompt(deps.settings);
         const maxOutputTokens = clampMaxOutputTokens(
           input.options?.maxOutputTokens,
           model.defaultMaxOutputTokens,
@@ -767,6 +793,11 @@ export function createSendService(deps: SendMessageDeps): SendService {
           generation = { ...generation, maxOutputTokens: effectiveMaxOutput };
         }
 
+        const modelTimeoutMs =
+          typeof model.config['timeoutMs'] === 'number' && model.config['timeoutMs'] > 0
+            ? (model.config['timeoutMs'] as number)
+            : undefined;
+
         enqueuePayload = {
           generation,
           userMessageId: userMsgWithParts.message.id,
@@ -776,6 +807,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
             truncated: built.truncation.truncated,
             droppedMessageCount: built.truncation.droppedMessageCount,
           },
+          ...(modelTimeoutMs !== undefined ? { timeoutMs: modelTimeoutMs } : {}),
         };
 
         const payload: SendMessagePayload = {
@@ -909,6 +941,10 @@ function firstUserText(
   return textParts.map((part) => part.text).join('\n');
 }
 
-async function readPlatformSystemPrompt(): Promise<string | undefined> {
-  return undefined;
+async function readPlatformSystemPrompt(settings?: SettingsService): Promise<string | undefined> {
+  if (!settings) return undefined;
+  const setting = await settings.get<string>('system.prompt');
+  return setting?.value && typeof setting.value === 'string' && setting.value.trim().length > 0
+    ? setting.value.trim()
+    : undefined;
 }

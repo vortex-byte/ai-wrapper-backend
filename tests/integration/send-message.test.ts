@@ -6,6 +6,7 @@ import { DrizzleUserRepository } from '@/auth/infrastructure/drizzle-user-reposi
 import { loadConfig, type Config } from '@/config/index.ts';
 import { closePool, getPool } from '@/db/index.ts';
 import type { MemoryRateLimiter } from '@/http/infrastructure/memory-rate-limiter.ts';
+import { AppError } from '@/errors.ts';
 import { resetDatabase } from './helpers/reset.ts';
 
 const SECRET = 'integration-session-secret-0123456789abcdef';
@@ -456,5 +457,75 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     expect(res2.headers.get('Retry-After')).toBe('5');
     const body2 = (await res2.json()) as { code: string };
     expect(body2.code).toBe('service_busy');
+
+    // This refusal came from the pre-transaction DB count gate: nothing was committed,
+    // so no generation row exists for the second conversation.
+    const { rows: genRows } = await getPool().query(
+      'SELECT id FROM generation_jobs WHERE conversation_id = $1',
+      [convId2],
+    );
+    expect(genRows).toHaveLength(0);
+  });
+
+  it('fully finalizes the committed generation when the in-memory enqueue is refused', async () => {
+    const modelId = await seedActiveModel('fake');
+    await seedUser('ghost1@corp.example');
+    const auth = await loginAs('ghost1@corp.example');
+    const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
+
+    // The DB capacity gate passes but the in-memory orchestrator refuses after the send
+    // transaction committed. The recovery path must run the full finalizer (terminal row,
+    // failed message, released reservation) instead of leaving a ghost `streaming` message.
+    const originalEnqueue = services.orchestrator.enqueue;
+    services.orchestrator.enqueue = () => {
+      throw new AppError('service_busy', 'in-memory capacity refused');
+    };
+    try {
+      const res = await app.request(
+        new Request(`http://localhost/api/conversations/${convId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: auth.cookie,
+            'X-CSRF-Token': auth.csrfToken,
+            'Idempotency-Key': Bun.randomUUIDv7(),
+          },
+          body: JSON.stringify({ parts: [{ type: 'text', text: 'hello' }] }),
+        }),
+      );
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { code: string };
+      expect(body.code).toBe('service_busy');
+    } finally {
+      services.orchestrator.enqueue = originalEnqueue;
+    }
+
+    const pool = getPool();
+    const { rows: genRows } = await pool.query<{ status: string; error_category: string }>(
+      'SELECT status, error_category FROM generation_jobs WHERE conversation_id = $1',
+      [convId],
+    );
+    expect(genRows).toHaveLength(1);
+    expect(genRows[0]?.status).toBe('failed');
+    expect(genRows[0]?.error_category).toBe('service_busy');
+
+    const { rows: msgRows } = await pool.query<{ status: string }>(
+      `SELECT m.status FROM messages m
+         JOIN generation_jobs g ON g.assistant_message_id = m.id
+        WHERE g.conversation_id = $1 AND m.role = 'assistant'`,
+      [convId],
+    );
+    expect(msgRows).toHaveLength(1);
+    expect(msgRows[0]?.status).toBe('failed');
+
+    const { rows: resRows } = await pool.query<{ status: string }>(
+      `SELECT r.status FROM quota_reservations r
+         JOIN generation_jobs g ON g.id = r.generation_id
+        WHERE g.conversation_id = $1`,
+      [convId],
+    );
+    expect(resRows).toHaveLength(1);
+    expect(resRows[0]?.status).toBe('released');
   });
 });

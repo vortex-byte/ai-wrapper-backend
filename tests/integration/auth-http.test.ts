@@ -152,9 +152,19 @@ describe('auth HTTP surface (real PostgreSQL)', () => {
       new Request('http://localhost/api/me', { headers: { Cookie: cookie } }),
     );
     expect(me.status).toBe(200);
-    const body = (await me.json()) as { data: { id: string; createdAt: string } };
+    const body = (await me.json()) as { data: { id: string; createdAt: string; csrfToken: string } };
     expect(body.data.id).toBe(userId);
     expect(typeof body.data.createdAt).toBe('string');
+    expect(typeof body.data.csrfToken).toBe('string');
+    expect(body.data.csrfToken.length).toBeGreaterThan(16);
+
+    const csrfRes = await app.request(
+      new Request('http://localhost/api/auth/csrf', { headers: { Cookie: cookie } }),
+    );
+    expect(csrfRes.status).toBe(200);
+    const csrfBody = (await csrfRes.json()) as { data: { csrfToken: string } };
+    expect(typeof csrfBody.data.csrfToken).toBe('string');
+    expect(csrfBody.data.csrfToken.length).toBeGreaterThan(16);
   });
 
   it('blocks gated endpoints while a password change is required (gate)', async () => {

@@ -31,6 +31,11 @@ export default defineConfig({
       reporter: ['text', 'lcov'],
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.d.ts', 'src/cli/**', 'src/server.ts'],
+      thresholds: {
+        'src/orchestrator/**': { lines: 80 },
+        'src/context-builder/**': { lines: 80 },
+        'src/quota/domain/**': { lines: 80 },
+      },
     },
   },
 });

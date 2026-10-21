@@ -13,7 +13,6 @@ import type { ReportingService } from '../application/reporting-service.ts';
 import {
   AuditSearchQuerySchema,
   ErrorExplorerQuerySchema,
-  UsageExportQuerySchema,
   UsageQuerySchema,
 } from './schemas.ts';
 
@@ -40,7 +39,7 @@ export function reportingRoutes(deps: ReportingRoutesDeps): Hono<AppEnv> {
   });
 
   routes.get('/usage/export', async (c) => {
-    const query = parseQuery(c, UsageExportQuerySchema);
+    const query = parseQuery(c, UsageQuerySchema);
     const csv = await reporting.usageCsv(query);
     const day = new Date().toISOString().slice(0, 10);
     noStore(c);

@@ -1,8 +1,4 @@
-/**
- * Allows the migration CLI to connect using a dedicated migration database role.
- * When `MIGRATION_DATABASE_URL` is set, it overrides `DATABASE_URL` before
- * configuration initialization.
- */
+/** Overrides DATABASE_URL with MIGRATION_DATABASE_URL if present for migrations. */
 export function useMigrationDatabaseUrl(
   source: Record<string, string | undefined> = process.env,
 ): boolean {

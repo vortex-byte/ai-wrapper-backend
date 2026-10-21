@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import type { Context } from 'hono';
 import { getConnInfo } from '@hono/bun';
 import type { Config } from '../config/index.ts';
@@ -12,11 +13,13 @@ export function clientIp(c: Context<AppEnv>, config: Config): string | null {
       const hops = forwarded.split(',').map((part) => part.trim()).filter((p) => p !== '');
       const index = Math.max(0, hops.length - config.TRUST_PROXY);
       const candidate = hops[index];
-      if (candidate !== undefined) return candidate;
+      if (candidate !== undefined && isIP(candidate) !== 0) return candidate;
     }
   }
   try {
-    return getConnInfo(c).remote.address ?? null;
+    const remote = getConnInfo(c).remote.address;
+    if (remote !== undefined && remote !== null && isIP(remote) !== 0) return remote;
+    return null;
   } catch {
     return null;
   }

@@ -17,10 +17,7 @@ export interface ReservationMathInput {
   readonly reservedTokens: number;
   readonly maxOutputTokensPerRequest: number;
   readonly marginOverride?: number | undefined;
-  /**
-   * Fixed token cost of provider-side work billed outside the token stream (e.g. image
-   * generation). Reserved up front, even if the model then declines to use the tool.
-   */
+  /** Fixed synthetic token tariff reserved up front for tool work. */
   readonly toolTokens?: number | undefined;
 }
 

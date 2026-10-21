@@ -1,9 +1,26 @@
-/**
- * Attachment domain: pure types, limits and validation. No I/O — every function works on bytes
- * the caller already holds, and every rejection maps to an `AppError` code.
- */
+/** Attachment domain: limits, formats, content sniffing, and validation. */
 
-import { AppError } from '@/errors.ts';
+export class AttachmentValidationError extends Error {
+  readonly code: 'unsupported_file_type' | 'file_too_large';
+  readonly status: number;
+  readonly retryable: boolean;
+
+  constructor(
+    code: 'unsupported_file_type' | 'file_too_large',
+    message: string,
+    options: { status?: number; retryable?: boolean } = {},
+  ) {
+    super(message);
+    this.name = 'AttachmentValidationError';
+    this.code = code;
+    this.status = options.status ?? (code === 'file_too_large' ? 413 : 415);
+    this.retryable = options.retryable ?? false;
+  }
+}
+
+export function isAttachmentValidationError(value: unknown): value is AttachmentValidationError {
+  return value instanceof AttachmentValidationError;
+}
 
 export type AttachmentOrigin = 'input' | 'generated';
 export type AttachmentKind = 'image' | 'document' | 'other';
@@ -57,12 +74,7 @@ export interface FileExtraction {
   readonly errorCode: string | null;
 }
 
-/**
- * A stored attachment whose bytes are read lazily through the storage port.
- *
- * The attachment module's own vocabulary: it never names provider (PAL) types, so
- * `attachments/` stays independent of `providers/`. The glue layer translates these into parts.
- */
+/** Stored attachment whose bytes are read lazily through the storage port. */
 export interface AttachmentFileRef {
   readonly fileId: string;
   readonly mimeType: string;
@@ -179,10 +191,7 @@ function isUtf8Text(bytes: Uint8Array): boolean {
   return control / Math.max(1, decoded.length) < 0.05;
 }
 
-/**
- * Sniffs the upload kind from the leading bytes. `null` means unsupported — the caller turns
- * that into `415 unsupported_file_type`.
- */
+/** Sniffs the upload kind from magic leading bytes. Returns null if unsupported. */
 export function detectUploadKind(bytes: Uint8Array): SupportedUploadKind | null {
   if (bytes.byteLength === 0) return null;
   if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'png';
@@ -284,16 +293,15 @@ export function probeImageDimensions(
 
 /** Rejects animated GIFs: the MVP renders static images only. */
 export function isAnimatedGif(bytes: Uint8Array): boolean {
-  const head = new TextDecoder('latin1').decode(bytes);
   let count = 0;
-  let index = 0;
-  while ((index = head.indexOf('\x00\x2c', index)) !== -1 && count < 2) {
-    // Image separator is 0x2C preceded by a 0x00 byte in practice; counting raw occurrences
-    // of the separator block header is a safe over-approximation.
-    count += 1;
-    index += 2;
+  for (let i = 0; i < bytes.length - 1; i++) {
+    if (bytes[i] === 0x00 && bytes[i + 1] === 0x2c) {
+      count += 1;
+      if (count > 1) return true;
+      i += 1;
+    }
   }
-  return count > 1;
+  return false;
 }
 
 export interface ZipInspection {
@@ -405,15 +413,28 @@ export interface UploadValidationResult {
   readonly pageCount: number | null;
 }
 
-/**
- * Applies every hardening rule, throwing `AppError` on rejection. Pure and synchronous, so it can
- * run inside the upload request.
- */
+function isMimeCompatible(declared: string, detected: string): boolean {
+  const normDeclared = declared.toLowerCase().split(';')[0]?.trim();
+  const normDetected = detected.toLowerCase().split(';')[0]?.trim();
+  if (!normDeclared || normDeclared === 'application/octet-stream') return true;
+  if (normDeclared === normDetected) return true;
+  if (normDeclared.startsWith('text/') && normDetected?.startsWith('text/')) return true;
+  return false;
+}
+
+/** Validates upload bytes, size limits, dimensions, and MIME consistency. */
 export function validateUpload(request: UploadValidationRequest): UploadValidationResult {
   const { kind, bytes } = request;
 
   if (bytes.byteLength === 0) {
-    throw new AppError('unsupported_file_type', 'The file is empty.');
+    throw new AttachmentValidationError('unsupported_file_type', 'The file is empty.');
+  }
+  const detectedMime = mimeForKind(kind);
+  if (request.declaredMime && !isMimeCompatible(request.declaredMime, detectedMime)) {
+    throw new AttachmentValidationError(
+      'unsupported_file_type',
+      `Declared MIME type "${request.declaredMime}" does not match detected content type "${detectedMime}".`,
+    );
   }
   const perTypeCap =
     kind === 'png' || kind === 'jpeg' || kind === 'webp' || kind === 'gif'
@@ -428,7 +449,7 @@ export function validateUpload(request: UploadValidationRequest): UploadValidati
               ? FILE_LIMITS.perType.csv
               : FILE_LIMITS.perType.text;
   if (bytes.byteLength > perTypeCap) {
-    throw new AppError('file_too_large', 'The file exceeds the size limit for its type.');
+    throw new AttachmentValidationError('file_too_large', 'The file exceeds the size limit for its type.');
   }
 
   // Header bytes only: a pixel bomb must be rejected before anything decodes the image.
@@ -438,17 +459,17 @@ export function validateUpload(request: UploadValidationRequest): UploadValidati
   if (isImage) {
     const dims = probeImageDimensions(kind, bytes);
     if (dims === null) {
-      throw new AppError('unsupported_file_type', 'The image header could not be read.');
+      throw new AttachmentValidationError('unsupported_file_type', 'The image header could not be read.');
     }
     if (
       dims.width > FILE_LIMITS.maxImageDimension ||
       dims.height > FILE_LIMITS.maxImageDimension ||
       dims.width * dims.height > FILE_LIMITS.maxImagePixels
     ) {
-      throw new AppError('unsupported_file_type', 'The image dimensions exceed the limit.');
+      throw new AttachmentValidationError('unsupported_file_type', 'The image dimensions exceed the limit.');
     }
     if (kind === 'gif' && isAnimatedGif(bytes)) {
-      throw new AppError('unsupported_file_type', 'Animated images are not supported.');
+      throw new AttachmentValidationError('unsupported_file_type', 'Animated images are not supported.');
     }
     width = dims.width;
     height = dims.height;
@@ -458,16 +479,16 @@ export function validateUpload(request: UploadValidationRequest): UploadValidati
   if (kind === 'docx' || kind === 'xlsx') {
     const zip = inspectZip(bytes);
     if (zip === null) {
-      throw new AppError(
+      throw new AttachmentValidationError(
         'unsupported_file_type',
         'The document archive is not a valid OOXML file.',
       );
     }
     if (zip.encrypted) {
-      throw new AppError('unsupported_file_type', 'Encrypted documents are not supported.');
+      throw new AttachmentValidationError('unsupported_file_type', 'Encrypted documents are not supported.');
     }
     if (zip.hasMacros) {
-      throw new AppError('unsupported_file_type', 'Macro-enabled documents are not supported.');
+      throw new AttachmentValidationError('unsupported_file_type', 'Macro-enabled documents are not supported.');
     }
     if (
       zip.entries > FILE_LIMITS.zip.maxEntries ||
@@ -476,23 +497,23 @@ export function validateUpload(request: UploadValidationRequest): UploadValidati
         bytes.byteLength > 0 &&
         zip.totalUncompressedBytes / bytes.byteLength > FILE_LIMITS.zip.maxCompressionRatio)
     ) {
-      throw new AppError('file_too_large', 'The document archive exceeds the expansion limits.');
+      throw new AttachmentValidationError('file_too_large', 'The document archive exceeds the expansion limits.');
     }
   }
 
   if (kind === 'pdf') {
     const pdf = inspectPdf(bytes);
     if (pdf.encrypted) {
-      throw new AppError('unsupported_file_type', 'Password-protected PDFs are not supported.');
+      throw new AttachmentValidationError('unsupported_file_type', 'Password-protected PDFs are not supported.');
     }
     if (pdf.hasJavascript) {
-      throw new AppError(
+      throw new AttachmentValidationError(
         'unsupported_file_type',
         'PDFs with embedded JavaScript are not supported.',
       );
     }
     if (pdf.pageCount !== null && pdf.pageCount > FILE_LIMITS.pdfMaxPages) {
-      throw new AppError(
+      throw new AttachmentValidationError(
         'unsupported_file_type',
         `PDFs over ${FILE_LIMITS.pdfMaxPages} pages are not supported.`,
       );
@@ -501,7 +522,7 @@ export function validateUpload(request: UploadValidationRequest): UploadValidati
   }
 
   return {
-    detectedMime: mimeForKind(kind),
+    detectedMime,
     kind: isImage
       ? 'image'
       : kind === 'pdf' || kind === 'docx' || kind === 'xlsx' || kind === 'csv' || kind === 'text'

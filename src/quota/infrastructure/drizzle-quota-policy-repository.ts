@@ -31,7 +31,21 @@ export class DrizzleQuotaPolicyRepository implements QuotaPolicyRepository {
           ? and(eq(quotaPolicies.scope, 'division'), eq(quotaPolicies.divisionId, id))
           : and(eq(quotaPolicies.scope, 'user'), eq(quotaPolicies.userId, id));
 
-    const rows = await runDb(tx).select().from(quotaPolicies).where(predicate).limit(1);
+    const rows = await runDb(tx)
+      .select({
+        id: quotaPolicies.id,
+        scope: quotaPolicies.scope,
+        divisionId: quotaPolicies.divisionId,
+        userId: quotaPolicies.userId,
+        monthlyTokens: quotaPolicies.monthlyTokens,
+        maxInputTokensPerRequest: quotaPolicies.maxInputTokensPerRequest,
+        maxOutputTokensPerRequest: quotaPolicies.maxOutputTokensPerRequest,
+        maxConcurrentGenerations: quotaPolicies.maxConcurrentGenerations,
+        allowedModelIds: quotaPolicies.allowedModelIds,
+      })
+      .from(quotaPolicies)
+      .where(predicate)
+      .limit(1);
     const row = rows[0];
     if (!row) return null;
     return {

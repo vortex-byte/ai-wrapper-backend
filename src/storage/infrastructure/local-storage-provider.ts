@@ -10,14 +10,7 @@ import type {
   StorageProviderPort,
 } from '../ports/storage-provider.ts';
 
-/**
- * Local filesystem implementation of StorageProviderPort.
- *
- * - writes to `<root>/<key>.tmp` then renames — a crash never leaves a half-written final blob;
- * - SHA-256 and size are computed while streaming;
- * - every path is resolved and asserted to stay inside the root (path-traversal guard);
- * - deletes are idempotent.
- */
+/** Local filesystem implementation of StorageProviderPort with atomic writes and path confinement. */
 export class LocalStorageProvider implements StorageProviderPort, StorageHealthProbe {
   readonly kind = 'local';
 
@@ -73,6 +66,11 @@ export class LocalStorageProvider implements StorageProviderPort, StorageHealthP
       await writer.end();
       await fs.rename(tmp, full);
     } catch (err) {
+      try {
+        await writer.end();
+      } catch (cleanupErr) {
+        void cleanupErr;
+      }
       await fs.rm(tmp, { force: true }).catch(() => {});
       if (err instanceof AppError) throw err;
       throw new AppError('storage_unavailable', 'Could not persist the file.', { cause: err });
@@ -103,7 +101,10 @@ export class LocalStorageProvider implements StorageProviderPort, StorageHealthP
           sizeBytes: 0,
         };
       }
-      const start = Math.max(0, Math.min(range.start, stat.size - 1));
+      if (range.start >= stat.size) {
+        throw new AppError('invalid_request', 'Range not satisfiable.');
+      }
+      const start = Math.max(0, range.start);
       const end = range.end !== undefined ? Math.min(range.end, stat.size - 1) : stat.size - 1;
       if (start > end) {
         throw new AppError('invalid_request', 'Invalid byte range.');
@@ -137,12 +138,7 @@ export class LocalStorageProvider implements StorageProviderPort, StorageHealthP
     await fs.rm(full, { force: true });
   }
 
-  /**
-   * Recursive listing under `prefix`, used by the weekly `storage.reconcile` sweep.
-   * Keys are returned relative to the root with `/` separators so they are comparable to
-   * `attachments.storage_key` regardless of platform. A missing root/prefix is an empty
-   * result, not an error; symlinks are skipped (they are neither file nor directory).
-   */
+  /** Lists stored keys recursively under a prefix. */
   async listKeys(prefix: string): Promise<string[]> {
     const base = this.pathFor(prefix);
     const keys: string[] = [];

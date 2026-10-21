@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAdminService } from '@/admin/application/admin-service.ts';
 import { canUpdateUserRoleOrStatus } from '@/admin/domain/last-admin.ts';
-import { generateTemporaryPassword } from '@/admin/domain/password-generator.ts';
+import { generateTemporaryPassword } from '@/crypto.ts';
 import type { Division, DivisionRepository } from '@/admin/ports/division-repository.ts';
 import { createHarness, makeUser } from '../auth/fakes.ts';
 

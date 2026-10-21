@@ -1,8 +1,4 @@
-/**
- * Consumer port for rate limiting.
- * Kept generic so it can be backed by in-memory token buckets (single-node)
- * or Redis (multi-node).
- */
+/** Port for rate limiting checks against defined key, limit, and window. */
 
 export interface RateLimitCheckResult {
   readonly allowed: boolean;

@@ -1,7 +1,4 @@
-/**
- * Synthetic token tariffs for external actions (e.g. image generation, search). Token-native
- * actions are billed by actual consumption.
- */
+/** Fixed synthetic token tariffs for external non-token actions. */
 
 export interface ToolTariff {
   readonly tokens: number;
@@ -18,10 +15,7 @@ export function toolTariff(toolName: string): ToolTariff | null {
   return TOOL_TOKEN_TARIFF[toolName] ?? null;
 }
 
-/**
- * Quota verdict for a prospective tool call. The interceptor compares `tariff.tokens`
- * against remaining quota and either allows the call or substitutes an error tool_result.
- */
+/** Verifies remaining quota against tool tariff. */
 export function checkToolQuota(
   toolName: string,
   remainingTokens: number,

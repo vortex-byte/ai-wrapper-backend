@@ -167,6 +167,51 @@ describe('GenerationRun', () => {
     expect(JSON.parse(terminalFrame!.data)).toEqual({ reason: 'user_cancel' });
   });
 
+  it('handles run-level timeout with finishReason: timeout and generation_timeout error', async () => {
+    const clock = { now: () => new Date() };
+    const idGen = { uuidv7: () => 'part-1' };
+    const adapter = new FakeProvider({ chunkDelayMs: 200, chunks: ['Delayed', ' response'] });
+
+    let finalizedPayload: unknown = null;
+    const run = new GenerationRun({
+      generation: createDummyRecord(),
+      userMessageId: 'm-user',
+      assistantMessageId: 'm-assistant',
+      chatRequest: createDummyRequest(),
+      adapter,
+      contextInfo: { truncated: false },
+      clock,
+      idGen,
+      config: {
+        detachTimeoutSeconds: 60,
+        generationTimeoutMs: 30,
+      },
+      hooks: {
+        onFinalize: async (payload) => {
+          finalizedPayload = payload;
+        },
+      },
+    });
+
+    await run.start();
+
+    expect(run.currentStatus).toBe('failed');
+    const terminalFrame = run.ringBuffer.getAll().find((f) => f.event === 'generation.failed');
+    expect(terminalFrame).toBeDefined();
+    const frameData = JSON.parse(terminalFrame!.data) as { error: { code: string; retryable: boolean } };
+    expect(frameData.error.code).toBe('generation_timeout');
+    expect(frameData.error.retryable).toBe(true);
+
+    expect(finalizedPayload).toMatchObject({
+      status: 'failed',
+      finishReason: 'timeout',
+      error: {
+        code: 'generation_timeout',
+        retryable: true,
+      },
+    });
+  });
+
   it('races signal against iterator.next() so an adapter that ignores abort cannot hang the runner', async () => {
     const clock = { now: () => new Date() };
     const idGen = { uuidv7: () => 'part-1' };

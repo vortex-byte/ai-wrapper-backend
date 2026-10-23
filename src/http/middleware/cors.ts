@@ -8,6 +8,7 @@ const MAX_AGE_SECONDS = '600';
 
 function resolveOrigin(config: Config, origin: string | undefined): string | null {
   if (origin === undefined || origin === '') return null;
+  if (config.NODE_ENV === 'development') return origin;
   return config.ALLOWED_ORIGINS.includes(origin) ? origin : null;
 }
 
@@ -27,7 +28,7 @@ export function cors(config: Config): MiddlewareHandler<AppEnv> {
     }
 
     if (c.req.method === 'OPTIONS') {
-      if (allowed !== null) {
+      if (allowed !== null || config.NODE_ENV === 'development') {
         c.header('Access-Control-Allow-Methods', ALLOWED_METHODS);
         c.header('Access-Control-Allow-Headers', ALLOWED_HEADERS);
         c.header('Access-Control-Max-Age', MAX_AGE_SECONDS);
@@ -40,5 +41,6 @@ export function cors(config: Config): MiddlewareHandler<AppEnv> {
 }
 
 export function isAllowedOrigin(config: Config, origin: string | undefined): boolean {
+  if (config.NODE_ENV === 'development') return true;
   return resolveOrigin(config, origin) !== null;
 }

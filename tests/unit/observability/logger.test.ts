@@ -11,9 +11,14 @@ import {
 import {
   closeLogger,
   createLogger,
+  renderTextLine,
   scrubString,
   serializeLogPayload,
 } from '@/observability/logger.ts';
+
+/** Mirrors the level palette in `logger.ts` (`warn` yellow, `error` red). */
+const LEVEL_COLOR = { warn: '\u001B[33m', error: '\u001B[31m' } as const;
+const ANSI_RESET = '\u001B[0m';
 
 const BASE_ENV = {
   NODE_ENV: 'test',
@@ -112,6 +117,102 @@ describe('serializeLogPayload', () => {
     const serialized = serializeLogPayload({ node }) as { node: Record<string, unknown> };
     expect(serialized.node['id']).toBe('a');
     expect(serialized.node['self']).toBe('[circular]');
+  });
+});
+
+describe('renderTextLine', () => {
+  const base = { ts: '2026-10-22T08:41:44.183Z', level: 'info', msg: 'generation started' } as const;
+
+  it('renders datetime __name__ - level - message - context', () => {
+    const line = renderTextLine(
+      { ...base, generationId: 'gen-1', provider: 'openai' },
+      { name: 'orchestrator', colorize: false },
+    );
+
+    expect(line).toBe(
+      '2026-10-22 08:41:44.183 orchestrator - info  - generation started - generationId=gen-1 provider=openai',
+    );
+  });
+
+  it('omits the context segment when there is no metadata', () => {
+    expect(renderTextLine(base, { name: 'api', colorize: false })).toBe(
+      '2026-10-22 08:41:44.183 api - info  - generation started',
+    );
+  });
+
+  it('sets request ids apart after a pipe and quotes values that need it', () => {
+    const line = renderTextLine(
+      { ...base, path: '/api/generations', note: 'two words', requestId: 'req-1' },
+      { name: 'api', colorize: false },
+    );
+
+    expect(line.endsWith(' | requestId=req-1')).toBe(true);
+    expect(line).toContain('path=/api/generations');
+    expect(line).toContain('note="two words"');
+  });
+
+  it('renders an error after the context, with an indented stack', () => {
+    const serialized = serializeLogPayload({ err: new TypeError('kaboom token=abc123') }) as {
+      err: { stack: string };
+    };
+    const line = renderTextLine(
+      { ...base, level: 'error', generationId: 'gen-2', err: serialized.err },
+      { name: 'api', colorize: false },
+    );
+    const [head, ...rest] = line.split('\n');
+
+    expect(head).toContain('generationId=gen-2');
+    expect(rest[0]).toBe('err="TypeError: kaboom token=[redacted]"');
+    expect(rest[1]).toMatch(/^ {4}TypeError: kaboom token=\[redacted\]$/);
+  });
+
+  it('colors the level per severity and leaves plain output free of ANSI codes', () => {
+    const warn = renderTextLine({ ...base, level: 'warn' }, { name: 'api', colorize: true });
+    const error = renderTextLine({ ...base, level: 'error' }, { name: 'api', colorize: true });
+
+    expect(warn).toContain(`${LEVEL_COLOR.warn}warn${ANSI_RESET}  -`);
+    expect(error).toContain(`${LEVEL_COLOR.error}error${ANSI_RESET} -`);
+    expect(
+      renderTextLine({ ...base, level: 'error' }, { name: 'api', colorize: false }),
+    ).not.toContain('\u001B[');
+  });
+});
+
+describe('createLogger console transport', () => {
+  it('writes plain-text lines to stdout, not JSON, and keeps errors off stderr', async () => {
+    setConfigForTests(configWith({ NODE_ENV: 'development', LOG_TO_FILES: 'false' }));
+    // The console transport caches `console._stdout` at construction, ahead of `process.stdout`.
+    // `_stdout` is not in the public `Console` type, hence the cast.
+    const sink = (console as unknown as { _stdout: NodeJS.WriteStream })._stdout;
+    const writes: string[] = [];
+    const original = sink.write.bind(sink);
+    sink.write = ((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof sink.write;
+
+    try {
+      const logger = createLogger({ fileLogging: false, name: 'test-logger' });
+      logger.info({ generationId: 'gen-1', prompt: 'do not log me' }, 'generation started');
+      logger.error({ err: new Error('kaboom') }, 'generation failed');
+      // Console output is flushed asynchronously by the underlying stream.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      sink.write = original;
+    }
+
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} test-logger - info {2}- generation started - /,
+    );
+    expect(writes[0]).toContain('generationId=gen-1');
+    expect(writes[0]).not.toContain('do not log me');
+    expect(writes[0]).not.toContain('"msg":');
+    expect(writes[0]).not.toContain('timestamp=');
+
+    expect(writes[1]).toContain(' - error - generation failed');
+    expect(writes[1]).toContain('err="Error: kaboom"');
+    expect(writes[1]).toMatch(/\n {4}Error: kaboom/);
   });
 });
 

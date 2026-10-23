@@ -24,6 +24,7 @@ function testConfig(overrides: Record<string, unknown> = {}): Config {
     DATABASE_URL: 'postgresql://x:y@127.0.0.1:5432/aichat_test',
     SESSION_SECRET: SECRET,
     ALLOWED_ORIGINS: ORIGIN,
+    NODE_ENV: 'test',
     ...overrides,
   });
 }
@@ -109,11 +110,25 @@ describe('cors middleware', () => {
     expect(res.headers.get('Access-Control-Max-Age')).toBe('600');
   });
 
-  it('reports allowed origins precisely', () => {
+  it('reports allowed origins precisely in test/production', () => {
     const config = testConfig();
     expect(isAllowedOrigin(config, ORIGIN)).toBe(true);
     expect(isAllowedOrigin(config, 'https://app.corp.example.evil.com')).toBe(false);
     expect(isAllowedOrigin(config, undefined)).toBe(false);
+  });
+
+  it('permits any origin and echoes it in development mode', async () => {
+    const devConfig = testConfig({ NODE_ENV: 'development' });
+    const app = buildApp(devConfig, (a) => {
+      a.get('/api/thing', (c) => c.json({ ok: true }));
+    });
+
+    const res = await app.request('/api/thing', { headers: { Origin: 'http://localhost:5173' } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true');
+    expect(isAllowedOrigin(devConfig, 'http://localhost:5173')).toBe(true);
+    expect(isAllowedOrigin(devConfig, undefined)).toBe(true);
   });
 });
 
@@ -196,6 +211,23 @@ describe('enforceOrigin', () => {
       headers: { Origin: 'https://evil.example' },
     });
     expect(res.status).toBe(403);
+  });
+
+  it('bypasses origin checks in development mode', async () => {
+    const devConfig = testConfig({ NODE_ENV: 'development' });
+    const app = buildApp(devConfig, (a) => {
+      a.use('/api/*', enforceOrigin(devConfig));
+      a.post('/api/thing', (c) => c.json({ ok: true }));
+    });
+
+    const resNoOrigin = await app.request('/api/thing', { method: 'POST' });
+    expect(resNoOrigin.status).toBe(200);
+
+    const resAnyOrigin = await app.request('/api/thing', {
+      method: 'POST',
+      headers: { Origin: 'http://localhost:5173' },
+    });
+    expect(resAnyOrigin.status).toBe(200);
   });
 });
 

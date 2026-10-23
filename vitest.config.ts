@@ -14,9 +14,6 @@ export default defineConfig({
     passWithNoTests: true,
     clearMocks: true,
     restoreMocks: true,
-    // Unit runs never touch the rotating log files; the redaction suite enables them explicitly.
-    // File transports are off; the per-IP/user buckets are raised so a test file's request
-    // volume never trips the production defaults (the limiter itself is unit-tested).
     env: {
       LOG_TO_FILES: 'false',
       RATE_LIMIT_IP_REQUESTS: '100000',

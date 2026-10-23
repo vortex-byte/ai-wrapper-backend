@@ -33,7 +33,6 @@ export function securityHeaders(config: Config): MiddlewareHandler<AppEnv> {
     headers.set('Cross-Origin-Opener-Policy', 'same-origin');
     headers.set('Cross-Origin-Resource-Policy', 'same-origin');
 
-    // A route-level policy wins; the attachment route narrows it to `sandbox`.
     if (headers.get('Content-Security-Policy') === null) {
       headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY);
     }

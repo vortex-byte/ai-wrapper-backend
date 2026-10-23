@@ -56,8 +56,6 @@ function boot(): void {
     const drainMs = config.SHUTDOWN_DRAIN_SECONDS * 1_000;
     logger.info({ signal, drainSeconds: config.SHUTDOWN_DRAIN_SECONDS }, 'shutting down');
 
-    // Allow probes observing /readyz (poll interval ~2s) to observe the transition
-    // before stopping the HTTP listener.
     if (server) {
       await Bun.sleep(2000);
       server.stop();
@@ -116,8 +114,6 @@ function boot(): void {
 
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  // A fatal fault must not kill the process with a raw crash: log through winston, drain, and
-  // exit non-zero so systemd restarts the unit.
   process.on('unhandledRejection', (reason) => {
     logger.error({ err: reason }, 'unhandled promise rejection');
     void shutdown('unhandledRejection', 1);

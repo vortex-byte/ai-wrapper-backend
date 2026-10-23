@@ -19,10 +19,17 @@ Rotation: `winston-daily-rotate-file`, `datePattern: 'YYYY-MM-DD'`, `maxSize: '2
 
 ## Read them efficiently
 
-Every line is one JSON object (`ts`, `level`, `msg`, plus bound fields).
+The two transports render the **same** redacted event differently:
+
+- **stdout / journald:** plain text, one line per event, for humans —
+  `datetime __name__ - level - message - context | trace`. `requestId`/`traceId` follow ` | `
+  because they apply to the whole line; an error's `err="Name: message"` and its indented stack
+  follow on their own lines. The level is colorized only when stdout is a TTY (never under
+  journald/systemd or when `NO_COLOR` is set), so the journal stays free of ANSI escapes.
+- **files:** one JSON object per line (`ts`, `level`, `msg`, plus bound fields) — parse these with `jq`.
 
 ```bash
-# Human-readable recent errors.
+# Human-readable recent errors (stdout is already human-readable; files are JSON).
 sudo tail -n 100 /var/log/ai-chat/error-$(date +%F).log | jq -r '"\(.ts) \(.msg)"'
 
 # One request across files (the id is in the X-Request-Id response header).

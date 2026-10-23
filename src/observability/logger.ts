@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { MESSAGE } from 'triple-beam';
 import winston from 'winston';
 import DailyRotateFile from 'winston-daily-rotate-file';
 import { getConfig } from '../config/index.ts';
@@ -104,13 +105,12 @@ function isContentKey(key: string): boolean {
 export function scrubString(input: string): string {
   return (
     input
-      // postgres://user:password@host
-      .replace(/\b(postgres(?:ql)?:\/\/)[^/\s@]+:[^@\s]+@/gi, `$1${REDACTED}@`)
-      .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, `$1${REDACTED}`)
+      .replace(/\b(postgres(?:ql)?:\/\/)[^/\s@]+:(?!\[redacted\])[^@\s]+@/gi, `$1${REDACTED}@`)
+      .replace(/\b(Bearer\s+)(?!\[redacted\])[A-Za-z0-9._~+/=-]{8,}/gi, `$1${REDACTED}`)
       .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, REDACTED)
       .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, REDACTED)
       .replace(
-        /\b(password|passwd|pwd|token|secret|api[_-]?key|authorization)\b\s*[=:]\s*("[^"]*"|'[^']*'|[^\s,;&}\]]+)/gi,
+        /\b(password|passwd|pwd|token|secret|api[_-]?key|authorization)\b\s*[=:]\s*(?!\[redacted\])("[^"]*"|'[^']*'|[^\s,;&}\]]+)/gi,
         `$1=${REDACTED}`,
       )
   );
@@ -210,32 +210,169 @@ export function serializeLogPayload(payload: LogMeta): Record<string, unknown> {
   return out;
 }
 
-const serializeFormat = winston.format((info) => {
-  const raw = info as unknown as Record<string, unknown> & { level: string; message?: unknown };
+/**
+ * Flattens one log event into `ts` / `level` / `msg` plus redacted meta. Both transports render this
+ * shape, so a field cannot be redacted in one and leaked in the other.
+ */
+function normalizeRecord(
+  info: winston.Logform.TransformableInfo,
+): Record<string, unknown> & { ts: string; level: string; msg: string } {
+  const raw = info as unknown as Record<string, unknown>;
+  const timestamp = typeof raw['timestamp'] === 'string' ? raw['timestamp'] : undefined;
+
   const meta: Record<string, unknown> = {};
   for (const key of Object.keys(raw)) {
     if (key === 'level' || key === 'message' || key === 'timestamp') continue;
-    if (key === 'ts' || key === 'msg') continue;
     meta[key] = raw[key];
   }
 
   const serializedMeta = serializeLogPayload(meta);
-  const timestamp =
-    typeof raw['timestamp'] === 'string' ? raw['timestamp'] : new Date().toISOString();
-  const message = typeof raw.message === 'string' ? scrubString(raw.message) : String(raw.message ?? '');
+  const ts = typeof serializedMeta['ts'] === 'string' ? serializedMeta['ts'] : timestamp;
+  const msg =
+    typeof raw.message === 'string' ? scrubString(raw.message) : String(raw.message ?? '');
+  const level = typeof raw.level === 'string' ? raw.level : 'info';
 
-  const out: Record<string, unknown> = {
-    ts: timestamp,
-    level: raw.level,
-    msg: message,
-    ...serializedMeta,
-  };
+  const out: Record<string, unknown> = { ts: ts ?? new Date().toISOString(), level, msg };
+  for (const key of Object.keys(serializedMeta)) {
+    if (key === 'ts' || key === 'level' || key === 'msg') continue;
+    out[key] = serializedMeta[key];
+  }
+  return out as Record<string, unknown> & { ts: string; level: string; msg: string };
+}
 
-  // Replace every enumerable key so `format.json()` emits exactly this record.
+const serializeFormat = winston.format((info) => {
+  const out = normalizeRecord(info);
+  const raw = info as unknown as Record<string, unknown>;
   for (const key of Object.keys(raw)) delete raw[key];
   Object.assign(raw, out);
   return raw as unknown as winston.Logform.TransformableInfo;
 });
+
+/** `debug`/`trace` stay dim so they never compete with real events. */
+const LEVEL_COLORS: Readonly<Record<string, string>> = {
+  debug: '\u001B[90m',
+  info: '\u001B[32m',
+  warn: '\u001B[33m',
+  error: '\u001B[31m',
+  fatal: '\u001B[1;31m',
+  trace: '\u001B[90m',
+};
+
+/** Off when stdout is not a TTY (journald, pipes) or `NO_COLOR` is set. */
+export function shouldColorize(): boolean {
+  if (process.env['NO_COLOR'] !== undefined) return false;
+  return process.stdout.isTTY === true;
+}
+
+const RESET = '\u001B[0m';
+const DIM = '\u001B[90m';
+const NAME = '\u001B[36m';
+const LEVEL_WIDTH = 5;
+
+function formatTimestamp(ts: string): string {
+  return ts.replace('T', ' ').replace(/(\.\d{3})\d*/, '$1').replace('Z', '');
+}
+
+export interface RenderTextOptions {
+  /** Rendered as `__name__`. */
+  readonly name: string;
+  readonly colorize: boolean;
+}
+
+/**
+ * Renders `datetime __name__ - level - message - context | trace`.
+ *
+ * `requestId`/`traceId` follow ` | ` because they apply to the whole line; errors are appended on
+ * their own lines so the stack starts cleanly.
+ */
+export function renderTextLine(
+  record: Record<string, unknown> & { ts: string; level: string; msg: string },
+  options: RenderTextOptions,
+): string {
+  const paint = (code: string, text: string): string =>
+    options.colorize && code !== '' ? `${code}${text}${RESET}` : text;
+  const level = `${paint(LEVEL_COLORS[record.level] ?? '', record.level.toLocaleUpperCase())}${' '.repeat(
+    Math.max(0, LEVEL_WIDTH - record.level.length),
+  )}`;
+  const timestamp = formatTimestamp(record.ts);
+
+  const contextFields: string[] = [];
+  const errors: string[] = [];
+  const traces: string[] = [];
+  for (const key of Object.keys(record)) {
+    if (key === 'ts' || key === 'level' || key === 'msg') continue;
+    const value = record[key];
+    if (value === undefined) continue;
+    const isError = typeof value === 'object' && value !== null && isSerializedError(value);
+    const field = formatField(key, value);
+    if (field === null) continue;
+    if (isError) errors.push(field);
+    else (TRACE_KEYS.has(key) ? traces : contextFields).push(field);
+  }
+  
+  const context = contextFields.length > 0 ? ` - ${contextFields.join(' ')}` : '';
+
+  const head = `${paint(DIM, timestamp)} ${paint(NAME, options.name)} - ${level} - ${record.msg}`;
+  let line = head + context;
+  if (traces.length > 0) line += ` | ${traces.join(' ')}`;
+  if (errors.length > 0) line += `\n${errors.join('\n')}`;
+  return line;
+}
+
+const TRACE_KEYS = new Set(['traceId', 'requestId']);
+
+/** Renders one meta field as `key=value`, quoting only when needed. */
+function formatField(key: string, value: unknown): string | null {
+  if (value === null) return `${key}=null`;
+  if (typeof value === 'object' && isSerializedError(value)) {
+    const error = value as SerializedError;
+    const head = `${key}="${error.name}: ${error.message}"`;
+    const stack = typeof error.stack === 'string' ? error.stack : undefined;
+    return stack === undefined ? head : `${head}\n${stack.replace(/\r\n/g, '\n').replace(/^/gm, '    ')}`;
+  }
+  if (typeof value === 'string') return isBare(value) ? `${key}=${value}` : `${key}="${value}"`;
+  if (typeof value === 'object') return `${key}=${JSON.stringify(value)}`;
+  return `${key}=${String(value)}`;
+}
+
+function isSerializedError(value: object): boolean {
+  return 'name' in value && 'message' in value && typeof (value as { name: unknown }).name === 'string';
+}
+
+function isBare(value: string): boolean {
+  return /^[A-Za-z0-9_./:@#-]+$/.test(value);
+}
+
+/** stdout: one human-readable line per event. */
+function createConsoleTransport(name: string): winston.transport {
+  return new winston.transports.Console({
+    level: 'debug',
+    stderrLevels: [],
+    eol: '\n',
+    format: winston.format((info) => {
+      const record = info as unknown as Record<string, unknown> & {
+        ts: string;
+        level: string;
+        msg: string;
+      };
+      const text = renderTextLine(
+        {
+          ...record,
+          ts: record.ts ?? new Date().toISOString(),
+          level: record.level ?? 'info',
+          msg: record.msg ?? '',
+        },
+        { name, colorize: shouldColorize() },
+      );
+      const out = info as unknown as Record<symbol | string, unknown>;
+      for (const key of Object.keys(out)) delete out[key];
+      out['level'] = record.level;
+      out['message'] = text;
+      out[MESSAGE] = text;
+      return info;
+    })(),
+  });
+}
 
 function buildFileTransports(): winston.transport[] {
   const config = getConfig();
@@ -243,7 +380,6 @@ function buildFileTransports(): winston.transport[] {
   try {
     mkdirSync(dir, { recursive: true });
   } catch {
-    // A read-only filesystem must not stop the process; the console transport still works.
     return [];
   }
 
@@ -265,6 +401,7 @@ function buildFileTransports(): winston.transport[] {
 
 export interface LoggerOptions {
   readonly fileLogging?: boolean | undefined;
+  readonly name?: string | undefined;
 }
 
 function wrapWinston(logger: winston.Logger): Logger {
@@ -290,12 +427,15 @@ function wrapWinston(logger: winston.Logger): Logger {
 let cached: Logger | undefined;
 let cachedRaw: winston.Logger | undefined;
 
+/** Shared format; each transport then renders the normalized record its own way. */
+const loggerFormat = winston.format.combine(winston.format.timestamp(), serializeFormat());
+
 function buildLogger(options: LoggerOptions = {}): { logger: Logger; raw: winston.Logger } {
   const config = getConfig();
   const fileLogging = options.fileLogging ?? config.LOG_TO_FILES ?? config.NODE_ENV !== 'test';
 
   const transports: winston.transport[] = [
-    new winston.transports.Console({ level: 'debug', format: winston.format.json() }),
+    createConsoleTransport(options.name ?? `app.${config.ROLE}`),
   ];
   if (fileLogging) transports.push(...buildFileTransports());
 
@@ -303,7 +443,7 @@ function buildLogger(options: LoggerOptions = {}): { logger: Logger; raw: winsto
     level: config.LOG_LEVEL,
     silent: config.LOG_LEVEL === 'silent',
     defaultMeta: { app: 'ai-chat-api', env: config.NODE_ENV, role: config.ROLE },
-    format: winston.format.combine(winston.format.timestamp(), serializeFormat()),
+    format: loggerFormat,
     transports,
     exitOnError: false,
   });

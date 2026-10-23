@@ -12,6 +12,10 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 export function enforceOrigin(config: Config): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (!SAFE_METHODS.has(c.req.method)) {
+      if (config.NODE_ENV === 'development') {
+        await next();
+        return;
+      }
       const origin = c.req.header('origin');
       if (origin === undefined || !isAllowedOrigin(config, origin)) {
         throw new AppError('forbidden');
@@ -30,7 +34,7 @@ export function requireCsrf(config: Config): MiddlewareHandler<AppEnv> {
     }
 
     const origin = c.req.header('origin');
-    if (origin !== undefined && !isAllowedOrigin(config, origin)) {
+    if (config.NODE_ENV !== 'development' && origin !== undefined && !isAllowedOrigin(config, origin)) {
       throw new AppError('forbidden');
     }
 

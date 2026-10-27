@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseCapabilities,
+  parsePartialCapabilities,
   toCapabilitiesJson,
   ModelCapabilitiesSchema,
 } from '@/providers/domain/capabilities-schema.ts';
@@ -13,6 +14,23 @@ describe('capabilities schema', () => {
     expect(parsed.documents).toEqual({ pdf: false });
     expect(parsed.systemPrompt).toBe(true);
     expect(parsed.tools).toBe(false);
+  });
+
+  it('falls back to provided contextWindow and maxOutputTokens if missing in capabilities', () => {
+    const parsed = parseCapabilities(
+      { schemaVersion: 1 },
+      { contextWindow: 128_000, maxOutputTokens: 4_096 },
+    );
+    expect(parsed.contextWindow).toBe(128_000);
+    expect(parsed.maxOutputTokens).toBe(4_096);
+    expect(parsed.streaming).toBe(true);
+  });
+
+  it('parses partial capabilities without requiring contextWindow or maxOutputTokens', () => {
+    const partial = parsePartialCapabilities({ vision: true });
+    expect(partial.vision).toBe(true);
+    expect(partial.contextWindow).toBeUndefined();
+    expect(partial.maxOutputTokens).toBeUndefined();
   });
 
   it('rejects a non-positive context window', () => {

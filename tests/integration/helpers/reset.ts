@@ -5,6 +5,8 @@ const RESET_STATEMENTS = [
   'DELETE FROM audit_logs',
   'DELETE FROM error_events',
   'DELETE FROM file_extractions',
+  // Parts hold the FK to attachments, so they must go first.
+  'DELETE FROM message_parts',
   'DELETE FROM attachments',
   'DELETE FROM sessions',
   'DELETE FROM jobs',
@@ -16,7 +18,6 @@ const RESET_STATEMENTS = [
   'DELETE FROM quota_policies',
   'DELETE FROM generation_jobs',
   'DELETE FROM idempotency_keys',
-  'DELETE FROM message_parts',
   'DELETE FROM messages',
   'DELETE FROM conversations',
   'DELETE FROM ai_model_prices',

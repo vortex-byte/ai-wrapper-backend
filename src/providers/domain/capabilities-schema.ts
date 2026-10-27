@@ -60,8 +60,25 @@ const EmptyObject = z.record(z.string(), z.unknown());
 export const ProviderConfigSchema = EmptyObject;
 export const ModelConfigSchema = EmptyObject;
 
-export function parseCapabilities(value: unknown): ModelCapabilities {
-  const parsed = ModelCapabilitiesSchema.parse(value ?? {});
+export function parseCapabilities(
+  value: unknown,
+  fallback?: { contextWindow?: number | undefined; maxOutputTokens?: number | undefined },
+): ModelCapabilities {
+  const raw =
+    typeof value === 'object' && value !== null ? { ...(value as Record<string, unknown>) } : {};
+  if (
+    (raw['contextWindow'] === undefined || raw['contextWindow'] === null) &&
+    fallback?.contextWindow !== undefined
+  ) {
+    raw['contextWindow'] = fallback.contextWindow;
+  }
+  if (
+    (raw['maxOutputTokens'] === undefined || raw['maxOutputTokens'] === null) &&
+    fallback?.maxOutputTokens !== undefined
+  ) {
+    raw['maxOutputTokens'] = fallback.maxOutputTokens;
+  }
+  const parsed = ModelCapabilitiesSchema.parse(raw);
   return {
     streaming: parsed.streaming,
     vision: parsed.vision,
@@ -78,6 +95,34 @@ export function parseCapabilities(value: unknown): ModelCapabilities {
       : {}),
     contextWindow: parsed.contextWindow,
     maxOutputTokens: parsed.maxOutputTokens,
+  };
+}
+
+export function parsePartialCapabilities(value: unknown): Partial<ModelCapabilities> {
+  if (value === undefined || value === null) return {};
+  const parsed = PartialModelCapabilitiesSchema.parse(value);
+  return {
+    ...(parsed.streaming !== undefined ? { streaming: parsed.streaming } : {}),
+    ...(parsed.vision !== undefined ? { vision: parsed.vision } : {}),
+    ...(parsed.documents !== undefined
+      ? {
+          documents: {
+            pdf: parsed.documents.pdf ?? false,
+            ...(parsed.documents.maxPages !== undefined ? { maxPages: parsed.documents.maxPages } : {}),
+          },
+        }
+      : {}),
+    ...(parsed.imageGeneration !== undefined ? { imageGeneration: parsed.imageGeneration } : {}),
+    ...(parsed.documentGeneration !== undefined
+      ? { documentGeneration: parsed.documentGeneration }
+      : {}),
+    ...(parsed.systemPrompt !== undefined ? { systemPrompt: parsed.systemPrompt } : {}),
+    ...(parsed.tools !== undefined ? { tools: parsed.tools } : {}),
+    ...(parsed.maxImagesPerRequest !== undefined
+      ? { maxImagesPerRequest: parsed.maxImagesPerRequest }
+      : {}),
+    ...(parsed.contextWindow !== undefined ? { contextWindow: parsed.contextWindow } : {}),
+    ...(parsed.maxOutputTokens !== undefined ? { maxOutputTokens: parsed.maxOutputTokens } : {}),
   };
 }
 

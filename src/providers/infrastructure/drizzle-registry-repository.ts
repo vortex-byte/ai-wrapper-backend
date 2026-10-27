@@ -117,7 +117,10 @@ function toModel(row: ModelRow): ModelRecord {
     displayName: row.displayName,
     description: row.description,
     status: row.status as ModelStatus,
-    capabilities: parseCapabilities(row.capabilities),
+    capabilities: parseCapabilities(row.capabilities, {
+      contextWindow: row.contextWindow,
+      maxOutputTokens: row.maxOutputTokens,
+    }),
     contextWindow: row.contextWindow,
     maxOutputTokens: row.maxOutputTokens,
     defaultMaxOutputTokens: row.defaultMaxOutputTokens,

@@ -16,7 +16,9 @@ export type {
 } from './domain/capabilities.ts';
 export {
   ModelCapabilitiesSchema,
+  PartialModelCapabilitiesSchema,
   parseCapabilities,
+  parsePartialCapabilities,
   parseConfig,
   toCapabilitiesJson,
   CAPABILITIES_SCHEMA_VERSION,

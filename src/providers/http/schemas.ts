@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ModelCapabilitiesSchema, PartialModelCapabilitiesSchema } from '@/providers/domain/capabilities-schema.ts';
+import { PartialModelCapabilitiesSchema } from '@/providers/domain/capabilities-schema.ts';
 
 /** Zod schemas for provider and model administration endpoints. */
 
@@ -67,26 +67,35 @@ export const UpdateProviderBodySchema = z
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Provide at least one field.' });
 
-export const CreateModelBodySchema = z.object({
-  providerId: z.uuid(),
-  key: z
-    .string()
-    .trim()
-    .min(1)
-    .max(64)
-    .regex(/^[a-z0-9][a-z0-9._-]*$/, 'Use lowercase letters, digits, ".", "-" or "_".'),
-  apiModelId: z.string().trim().min(1).max(256),
-  displayName: z.string().trim().min(1).max(128),
-  description: z.string().trim().max(1024).nullable().optional(),
-  status: ModelStatusSchema.optional(),
-  capabilities: ModelCapabilitiesSchema,
-  contextWindow: z.number().int().positive().optional(),
-  maxOutputTokens: z.number().int().positive().optional(),
-  defaultMaxOutputTokens: z.number().int().positive().optional(),
-  quotaWeight: z.number().positive().max(1000).optional(),
-  config: ConfigSchema.optional(),
-  sortOrder: z.number().int().min(0).max(1_000_000).optional(),
-});
+export const CreateModelBodySchema = z
+  .object({
+    providerId: z.uuid(),
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9][a-z0-9._-]*$/, 'Use lowercase letters, digits, ".", "-" or "_".'),
+    apiModelId: z.string().trim().min(1).max(256),
+    displayName: z.string().trim().min(1).max(128),
+    description: z.string().trim().max(1024).nullable().optional(),
+    status: ModelStatusSchema.optional(),
+    capabilities: PartialModelCapabilitiesSchema.default({}),
+    contextWindow: z.number().int().positive().optional(),
+    maxOutputTokens: z.number().int().positive().optional(),
+    defaultMaxOutputTokens: z.number().int().positive().optional(),
+    quotaWeight: z.number().positive().max(1000).optional(),
+    config: ConfigSchema.optional(),
+    sortOrder: z.number().int().min(0).max(1_000_000).optional(),
+  })
+  .refine(
+    (data) => data.contextWindow !== undefined || data.capabilities.contextWindow !== undefined,
+    { message: 'contextWindow is required.', path: ['contextWindow'] },
+  )
+  .refine(
+    (data) => data.maxOutputTokens !== undefined || data.capabilities.maxOutputTokens !== undefined,
+    { message: 'maxOutputTokens is required.', path: ['maxOutputTokens'] },
+  );
 
 export const UpdateModelBodySchema = z
   .object({

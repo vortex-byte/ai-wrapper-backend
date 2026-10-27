@@ -3,6 +3,11 @@ import type { Config } from '@/config/index.ts';
 import { AppError } from '@/errors.ts';
 import type { StorageProviderPort, StorageHealthProbe } from '@/storage/ports/storage-provider.ts';
 import type { ConversationRepository } from '@/conversations/ports/conversation-repository.ts';
+import type {
+  MessageFileLookup,
+  MessageFileStatus,
+  MessageFileSummary,
+} from '@/conversations/ports/message-file-lookup.ts';
 import {
   FILE_LIMITS,
   detectUploadKind,
@@ -88,7 +93,20 @@ function storageKeyFor(clock: Clock, idGen: IdGenerator): string {
   return `files/${month}/${idGen.uuidv7()}`;
 }
 
-export class AttachmentService {
+/** Wire vocabulary (§6.1): `ready` is downloadable; tombstones read as `expired`. */
+const MESSAGE_FILE_STATUS: Readonly<Record<AttachmentStatus, MessageFileStatus>> = {
+  uploading: 'processing',
+  validating: 'processing',
+  processing: 'processing',
+  ready: 'available',
+  rejected: 'missing',
+  failed: 'missing',
+  missing: 'missing',
+  expired: 'expired',
+  deleted: 'expired',
+};
+
+export class AttachmentService implements MessageFileLookup {
   constructor(
     private readonly config: Config,
     private readonly storage: StorageProviderPort,
@@ -200,6 +218,24 @@ export class AttachmentService {
     }
     const extraction = await this.attachments.findExtraction(attachment.id);
     return toView(attachment, extraction);
+  }
+
+  /** Hydrates the parts of a message page; ids owned by another user are simply absent. */
+  async listFiles(
+    attachmentIds: readonly string[],
+    userId: string,
+  ): Promise<readonly MessageFileSummary[]> {
+    if (attachmentIds.length === 0) return [];
+    const rows = await this.attachments.findManyByIdsForUser(attachmentIds, userId);
+    return rows.map((attachment) => ({
+      id: attachment.id,
+      name: attachment.displayName,
+      mimeType: attachment.detectedMime,
+      sizeBytes: attachment.sizeBytes,
+      width: attachment.width,
+      height: attachment.height,
+      status: MESSAGE_FILE_STATUS[attachment.status],
+    }));
   }
 
   /** Resolves upload records into message parts for context building, validating ownership and conversation binding. */

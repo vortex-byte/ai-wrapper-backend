@@ -19,6 +19,7 @@ export interface UsageReportInput {
   readonly from?: string | undefined;
   readonly to?: string | undefined;
   readonly groupBy: UsageGroupBy;
+  readonly divisionId?: string | undefined;
 }
 
 export interface ErrorExplorerInput {
@@ -118,7 +119,12 @@ export class ReportingService {
 
   async usage(input: UsageReportInput): Promise<readonly UsageReportRow[]> {
     const { from, to } = this.range(input.from, input.to);
-    return this.repository.aggregateUsage({ from, to, groupBy: input.groupBy });
+    return this.repository.aggregateUsage({
+      from,
+      to,
+      groupBy: input.groupBy,
+      divisionId: input.divisionId,
+    });
   }
 
   async usageCsv(input: UsageReportInput): Promise<string> {

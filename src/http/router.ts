@@ -32,6 +32,7 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
     conversationRoutes({
       conversations: services.conversations,
       send: services.send,
+      files: services.attachments,
       auth: services.auth,
       config,
       rateLimiter: services.rateLimiter,

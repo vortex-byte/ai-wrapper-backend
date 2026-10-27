@@ -42,6 +42,8 @@ export class DrizzleQuotaPolicyRepository implements QuotaPolicyRepository {
         maxOutputTokensPerRequest: quotaPolicies.maxOutputTokensPerRequest,
         maxConcurrentGenerations: quotaPolicies.maxConcurrentGenerations,
         allowedModelIds: quotaPolicies.allowedModelIds,
+        updatedBy: quotaPolicies.updatedBy,
+        updatedAt: quotaPolicies.updatedAt,
       })
       .from(quotaPolicies)
       .where(predicate)
@@ -49,6 +51,7 @@ export class DrizzleQuotaPolicyRepository implements QuotaPolicyRepository {
     const row = rows[0];
     if (!row) return null;
     return {
+      id: row.id,
       scope: row.scope as QuotaPolicyRow['scope'],
       divisionId: row.divisionId,
       userId: row.userId,
@@ -57,6 +60,8 @@ export class DrizzleQuotaPolicyRepository implements QuotaPolicyRepository {
       maxOutputTokensPerRequest: row.maxOutputTokensPerRequest,
       maxConcurrentGenerations: row.maxConcurrentGenerations,
       allowedModelIds: row.allowedModelIds,
+      updatedBy: row.updatedBy,
+      updatedAt: row.updatedAt,
     };
   }
 
@@ -76,12 +81,13 @@ export class DrizzleQuotaPolicyRepository implements QuotaPolicyRepository {
         allowed_model_ids = EXCLUDED.allowed_model_ids,
         updated_by = EXCLUDED.updated_by,
         updated_at = now()
-      RETURNING scope, division_id AS "divisionId", user_id AS "userId",
+      RETURNING id, scope, division_id AS "divisionId", user_id AS "userId",
                 monthly_tokens AS "monthlyTokens",
                 max_input_tokens_per_request AS "maxInputTokensPerRequest",
                 max_output_tokens_per_request AS "maxOutputTokensPerRequest",
                 max_concurrent_generations AS "maxConcurrentGenerations",
-                allowed_model_ids AS "allowedModelIds"
+                allowed_model_ids AS "allowedModelIds",
+                updated_by AS "updatedBy", updated_at AS "updatedAt"
       `,
       [
         input.id,
@@ -103,6 +109,7 @@ export class DrizzleQuotaPolicyRepository implements QuotaPolicyRepository {
 }
 
 interface PolicyRowShape {
+  id: string;
   scope: string;
   divisionId: string | null;
   userId: string | null;
@@ -117,6 +124,7 @@ interface PolicyRowShape {
 
 function toPolicyRow(row: PolicyRowShape): QuotaPolicyRow {
   return {
+    id: row.id,
     scope: row.scope as QuotaPolicyRow['scope'],
     divisionId: row.divisionId,
     userId: row.userId,
@@ -126,5 +134,7 @@ function toPolicyRow(row: PolicyRowShape): QuotaPolicyRow {
     maxOutputTokensPerRequest: row.maxOutputTokensPerRequest,
     maxConcurrentGenerations: row.maxConcurrentGenerations,
     allowedModelIds: row.allowedModelIds,
+    updatedBy: row.updatedBy,
+    updatedAt: row.updatedAt,
   };
 }

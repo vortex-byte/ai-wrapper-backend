@@ -253,6 +253,42 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     expect(body.code).toBe('conflict');
   });
 
+  it('updates the login email via PATCH and rejects a duplicate with 409', async () => {
+    await seedSuperAdminUser('admin@corp.example');
+    const target = await seedStandardUser('old@corp.example');
+    await seedStandardUser('taken@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const patchEmail = (email: string) =>
+      app.request(
+        new Request(`http://localhost/api/admin/users/${target.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ email }),
+        }),
+      );
+
+    const updatedRes = await patchEmail('new@corp.example');
+    expect(updatedRes.status).toBe(200);
+    const updatedBody = (await updatedRes.json()) as { data: { email: string } };
+    expect(updatedBody.data.email).toBe('new@corp.example');
+    expect((await users.findById(target.id))?.email).toBe('new@corp.example');
+
+    const duplicateRes = await patchEmail('TAKEN@corp.example');
+    expect(duplicateRes.status).toBe(409);
+    const duplicateBody = (await duplicateRes.json()) as {
+      code: string;
+      details?: { fields?: Array<{ path: string }> };
+    };
+    expect(duplicateBody.code).toBe('conflict');
+    expect(duplicateBody.details?.fields?.[0]?.path).toBe('email');
+  });
+
   it('rejects a malformed cursor with 400 instead of silently returning page 1', async () => {
     await seedSuperAdminUser('admin@corp.example');
     const { cookie } = await loginAs('admin@corp.example');

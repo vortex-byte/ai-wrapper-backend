@@ -70,7 +70,7 @@ export interface UpdateModelInput {
   readonly displayName?: string;
   readonly description?: string | null;
   readonly status?: ModelStatus;
-  readonly capabilities?: ModelCapabilities;
+  readonly capabilities?: Partial<ModelCapabilities>;
   readonly contextWindow?: number;
   readonly maxOutputTokens?: number;
   readonly defaultMaxOutputTokens?: number;

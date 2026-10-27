@@ -162,6 +162,7 @@ export class DrizzleUserRepository implements UserRepository {
     const updates: Record<string, unknown> = {
       updatedAt: input.at ?? new Date(),
     };
+    if (input.email !== undefined) updates.email = input.email;
     if (input.displayName !== undefined) updates.displayName = input.displayName;
     if (input.role !== undefined) updates.role = input.role;
     if (input.status !== undefined) updates.status = input.status;
@@ -234,5 +235,16 @@ export class DrizzleUserRepository implements UserRepository {
         updatedAt: update.at,
       })
       .where(eq(users.id, update.id));
+  }
+
+  async delete(id: string, at: Date, tx?: TransactionContext): Promise<void> {
+    await runDb(tx)
+      .update(users)
+      .set({
+        status: 'disabled',
+        deletedAt: at,
+        updatedAt: at,
+      })
+      .where(eq(users.id, id));
   }
 }

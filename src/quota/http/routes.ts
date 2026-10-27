@@ -204,6 +204,7 @@ function normalizeTarget(
 }
 
 function wirePolicy(policy: {
+  readonly id?: string | undefined;
   readonly scope: string;
   readonly divisionId: string | null;
   readonly userId: string | null;
@@ -212,10 +213,11 @@ function wirePolicy(policy: {
   readonly maxOutputTokensPerRequest: number | null;
   readonly maxConcurrentGenerations: number | null;
   readonly allowedModelIds: readonly string[] | null;
-  readonly updatedBy?: string | null;
-  readonly updatedAt?: Date;
+  readonly updatedBy?: string | null | undefined;
+  readonly updatedAt?: Date | undefined;
 }): Record<string, unknown> {
   return {
+    ...(policy.id !== undefined ? { id: policy.id } : {}),
     scope: policy.scope,
     divisionId: policy.divisionId,
     userId: policy.userId,
@@ -224,6 +226,7 @@ function wirePolicy(policy: {
     maxOutputTokensPerRequest: policy.maxOutputTokensPerRequest,
     maxConcurrentGenerations: policy.maxConcurrentGenerations,
     allowedModelIds: policy.allowedModelIds,
+    updatedBy: policy.updatedBy ?? null,
     ...(policy.updatedAt !== undefined ? { updatedAt: policy.updatedAt.toISOString() } : {}),
   };
 }

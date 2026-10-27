@@ -6,6 +6,7 @@ export interface UsageReportQuery {
   readonly from: Date;
   readonly to: Date;
   readonly groupBy: UsageGroupBy;
+  readonly divisionId?: string | undefined;
 }
 
 export interface UsageReportRow {

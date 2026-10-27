@@ -82,6 +82,9 @@ class FakeAttachmentRepo implements AttachmentRepository {
   async findByIdAndUser(): Promise<Attachment | null> {
     return null;
   }
+  async findManyByIdsForUser(): Promise<Attachment[]> {
+    return [];
+  }
   async attachToMessage(): Promise<void> {}
   async updateStatus(): Promise<void> {}
   async upsertExtraction(): Promise<void> {}

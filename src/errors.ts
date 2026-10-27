@@ -118,23 +118,51 @@ export function isAppError(value: unknown): value is AppError {
   return value instanceof AppError;
 }
 
+const UNIQUE_VIOLATION = '23505';
+
+/** Bun reports SQLSTATE on `errno`, while node-postgres and Drizzle wrappers expose it as `code`. */
+function sqlState(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { code, errno } = value as { code?: unknown; errno?: unknown };
+  if (typeof errno === 'string' && /^\d{5}$/.test(errno)) return errno;
+  if (typeof code === 'string' && /^\d{5}$/.test(code)) return code;
+  if (typeof errno === 'string') return errno;
+  if (typeof code === 'string') return code;
+  return undefined;
+}
+
 /** Returns true when the error is a PostgreSQL unique constraint violation (SQLSTATE 23505). */
 export function isUniqueViolation(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'code' in value &&
-    (value as { code?: unknown }).code === '23505'
-  );
+  let current: unknown = value;
+  for (let depth = 0; depth < 10 && current !== null && current !== undefined; depth++) {
+    if (sqlState(current) === UNIQUE_VIOLATION) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /** Returns true when a PostgreSQL unique constraint violation matches a specific constraint name. */
 export function isUniqueViolationOf(value: unknown, constraint: string): boolean {
   let current: unknown = value;
   for (let depth = 0; depth < 10 && current !== null && current !== undefined; depth++) {
-    if (isUniqueViolation(current) && (current as { constraint?: unknown }).constraint === constraint) {
+    if (
+      sqlState(current) === UNIQUE_VIOLATION &&
+      (current as { constraint?: unknown }).constraint === constraint
+    ) {
       return true;
     }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+const FOREIGN_KEY_VIOLATION = '23503';
+
+/** Returns true when the error is a PostgreSQL foreign-key violation (SQLSTATE 23503). */
+export function isForeignKeyViolation(value: unknown): boolean {
+  let current: unknown = value;
+  for (let depth = 0; depth < 10 && current !== null && current !== undefined; depth++) {
+    if (sqlState(current) === FOREIGN_KEY_VIOLATION) return true;
     current = (current as { cause?: unknown }).cause;
   }
   return false;

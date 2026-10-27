@@ -732,9 +732,9 @@ Every mutation writes an `audit_logs` row in the same transaction.
 | `GET /api/admin/users?query&divisionId&status&limit&cursor` | `admin`, `super_admin` | List/search users (`admin` scoped to own division; `super_admin` all) |
 | `POST /api/admin/users` | `admin`, `super_admin` | Create/pre-provision user (`admin` in own division with `role=user`; `super_admin` any role/division) |
 | `GET /api/admin/users/:id` | `admin`, `super_admin` | Detail (`admin` own division only, 404 otherwise; `super_admin` any) |
-| `PATCH /api/admin/users/:id` | `admin`, `super_admin` | Update user (`admin` displayName/status in own division; `super_admin` role/division/status/profile) |
+| `PATCH /api/admin/users/:id` | `admin`, `super_admin` | Update user (`admin` email/displayName/status in own division; `super_admin` email/role/division/status/profile) |
 | `POST /api/admin/users/:id/password/reset` | `admin`, `super_admin` | Reset password (`admin` own division only, 404 otherwise; `super_admin` any) |
-| `GET /api/admin/divisions` · `POST /api/admin/divisions` · `PATCH /api/admin/divisions/:id` | `super_admin` | Divisions |
+| `GET /api/admin/divisions` · `GET /api/admin/divisions/:id` · `POST /api/admin/divisions` · `PATCH /api/admin/divisions/:id` · `DELETE /api/admin/divisions/:id` | `super_admin` | Divisions (list/detail include usage + policy stats; guarded hard delete) |
 
 ---
 
@@ -759,7 +759,7 @@ When called by a division `admin`, results are strictly filtered to `division_id
       { "id": "0192…", "email": "ada@corp.example", "displayName": "Ada L.",
         "role": "user", "status": "active", "divisionId": "0192…",
         "mustChangePassword": false, "createdAt": "2026-01-02T10:00:00Z",
-        "lastLoginAt": "2026-10-08T08:15:00Z" }
+        "updatedAt": "2026-10-08T09:00:00Z", "lastLoginAt": "2026-10-08T08:15:00Z" }
     ],
     "nextCursor": "01J…" } }
 ```
@@ -789,7 +789,10 @@ Request:
 `201`:
 ```json
 { "status": "ok", "message": "User created.", "data": {
-    "id": "…", "email": "new@corp.example", "mustChangePassword": true,
+    "id": "…", "email": "new@corp.example", "displayName": "New Hire",
+    "role": "user", "status": "active", "divisionId": "0192…",
+    "mustChangePassword": true, "createdAt": "2026-10-08T10:00:00Z",
+    "updatedAt": "2026-10-08T10:00:00Z", "lastLoginAt": null,
     "temporaryPassword": "Kx7-…" } }
 ```
 `temporaryPassword` is returned **only** when `generatePassword: true` and only in this response; it is
@@ -812,25 +815,27 @@ When called by a division `admin`, returns **404** if the target user belongs to
 { "status": "ok", "message": "", "data": {
     "id": "0192…", "email": "ada@corp.example", "displayName": "Ada L.",
     "role": "user", "status": "active", "divisionId": "0192…",
-    "mustChangePassword": false, "failedLoginAttempts": 0, "lockedUntil": null,
-    "createdAt": "2026-01-02T10:00:00Z", "updatedAt": "2026-10-08T09:00:00Z",
-    "lastLoginAt": "2026-10-08T08:15:00Z" } }
+    "mustChangePassword": false, "createdAt": "2026-01-02T10:00:00Z",
+    "updatedAt": "2026-10-08T09:00:00Z", "lastLoginAt": "2026-10-08T08:15:00Z" } }
 ```
+The admin projection never exposes password hashes, `failedLoginAttempts`, or `lockedUntil`.
 
 ---
 
 ### 9.4 `PATCH /api/admin/users/:id`
 
-Updates profile attributes, role, division assignment, or account status for a user.
+Updates profile attributes (including the login email), role, division assignment, or account status for a user.
 When called by a division `admin`:
 - Returns **404** if target user is in a different division, unassigned, or has a role other than `'user'` (unless updating their own display name).
-- Can only update `displayName` and `status` (`active` | `disabled`). Supplying `role` or `divisionId` returns `403 forbidden`.
+- Can only update `email`, `displayName` and `status` (`active` | `disabled`). Supplying `role` or `divisionId` returns `403 forbidden`.
 - Cannot disable their own administrator account (`403 forbidden`).
 
 When called by `super_admin`:
-- Can update `displayName`, `role`, `divisionId`, `status`.
+- Can update `email`, `displayName`, `role`, `divisionId`, `status`.
 - Cannot disable or demote the last active `super_admin` (`409 conflict`).
 - Setting `role='admin'` requires a non-null `divisionId`.
+
+Changing `email` rewrites the login identifier; the uniqueness check is case-insensitive (`citext`) and collides with any live account (`409 conflict`). Existing sessions stay valid because they are keyed by user ID, not email.
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -840,6 +845,7 @@ When called by `super_admin`:
 **Request body:**
 | Field | Value type | Required | Description |
 |---|---|---|---|
+| `email` | string (`citext`) | No | Updated login email address (unique across live accounts). |
 | `displayName` | string | No | Updated display name. |
 | `role` | string (`user` \| `admin` \| `super_admin`) | No | Updated user role (`super_admin` only). |
 | `divisionId` | string \| null (UUIDv7) | No | Updated division ID (`super_admin` only; `null` to unassign). |
@@ -847,17 +853,18 @@ When called by `super_admin`:
 
 Request:
 ```json
-{ "displayName": "Ada Lovelace", "role": "super_admin" }
+{ "email": "ada.lovelace@corp.example", "displayName": "Ada Lovelace", "role": "super_admin" }
 ```
 `200`:
 ```json
 { "status": "ok", "message": "User updated.", "data": {
     "id": "0192…", "email": "ada@corp.example", "displayName": "Ada Lovelace",
     "role": "super_admin", "status": "active", "divisionId": "0192…",
-    "mustChangePassword": false, "updatedAt": "2026-10-08T09:30:00Z" } }
+    "mustChangePassword": false, "createdAt": "2026-01-02T10:00:00Z",
+    "updatedAt": "2026-10-08T09:30:00Z", "lastLoginAt": "2026-10-08T08:15:00Z" } }
 ```
 
-Safeguards: cannot disable/demote the last active `super_admin` (`409 conflict`).
+Safeguards: cannot disable/demote the last active `super_admin` (`409 conflict`); a duplicate `email` returns `409 conflict`.
 
 ---
 
@@ -890,22 +897,70 @@ Side effects: revokes **all** the user's sessions, sets `mustChangePassword`.
 
 ### 9.6 `GET /api/admin/divisions`
 
-Lists all organizational divisions. Requires `role=super_admin`.
+Lists all organizational divisions with a per-division read model: member count, token usage and
+estimated cost over a reporting window, plus the division's monthly quota policy. Requires
+`role=super_admin`. This single request replaces a list + `/api/admin/usage` join on the client.
 
-**Query parameters:** none.
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `days` | integer (1–365) | No | Length of the usage window ending today, inclusive (default `30`). |
+
+The window is `[today - (days - 1), today]` in **UTC** calendar days, matching the `usage_daily`
+buckets.
 
 `200`:
 ```json
 { "status": "ok", "message": "", "data": {
     "items": [
-      { "id": "0192…", "name": "Engineering", "externalRef": "grp_eng_01", "createdAt": "2026-01-01T00:00:00Z" },
-      { "id": "0192…", "name": "Legal", "externalRef": "grp_legal_02", "createdAt": "2026-01-01T00:00:00Z" }
+      { "id": "0192…", "name": "Engineering", "externalRef": "grp_eng_01",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "memberCount": 12, "tokens": 1843211, "requests": 842,
+        "costUsd": 41.27, "monthlyTokens": 5000000 },
+      { "id": "0192…", "name": "Legal", "externalRef": "grp_legal_02",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "memberCount": 0, "tokens": 0, "requests": 0,
+        "costUsd": null, "monthlyTokens": null }
     ] } }
 ```
 
+Field notes:
+- `memberCount` counts live users (`deleted_at IS NULL`) assigned to the division.
+- `tokens`, `requests`, `costUsd` aggregate `usage_daily` over the window. `costUsd` is `null` when
+  no settled row carries a cost estimate (never `0`, which would be a false cost).
+- `monthlyTokens` is the division-scope quota policy limit; `null` means the division inherits the
+  global limit.
+- Items are ordered by `name` ascending.
+
 ---
 
-### 9.7 `POST /api/admin/divisions`
+### 9.7 `GET /api/admin/divisions/:id`
+
+Returns the same enriched shape as one §9.6 item for a single division. Requires `role=super_admin`.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target division ID. |
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `days` | integer (1–365) | No | Usage window length (default `30`), same UTC semantics as §9.6. |
+
+`200`:
+```json
+{ "status": "ok", "message": "", "data": {
+    "id": "0192…", "name": "Engineering", "externalRef": "grp_eng_01",
+    "createdAt": "2026-01-01T00:00:00Z",
+    "memberCount": 12, "tokens": 1843211, "requests": 842,
+    "costUsd": 41.27, "monthlyTokens": 5000000 } }
+```
+`404 not_found` when the division does not exist.
+
+---
+
+### 9.8 `POST /api/admin/divisions`
 
 Creates a new organizational division for quota and model access management. Requires `role=super_admin`.
 
@@ -927,9 +982,10 @@ Request:
 
 ---
 
-### 9.8 `PATCH /api/admin/divisions/:id`
+### 9.9 `PATCH /api/admin/divisions/:id`
 
 Updates the display name or external reference of an existing division. Requires `role=super_admin`.
+Returns the core division shape (no usage stats).
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
@@ -951,6 +1007,29 @@ Request:
 { "status": "ok", "message": "Division updated.", "data": {
     "id": "0192…", "name": "Finance & Accounting", "externalRef": "grp_fin_03", "createdAt": "2026-10-08T10:00:00Z" } }
 ```
+
+---
+
+### 9.10 `DELETE /api/admin/divisions/:id`
+
+Deletes an existing organizational division. Requires `role=super_admin`.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target division ID. |
+
+**Safeguard:** Hard delete is guarded. If any `users` (assigned members), `quota_policies` (division-level
+overrides), or `usage_events`/`usage_daily` (historical consumption) rows still reference this division, the
+operation is rejected with `409 conflict` listing the blocking references (e.g. `"Division cannot be
+deleted: it still has 3 users, 1 quota policy."`). Members must be reassigned and any policy removed before
+the division can be deleted.
+
+`200`:
+```json
+{ "status": "ok", "message": "Division deleted." }
+```
+(empty envelope). `404 not_found` if the division does not exist. Writes an `audit_logs` row (`action: "division.delete"`).
 
 ---
 
@@ -997,7 +1076,7 @@ Creates or updates a quota policy at the specified scope (`global`, `division`, 
 | `maxOutputTokensPerRequest` | integer \| null | No | Maximum output tokens per request (`null` inherits). |
 | `maxConcurrentGenerations` | integer \| null | No | Maximum concurrent generations per user (`null` inherits). |
 | `allowedModelIds` | array of string (UUIDv7) \| null | No | List of allowed model IDs (`null` inherits). |
-| `applyToCurrentPeriod` | boolean | No | If `true`, immediately recalculates and adjusts current period quota balances via ledger entry (default `false`). |
+| `applyToCurrentPeriod` | boolean | No | If `true`, immediately recalculates and adjusts current period quota balances via ledger entry (default `true`). |
 | `reason` | string | No | Audit update justification string. |
 
 ```json
@@ -1053,9 +1132,13 @@ Current period counters plus the recent ledger:
 { "status": "ok", "message": "", "data": {
     "period": { "start": "…", "end": "…" },
     "limitTokens": 1000000, "usedTokens": 123456, "reservedTokens": 0, "remainingTokens": 876544,
+    "limits": { "maxInputTokensPerRequest": 150000, "maxOutputTokensPerRequest": 16000,
+                "maxConcurrentGenerations": 3 },
     "ledger": [ { "entryType": "settle", "tokensDelta": 12400, "reason": null,
                   "createdAt": "…", "requestId": "…" } ] } }
 ```
+`limits` is the effective per-request policy resolved for the user. `ledger` returns the 50 most
+recent rows, newest first, and never edits history.
 
 ### 10.5 `GET /api/admin/usage`
 
@@ -1066,7 +1149,8 @@ Retrieves system-wide token usage statistics, token volumes, and estimated costs
 |---|---|---|---|
 | `from` | string (ISO-8601 date / timestamp) | No | Start date/timestamp for usage report range. |
 | `to` | string (ISO-8601 date / timestamp) | No | End date/timestamp for usage report range. |
-| `groupBy` | string (`user` \| `model` \| `provider` \| `day` \| `month` \| `division`) | No | Dimension to aggregate usage statistics by. |
+| `groupBy` | string (`user` \| `model` \| `provider` \| `day` \| `month` \| `division`) | No | Dimension to aggregate usage statistics by (default `day`). |
+| `divisionId` | string (UUIDv7) | No | Restricts the aggregate to one division, in any `groupBy` mode (used by the department detail screen). |
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
@@ -1079,16 +1163,20 @@ Retrieves system-wide token usage statistics, token volumes, and estimated costs
 
 `key` always contains the grouping column (`userId`, `modelId`, `providerId`, `divisionId`, `day`,
 or `month`) plus resolved labels where they exist (`email`, `displayName`, `modelKey`, `provider`,
-`name`). Aggregates come from the `usage_daily` rollup, so they survive a conversation purge;
+`providerKey`, `name`). Aggregates come from the `usage_daily` rollup, so they survive a conversation purge;
 today's rows may lag by up to one incremental rollup window (5 minutes).
+
+Ordering: `groupBy=user` and `groupBy=division` are sorted by `quotaTokens` **descending** (ties
+broken by the dimension value) so the heaviest consumers come first; the other dimensions are
+sorted ascending by their key.
 
 `usageSource` is the share of settled generations whose token counts came from the provider
 (`provider`) versus a local estimate (`estimated`); the two add up to `1`.
 
 ### 10.6 `GET /api/admin/usage/export`
 
-The same aggregate as §10.5, as a downloadable file. Accepts the identical query parameters and the
-same `super_admin` requirement.
+The same aggregate as §10.5, as a downloadable file. Accepts the identical query parameters —
+including `divisionId` — and the same `super_admin` requirement.
 
 - **Response:** `200`, `Content-Type: text/csv; charset=utf-8`,
   `Content-Disposition: attachment; filename="usage-<groupBy>-<YYYY-MM-DD>.csv"`, `Cache-Control: no-store`.
@@ -1146,7 +1234,7 @@ environment variable** that holds it.
       "config": { "maxConcurrency": 8 }, "configVersion": 4, "updatedAt": "2026-10-08T09:00:00Z" }
 ] } }
 ```
-`GET /api/admin/providers/:id` or `PATCH /api/admin/providers/:id` response (`200`):
+`PATCH /api/admin/providers/:id` response (`200`):
 ```json
 { "status": "ok", "message": "", "data": {
     "id": "0192…", "key": "anthropic", "displayName": "Anthropic", "adapter": "anthropic",

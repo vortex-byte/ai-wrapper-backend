@@ -84,6 +84,20 @@ describe('ReportingService.usage', () => {
     expect(query?.groupBy).toBe('day');
   });
 
+  it('forwards a division filter to the repository', async () => {
+    const repository = new FakeReportingRepository();
+    await service(repository).usage({ groupBy: 'user', divisionId: 'div-1' });
+
+    expect(repository.usageQueries[0]?.divisionId).toBe('div-1');
+  });
+
+  it('forwards the division filter into the CSV export', async () => {
+    const repository = new FakeReportingRepository();
+    await service(repository).usageCsv({ groupBy: 'user', divisionId: 'div-1' });
+
+    expect(repository.usageQueries[0]?.divisionId).toBe('div-1');
+  });
+
   it('renders usage as standard CSV with a stable header', async () => {
     const repository = new FakeReportingRepository();
     repository.usageRows = [

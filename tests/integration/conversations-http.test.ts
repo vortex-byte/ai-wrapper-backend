@@ -37,7 +37,9 @@ async function seedUser(email: string, role: 'admin' | 'user' = 'user') {
   });
 }
 
-async function loginAs(email: string): Promise<{ cookie: string; csrfToken: string; userId: string }> {
+async function loginAs(
+  email: string,
+): Promise<{ cookie: string; csrfToken: string; userId: string }> {
   const res = await app.request(
     new Request('http://localhost/api/auth/login', {
       method: 'POST',
@@ -50,7 +52,11 @@ async function loginAs(email: string): Promise<{ cookie: string; csrfToken: stri
   const setCookie = res.headers.get('set-cookie');
   const match = setCookie === null ? null : /__Host-session=([^;]*)/.exec(setCookie);
   if (match === null) throw new Error('no session cookie issued');
-  return { cookie: `__Host-session=${match[1]}`, csrfToken: body.data.csrfToken, userId: body.data.user.id };
+  return {
+    cookie: `__Host-session=${match[1]}`,
+    csrfToken: body.data.csrfToken,
+    userId: body.data.user.id,
+  };
 }
 
 async function seedActiveModel(): Promise<string> {
@@ -115,7 +121,7 @@ describe('Conversations HTTP surface & security (real PostgreSQL)', () => {
     expect(body.data.modelLocked).toBe(false);
   });
 
-  it('enforces IDOR -> 404 on every ID route for another user\'s conversation', async () => {
+  it("enforces IDOR -> 404 on every ID route for another user's conversation", async () => {
     const modelId = await seedActiveModel();
     const owner = await seedUser('owner@corp.example');
     const other = await seedUser('other@corp.example');
@@ -214,9 +220,12 @@ describe('Conversations HTTP surface & security (real PostgreSQL)', () => {
     expect(page1Body.data.nextCursor).not.toBeNull();
 
     const page2Res = await app.request(
-      new Request(`http://localhost/api/conversations?limit=2&cursor=${encodeURIComponent(page1Body.data.nextCursor!)}`, {
-        headers: { Cookie: cookie },
-      }),
+      new Request(
+        `http://localhost/api/conversations?limit=2&cursor=${encodeURIComponent(page1Body.data.nextCursor!)}`,
+        {
+          headers: { Cookie: cookie },
+        },
+      ),
     );
     expect(page2Res.status).toBe(200);
     const page2Body = (await page2Res.json()) as {
@@ -305,5 +314,159 @@ describe('Conversations HTTP surface & security (real PostgreSQL)', () => {
       data: { items: Array<{ seq: number }>; nextCursor: string | null };
     };
     expect(page2Body.data.items.length).toBeGreaterThan(0);
+  });
+
+  it('hydrates attachment metadata on binary message parts', async () => {
+    const modelId = await seedActiveModel();
+    const owner = await seedUser('files@corp.example');
+    const other = await seedUser('stranger@corp.example');
+    const { cookie, csrfToken } = await loginAs('files@corp.example');
+
+    const createRes = await app.request(
+      new Request('http://localhost/api/conversations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({ modelId }),
+      }),
+    );
+    const convId = ((await createRes.json()) as { data: { id: string } }).data.id;
+
+    const pool = getPool();
+    const sha = 'a'.repeat(64);
+
+    const insertAttachment = async (input: {
+      id: string;
+      ownerUserId: string;
+      conversationId: string;
+      status: string;
+      displayName: string;
+      mimeType: string;
+    }): Promise<void> => {
+      await pool.query(
+        `INSERT INTO attachments (id, owner_user_id, conversation_id, origin, kind, display_name,
+                                  detected_mime, size_bytes, sha256, storage_provider, storage_key,
+                                  status, width, height, expires_at)
+         VALUES ($1, $2, $3, 'input', 'image', $4, $5, 2048, $6, 'local', $7, $8, 1024, 768,
+                 now() + interval '1 day')`,
+        [
+          input.id,
+          input.ownerUserId,
+          input.conversationId,
+          input.displayName,
+          input.mimeType,
+          sha,
+          `files/2026-10/${input.id}`,
+          input.status,
+        ],
+      );
+    };
+
+    const liveId = Bun.randomUUIDv7();
+    const expiredId = Bun.randomUUIDv7();
+    const foreignId = Bun.randomUUIDv7();
+    await insertAttachment({
+      id: liveId,
+      ownerUserId: owner.id,
+      conversationId: convId,
+      status: 'ready',
+      displayName: 'photo.png',
+      mimeType: 'image/png',
+    });
+    await insertAttachment({
+      id: expiredId,
+      ownerUserId: owner.id,
+      conversationId: convId,
+      status: 'deleted',
+      displayName: 'summary.pdf',
+      mimeType: 'application/pdf',
+    });
+    await insertAttachment({
+      id: foreignId,
+      ownerUserId: other.id,
+      conversationId: convId,
+      status: 'ready',
+      displayName: 'leak.png',
+      mimeType: 'image/png',
+    });
+
+    const userMessageId = Bun.randomUUIDv7();
+    const assistantMessageId = Bun.randomUUIDv7();
+    await pool.query(
+      `INSERT INTO messages (id, conversation_id, seq, role, status)
+       VALUES ($1, $2, 1, 'user', 'complete'), ($3, $2, 2, 'assistant', 'complete')`,
+      [userMessageId, convId, assistantMessageId],
+    );
+    await pool.query(
+      `INSERT INTO message_parts (id, message_id, position, type, status, data, file_id)
+       VALUES ($1, $2, 0, 'image', 'complete', '{"origin":"user"}', $3),
+              ($4, $5, 0, 'generated_file', 'complete', '{}', $6),
+              ($7, $5, 1, 'image', 'complete', '{}', $8)`,
+      [
+        Bun.randomUUIDv7(),
+        userMessageId,
+        liveId,
+        Bun.randomUUIDv7(),
+        assistantMessageId,
+        expiredId,
+        Bun.randomUUIDv7(),
+        foreignId,
+      ],
+    );
+
+    const res = await app.request(
+      new Request(`http://localhost/api/conversations/${convId}/messages`, {
+        headers: { Cookie: cookie },
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    type WireFile = {
+      id: string;
+      name?: string;
+      mimeType?: string;
+      sizeBytes?: number;
+      width?: number;
+      height?: number;
+      status: string;
+      downloadUrl?: string;
+    };
+    type WirePart = { type: string; origin?: string; file: WireFile | null };
+    const body = (await res.json()) as {
+      data: { items: Array<{ role: string; parts: WirePart[] }> };
+    };
+    const [userMessage, assistantMessage] = body.data.items;
+
+    expect(userMessage?.parts[0]?.file).toEqual({
+      id: liveId,
+      name: 'photo.png',
+      mimeType: 'image/png',
+      sizeBytes: 2048,
+      width: 1024,
+      height: 768,
+      status: 'available',
+      downloadUrl: `/api/files/${liveId}/content`,
+    });
+    expect(userMessage?.parts[0]?.origin).toBe('user');
+
+    const generated = assistantMessage?.parts[0];
+    expect(generated?.origin).toBe('assistant');
+    expect(generated?.file).toEqual({
+      id: expiredId,
+      name: 'summary.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 2048,
+      width: 1024,
+      height: 768,
+      status: 'expired',
+    });
+    expect(generated?.file?.downloadUrl).toBeUndefined();
+
+    // Another user's attachment id never resolves, even when a part references it.
+    expect(assistantMessage?.parts[1]?.file).toBeNull();
   });
 });

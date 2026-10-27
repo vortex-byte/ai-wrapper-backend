@@ -149,6 +149,23 @@ export class DrizzleAttachmentRepository implements AttachmentRepository {
     return row !== undefined ? toDomain(row) : null;
   }
 
+  async findManyByIdsForUser(
+    attachmentIds: readonly string[],
+    userId: string,
+  ): Promise<Attachment[]> {
+    if (attachmentIds.length === 0) return [];
+    const rows = await runDb()
+      .select(attachmentColumns)
+      .from(attachments)
+      .where(
+        and(
+          inArray(attachments.id, Array.from(new Set(attachmentIds))),
+          eq(attachments.ownerUserId, userId),
+        ),
+      );
+    return rows.map(toDomain);
+  }
+
   async attachToMessage(
     attachmentIds: readonly string[],
     messageId: string,

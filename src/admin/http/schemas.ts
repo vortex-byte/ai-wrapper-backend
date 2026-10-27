@@ -31,20 +31,21 @@ export const CreateUserBodySchema = z
     displayName: z.string().trim().min(1).max(256),
     role: z.enum(USER_ROLES),
     divisionId: z.uuid().nullable().optional(),
-    initialPassword: z.string().min(1).max(1024).optional(),
+    password: z.string().min(1).max(1024).optional(),
     generatePassword: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
-    if (!data.generatePassword && !data.initialPassword) {
+    if (!data.generatePassword && !data.password) {
       ctx.addIssue({
         code: 'custom',
-        path: ['initialPassword'],
-        message: 'Either initialPassword or generatePassword: true must be provided.',
+        path: ['password'],
+        message: 'Either password or generatePassword: true must be provided.',
       });
     }
   });
 
 export const UpdateUserBodySchema = z.object({
+  email: z.email().trim().min(3).max(320).optional(),
   displayName: z.string().trim().min(1).max(256).optional(),
   role: z.enum(USER_ROLES).optional(),
   status: z.enum(USER_STATUSES).optional(),
@@ -77,5 +78,22 @@ export const UpdateDivisionBodySchema = z.object({
   externalRef: z.string().trim().max(256).nullable().optional(),
 });
 
+export const ListDivisionsQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).default(30),
+});
+
 export const UserIdParamSchema = z.uuid();
 export const DivisionIdParamSchema = z.uuid();
+
+export const ImportUsersRowSchema = z.object({
+  email: z.email().trim().min(3).max(320),
+  name: z.string().trim().min(1).max(256),
+  division: z.string().trim().max(256).optional(),
+});
+
+export const ImportUsersBodySchema = z.object({
+  rows: z.array(ImportUsersRowSchema).min(1).max(500),
+});
+
+export type ImportUsersRow = z.infer<typeof ImportUsersRowSchema>;
+export type ImportUsersBody = z.infer<typeof ImportUsersBodySchema>;

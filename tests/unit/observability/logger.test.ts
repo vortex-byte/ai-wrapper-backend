@@ -130,13 +130,13 @@ describe('renderTextLine', () => {
     );
 
     expect(line).toBe(
-      '2026-10-22 08:41:44.183 orchestrator - info  - generation started - generationId=gen-1 provider=openai',
+      '2026-10-22 08:41:44.183 orchestrator - INFO  - generation started - generationId=gen-1 provider=openai',
     );
   });
 
   it('omits the context segment when there is no metadata', () => {
     expect(renderTextLine(base, { name: 'api', colorize: false })).toBe(
-      '2026-10-22 08:41:44.183 api - info  - generation started',
+      '2026-10-22 08:41:44.183 api - INFO  - generation started',
     );
   });
 
@@ -170,8 +170,8 @@ describe('renderTextLine', () => {
     const warn = renderTextLine({ ...base, level: 'warn' }, { name: 'api', colorize: true });
     const error = renderTextLine({ ...base, level: 'error' }, { name: 'api', colorize: true });
 
-    expect(warn).toContain(`${LEVEL_COLOR.warn}warn${ANSI_RESET}  -`);
-    expect(error).toContain(`${LEVEL_COLOR.error}error${ANSI_RESET} -`);
+    expect(warn).toContain(`${LEVEL_COLOR.warn}WARN${ANSI_RESET}  -`);
+    expect(error).toContain(`${LEVEL_COLOR.error}ERROR${ANSI_RESET} -`);
     expect(
       renderTextLine({ ...base, level: 'error' }, { name: 'api', colorize: false }),
     ).not.toContain('\u001B[');
@@ -203,14 +203,14 @@ describe('createLogger console transport', () => {
 
     expect(writes).toHaveLength(2);
     expect(writes[0]).toMatch(
-      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} test-logger - info {2}- generation started - /,
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} test-logger - INFO {2}- generation started - /,
     );
     expect(writes[0]).toContain('generationId=gen-1');
     expect(writes[0]).not.toContain('do not log me');
     expect(writes[0]).not.toContain('"msg":');
     expect(writes[0]).not.toContain('timestamp=');
 
-    expect(writes[1]).toContain(' - error - generation failed');
+    expect(writes[1]).toContain(' - ERROR - generation failed');
     expect(writes[1]).toContain('err="Error: kaboom"');
     expect(writes[1]).toMatch(/\n {4}Error: kaboom/);
   });

@@ -11,7 +11,10 @@ import { clientIp, requestMeta } from '@/http/request-meta.ts';
 import type { AppEnv } from '@/http/types.ts';
 import { parseJsonBody } from '@/http/validate.ts';
 import type { ModelRecord, ProviderRecord } from '../domain/registry.ts';
-import { parseCapabilities } from '../domain/capabilities-schema.ts';
+import {
+  parseCapabilities,
+  parsePartialCapabilities,
+} from '../domain/capabilities-schema.ts';
 import type { ModelPrice } from '../ports/registry-repository.ts';
 import type { RegistryAdminService } from '../application/registry-admin-service.ts';
 import {
@@ -117,7 +120,10 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
       displayName: body.displayName,
       description: body.description ?? null,
       ...(body.status !== undefined ? { status: body.status } : {}),
-      capabilities: parseCapabilities(body.capabilities),
+      capabilities: parseCapabilities(body.capabilities, {
+        contextWindow: body.contextWindow,
+        maxOutputTokens: body.maxOutputTokens,
+      }),
       ...(body.contextWindow !== undefined ? { contextWindow: body.contextWindow } : {}),
       ...(body.maxOutputTokens !== undefined ? { maxOutputTokens: body.maxOutputTokens } : {}),
       ...(body.defaultMaxOutputTokens !== undefined
@@ -142,7 +148,7 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
       ...(body.description !== undefined ? { description: body.description } : {}),
       ...(body.status !== undefined ? { status: body.status } : {}),
       ...(body.capabilities !== undefined
-        ? { capabilities: parseCapabilities(body.capabilities) }
+        ? { capabilities: parsePartialCapabilities(body.capabilities) }
         : {}),
       ...(body.contextWindow !== undefined ? { contextWindow: body.contextWindow } : {}),
       ...(body.maxOutputTokens !== undefined ? { maxOutputTokens: body.maxOutputTokens } : {}),

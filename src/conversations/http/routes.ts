@@ -13,6 +13,7 @@ import { rateLimit, userRateLimit } from '@/http/middleware/rate-limit.ts';
 import type { RateLimiter } from '@/http/ports/rate-limiter.ts';
 import type { Conversation, MessagePart, MessageWithParts } from '../domain/conversation.ts';
 import type { ConversationService } from '../application/conversation-service.ts';
+import type { MessageFileLookup, MessageFileSummary } from '../ports/message-file-lookup.ts';
 import type { SendService } from '@/generations/application/send-service.ts';
 import {
   CreateConversationBodySchema,
@@ -27,6 +28,8 @@ import {
 export interface ConversationRoutesDeps {
   readonly conversations: ConversationService;
   readonly send: SendService;
+  /** Attachment metadata for binary parts; owned by conversations, implemented by attachments. */
+  readonly files: MessageFileLookup;
   readonly auth: AuthService;
   readonly config: Config;
   readonly rateLimiter: RateLimiter;
@@ -36,7 +39,7 @@ export interface ConversationRoutesDeps {
  * Every route is scoped to the signed-in user; another user's id yields `404 not_found`.
  */
 export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
-  const { conversations, send, auth, config, rateLimiter } = deps;
+  const { conversations, send, files, auth, config, rateLimiter } = deps;
   const routes = new Hono<AppEnv>();
 
   const generationLimit = rateLimit(config, rateLimiter, {
@@ -117,9 +120,10 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
       limit: parsed.data.limit,
       before: parsed.data.before ?? null,
     });
+    const fileIndex = await loadMessageFiles(page.items, files, caller.user.id);
     return c.json(
       ok({
-        items: page.items.map(toWireMessage),
+        items: page.items.map((item) => toWireMessage(item, fileIndex)),
         nextCursor: page.nextCursor,
       }),
     );
@@ -191,7 +195,7 @@ function toWireConversationDetail(conversation: Conversation) {
   };
 }
 
-function toWireMessage(item: MessageWithParts) {
+function toWireMessage(item: MessageWithParts, fileIndex: MessageFileIndex) {
   const { message, parts } = item;
   return {
     id: message.id,
@@ -201,11 +205,54 @@ function toWireMessage(item: MessageWithParts) {
     finishReason: message.finishReason,
     createdAt: message.createdAt.toISOString(),
     generationId: (message.metadata['generationId'] as string | undefined) ?? null,
-    parts: parts.map(toWirePart),
+    parts: parts.map((part) => toWirePart(part, fileIndex, message.role)),
   };
 }
 
-function toWirePart(part: MessagePart) {
+const BINARY_PART_TYPES: ReadonlySet<MessagePart['type']> = new Set([
+  'image',
+  'document',
+  'generated_file',
+]);
+
+type MessageFileIndex = ReadonlyMap<string, MessageFileSummary>;
+
+/** One owner-scoped batch read per page, instead of a lookup per part. */
+async function loadMessageFiles(
+  items: readonly MessageWithParts[],
+  files: MessageFileLookup,
+  userId: string,
+): Promise<MessageFileIndex> {
+  const ids = new Set<string>();
+  for (const item of items) {
+    for (const part of item.parts) {
+      if (part.fileId !== null && BINARY_PART_TYPES.has(part.type)) ids.add(part.fileId);
+    }
+  }
+  if (ids.size === 0) return new Map();
+  const summaries = await files.listFiles([...ids], userId);
+  return new Map(summaries.map((summary) => [summary.id, summary]));
+}
+
+function toWireFile(file: MessageFileSummary) {
+  return {
+    id: file.id,
+    name: file.name,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+    ...(file.width !== null ? { width: file.width } : {}),
+    ...(file.height !== null ? { height: file.height } : {}),
+    status: file.status,
+    // §6.1: `expired`/`missing` files have no downloadable content.
+    ...(file.status === 'available' ? { downloadUrl: `/api/files/${file.id}/content` } : {}),
+  };
+}
+
+function toWirePart(
+  part: MessagePart,
+  fileIndex: MessageFileIndex,
+  role: MessageWithParts['message']['role'],
+) {
   const base = { id: part.id, position: part.position, type: part.type };
   if (part.type === 'text') {
     return {
@@ -214,11 +261,13 @@ function toWirePart(part: MessagePart) {
       text: part.textContent ?? '',
     };
   }
-  if (part.type === 'image' || part.type === 'document' || part.type === 'generated_file') {
+  if (BINARY_PART_TYPES.has(part.type)) {
+    const summary = part.fileId === null ? undefined : fileIndex.get(part.fileId);
     return {
       ...base,
-      origin: (part.data['origin'] as string | undefined) ?? 'user',
-      file: null,
+      // The orchestrator stores no `origin` on generated parts; the message role is the answer.
+      origin: (part.data['origin'] as string | undefined) ?? role,
+      file: summary === undefined ? null : toWireFile(summary),
     };
   }
   return { ...base, data: part.data };

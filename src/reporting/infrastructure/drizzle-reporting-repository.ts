@@ -47,6 +47,17 @@ export class DrizzleReportingRepository implements ReportingRepository {
       }
     })();
 
+    const where = query.divisionId === undefined
+      ? and(
+          gte(usageDaily.day, query.from.toISOString().slice(0, 10)),
+          lte(usageDaily.day, query.to.toISOString().slice(0, 10)),
+        )
+      : and(
+          gte(usageDaily.day, query.from.toISOString().slice(0, 10)),
+          lte(usageDaily.day, query.to.toISOString().slice(0, 10)),
+          eq(usageDaily.divisionId, query.divisionId),
+        );
+
     const rows = await runDb(tx)
       .select({
         key: sql<string | null>`${dimension.expr}`,
@@ -59,14 +70,13 @@ export class DrizzleReportingRepository implements ReportingRepository {
         estCostMicros: sql<number | null>`sum(${usageDaily.estCostMicros})::bigint`,
       })
       .from(usageDaily)
-      .where(
-        and(
-          gte(usageDaily.day, query.from.toISOString().slice(0, 10)),
-          lte(usageDaily.day, query.to.toISOString().slice(0, 10)),
-        ),
-      )
+      .where(where)
       .groupBy(dimension.expr)
-      .orderBy(dimension.expr);
+      .orderBy(
+        ...(query.groupBy === 'user' || query.groupBy === 'division'
+          ? [desc(sql`COALESCE(sum(${usageDaily.quotaTokens}), 0)`), dimension.expr]
+          : [dimension.expr]),
+      );
 
     const labels = await this.resolveLabels(
       query.groupBy,

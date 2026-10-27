@@ -102,7 +102,7 @@ export async function runExampleSeed(): Promise<SeedResult> {
       const res = await tx.client.query(
         `INSERT INTO ai_models (id, provider_id, key, api_model_id, display_name, capabilities,
                                 context_window, max_output_tokens, default_max_output_tokens)
-         SELECT gen_random_uuid(), p.id, $2, $3, $4, '{"schemaVersion":1}'::jsonb, 128000, 4096, 4096
+         SELECT gen_random_uuid(), p.id, $2, $3, $4, '{"schemaVersion":1,"contextWindow":128000,"maxOutputTokens":4096}'::jsonb, 128000, 4096, 4096
            FROM ai_providers p
           WHERE p.key = $1
          ON CONFLICT (key) DO NOTHING`,

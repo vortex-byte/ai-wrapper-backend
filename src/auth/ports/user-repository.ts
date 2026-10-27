@@ -41,6 +41,7 @@ export interface ListUsersQuery {
 
 export interface UpdateUserInput {
   readonly id: string;
+  readonly email?: string | undefined;
   readonly displayName?: string | undefined;
   readonly role?: UserRole | undefined;
   readonly status?: UserStatus | undefined;
@@ -67,4 +68,5 @@ export interface UserRepository {
     tx?: TransactionContext,
   ): Promise<void>;
   setPassword(update: PasswordUpdate, tx?: TransactionContext): Promise<void>;
+  delete(id: string, at: Date, tx?: TransactionContext): Promise<void>;
 }

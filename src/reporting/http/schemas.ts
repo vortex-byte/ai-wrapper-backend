@@ -12,6 +12,7 @@ export const UsageQuerySchema = z.object({
   from: ISO_DATE.optional(),
   to: ISO_DATE.optional(),
   groupBy: UsageGroupBySchema.default('day'),
+  divisionId: z.uuid().optional(),
 });
 
 export const ListQuerySchema = z.object({

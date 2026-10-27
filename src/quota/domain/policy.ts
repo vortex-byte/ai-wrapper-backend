@@ -10,6 +10,8 @@ export interface QuotaPolicyRow {
   readonly maxOutputTokensPerRequest: number | null;
   readonly maxConcurrentGenerations: number | null;
   readonly allowedModelIds: readonly string[] | null;
+  readonly updatedBy?: string | null | undefined;
+  readonly updatedAt?: Date | undefined;
 }
 
 export interface ResolvedPolicy {

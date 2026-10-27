@@ -163,6 +163,7 @@ export class InMemoryUserRepository implements UserRepository {
     if (!user) throw new Error(`user not found: ${input.id}`);
     const updated: User = {
       ...user,
+      ...(input.email !== undefined ? { email: input.email } : {}),
       ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
       ...(input.role !== undefined ? { role: input.role } : {}),
       ...(input.status !== undefined ? { status: input.status } : {}),
@@ -219,6 +220,12 @@ export class InMemoryUserRepository implements UserRepository {
       failedLoginAttempts: 0,
       lockedUntil: null,
     });
+  }
+
+  async delete(id: string, at: Date): Promise<void> {
+    const user = this.rows.get(id);
+    if (!user) return;
+    this.rows.set(id, { ...user, status: 'disabled', deletedAt: at, updatedAt: at });
   }
 }
 

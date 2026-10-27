@@ -51,6 +51,15 @@ class FakeAttachmentRepo implements AttachmentRepository {
     return att;
   }
 
+  async findManyByIdsForUser(
+    attachmentIds: readonly string[],
+    userId: string,
+  ): Promise<Attachment[]> {
+    return attachmentIds
+      .map((id) => this.attachments.get(id))
+      .filter((att): att is Attachment => att !== undefined && att.ownerUserId === userId);
+  }
+
   async attachToMessage(): Promise<void> {}
   async updateStatus(): Promise<void> {}
   async upsertExtraction(): Promise<void> {}

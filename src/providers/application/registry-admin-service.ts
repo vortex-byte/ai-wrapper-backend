@@ -4,7 +4,7 @@ import type { Clock, IdGenerator } from '@/clock/index.ts';
 import { withTransaction } from '@/db/index.ts';
 import { AppError, isUniqueViolation } from '@/errors.ts';
 import type { RequestMeta } from '@/request-context.ts';
-import type { ModelCapabilities } from '../domain/capabilities.ts';
+import type { ModelCapabilities, PartialModelCapabilities } from '../domain/capabilities.ts';
 import type { ModelRecord, ModelStatus, ProviderRecord, ProviderStatus } from '../domain/registry.ts';
 import type { ModelRegistry } from '../ports/model-registry.ts';
 import type { ProviderAdapter } from '../ports/provider-adapter.ts';
@@ -70,7 +70,7 @@ export interface UpdateModelInput {
   readonly displayName?: string;
   readonly description?: string | null;
   readonly status?: ModelStatus;
-  readonly capabilities?: Partial<ModelCapabilities>;
+  readonly capabilities?: PartialModelCapabilities;
   readonly contextWindow?: number;
   readonly maxOutputTokens?: number;
   readonly defaultMaxOutputTokens?: number;

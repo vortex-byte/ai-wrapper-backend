@@ -19,13 +19,15 @@ import {
   CreateUserBodySchema,
   DivisionIdParamSchema,
   ImportUsersBodySchema,
+  ImportUsersRowSchema,
   ListDivisionsQuerySchema,
   ListUsersQuerySchema,
+  MAX_IMPORT_ROWS,
   ResetUserPasswordBodySchema,
   UpdateDivisionBodySchema,
   UpdateUserBodySchema,
   UserIdParamSchema,
-  type ImportUsersRow,
+  type ImportUsersRequestRow,
 } from './schemas.ts';
 
 const MAX_IMPORT_BYTES = 1_000_000;
@@ -186,7 +188,7 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
     const meta = requestMeta(c, clientIp(c, config));
 
     const contentType = c.req.header('content-type') ?? '';
-    let rows: ImportUsersRow[];
+    let rows: ImportUsersRequestRow[];
     if (contentType.includes('multipart/form-data')) {
       const body = await c.req.parseBody({ all: true });
       const file = body['file'];
@@ -203,13 +205,27 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
           'The CSV must have an "email,name,division" header and at least one data row.',
         );
       }
-      if (parsed.malformed.length > 0) {
+      if (parsed.rows.length > MAX_IMPORT_ROWS) {
         throw new AppError(
           'invalid_request',
-          `Rows ${parsed.malformed.join(', ')} are missing an email or name.`,
+          `The CSV may contain at most ${MAX_IMPORT_ROWS} users per import.`,
         );
       }
-      rows = parsed.rows;
+
+      const invalidLines = [...parsed.malformed];
+      const validatedRows: ImportUsersRequestRow[] = [];
+      for (const row of parsed.rows) {
+        const validated = ImportUsersRowSchema.safeParse(row);
+        if (validated.success) validatedRows.push({ ...validated.data, line: row.line });
+        else invalidLines.push(row.line);
+      }
+      if (invalidLines.length > 0) {
+        throw new AppError(
+          'invalid_request',
+          `Rows ${invalidLines.sort((a, b) => a - b).join(', ')} have an invalid email or name.`,
+        );
+      }
+      rows = validatedRows;
     } else {
       const body = await parseJsonBody(c, ImportUsersBodySchema);
       rows = body.rows;

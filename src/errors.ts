@@ -120,7 +120,7 @@ export function isAppError(value: unknown): value is AppError {
 
 const UNIQUE_VIOLATION = '23505';
 
-/** Bun reports SQLSTATE on `errno`, while node-postgres and Drizzle wrappers expose it as `code`. */
+/** Bun exposes SQLSTATE as `errno`; node-postgres and Drizzle use `code`. */
 function sqlState(value: unknown): string | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const { code, errno } = value as { code?: unknown; errno?: unknown };
@@ -158,7 +158,7 @@ export function isUniqueViolationOf(value: unknown, constraint: string): boolean
 
 const FOREIGN_KEY_VIOLATION = '23503';
 
-/** Returns true when the error is a PostgreSQL foreign-key violation (SQLSTATE 23503). */
+/** True when any error in the cause chain is a Postgres foreign-key violation. */
 export function isForeignKeyViolation(value: unknown): boolean {
   let current: unknown = value;
   for (let depth = 0; depth < 10 && current !== null && current !== undefined; depth++) {

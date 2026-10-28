@@ -1,9 +1,4 @@
-/**
- * Attachment metadata a message part needs to render after a reload (API contract §6.1).
- *
- * Owned by conversations and implemented over the attachments module: the read API hydrates
- * `file` for `image | document | generated_file` parts without learning table names.
- */
+/** Attachment metadata a part needs after a reload, implemented over attachments. */
 
 export type MessageFileStatus = 'available' | 'processing' | 'expired' | 'missing';
 

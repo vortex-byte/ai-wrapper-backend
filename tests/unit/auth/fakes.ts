@@ -92,7 +92,7 @@ export class InMemoryUserRepository implements UserRepository {
   async findByEmail(email: string): Promise<User | null> {
     const target = email.toLowerCase();
     for (const user of this.rows.values()) {
-      if (user.email.toLowerCase() === target) return user;
+      if (user.deletedAt === null && user.email.toLowerCase() === target) return user;
     }
     return null;
   }

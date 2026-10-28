@@ -9,7 +9,27 @@ import type {
   DivisionStatsRange,
   DivisionWithStats,
 } from '@/admin/ports/division-repository.ts';
-import { createHarness, makeUser } from '../auth/fakes.ts';
+import { createHarness, InMemoryUserRepository, makeUser } from '../auth/fakes.ts';
+import type { CreateUserInput } from '@/auth/ports/user-repository.ts';
+import type { User } from '@/auth/domain/user.ts';
+
+class UniqueViolatingUserRepository extends InMemoryUserRepository {
+  private readonly failingEmail: string;
+
+  constructor(failingEmail: string) {
+    super();
+    this.failingEmail = failingEmail;
+  }
+
+  override async create(input: CreateUserInput): Promise<User> {
+    if (input.email === this.failingEmail) {
+      throw Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+      });
+    }
+    return super.create(input);
+  }
+}
 
 class InMemoryDivisionRepository implements DivisionRepository {
   readonly rows = new Map<string, Division>();
@@ -544,6 +564,30 @@ describe('admin service', () => {
 
       expect(divisions.rows.has('div-1')).toBe(true);
     });
+
+    it('rejects deletion when only a division quota policy remains', async () => {
+      const { admin, divisions } = setup();
+      divisions.rows.set('div-1', {
+        id: 'div-1',
+        name: 'Engineering',
+        externalRef: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      });
+      divisions.references = { users: 0, quotaPolicies: 1, usageEvents: 0, usageDaily: 0 };
+
+      await expect(
+        admin.deleteDivision({
+          id: 'div-1',
+          actorUserId: 'admin-1',
+          meta: { ip: '127.0.0.1', requestId: 'req-1', userAgentHash: null },
+        }),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        message: expect.stringContaining('1 quota policy'),
+      });
+
+      expect(divisions.rows.has('div-1')).toBe(true);
+    });
   });
 });
 
@@ -664,6 +708,40 @@ describe('admin service importUsers', () => {
         caller: { actorUserId: 'admin-1', role: 'admin', divisionId: null, meta },
       }),
     ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('keeps committing later rows when one insert hits a unique violation', async () => {
+    const harness = createHarness();
+    const users = new UniqueViolatingUserRepository('collide@corp.example');
+    const admin = createAdminService({
+      users,
+      divisions: new InMemoryDivisionRepository(),
+      sessions: harness.sessions,
+      hasher: harness.hasher,
+      audit: harness.audit,
+      clock: harness.clock,
+      idGen: { uuidv7: () => `gen-${users.rows.size + 1}` },
+      passwordPolicy: harness.deps.passwordPolicy,
+    });
+
+    const result = await admin.importUsers({
+      rows: [
+        { email: 'first@corp.example', name: 'First' },
+        { email: 'collide@corp.example', name: 'Collide' },
+        { email: 'last@corp.example', name: 'Last' },
+      ],
+      caller: { actorUserId: 'admin-1', role: 'super_admin', divisionId: null, meta },
+    });
+
+    expect(result.created.map((u) => u.email)).toEqual([
+      'first@corp.example',
+      'last@corp.example',
+    ]);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 3, email: 'collide@corp.example' }),
+    ]);
+    expect(await users.findByEmail('first@corp.example')).not.toBeNull();
+    expect(await users.findByEmail('last@corp.example')).not.toBeNull();
   });
 });
 

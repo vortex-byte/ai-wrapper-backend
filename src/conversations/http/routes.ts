@@ -28,7 +28,6 @@ import {
 export interface ConversationRoutesDeps {
   readonly conversations: ConversationService;
   readonly send: SendService;
-  /** Attachment metadata for binary parts; owned by conversations, implemented by attachments. */
   readonly files: MessageFileLookup;
   readonly auth: AuthService;
   readonly config: Config;
@@ -217,7 +216,7 @@ const BINARY_PART_TYPES: ReadonlySet<MessagePart['type']> = new Set([
 
 type MessageFileIndex = ReadonlyMap<string, MessageFileSummary>;
 
-/** One owner-scoped batch read per page, instead of a lookup per part. */
+/** One batch read per page instead of one lookup per part. */
 async function loadMessageFiles(
   items: readonly MessageWithParts[],
   files: MessageFileLookup,
@@ -243,7 +242,6 @@ function toWireFile(file: MessageFileSummary) {
     ...(file.width !== null ? { width: file.width } : {}),
     ...(file.height !== null ? { height: file.height } : {}),
     status: file.status,
-    // §6.1: `expired`/`missing` files have no downloadable content.
     ...(file.status === 'available' ? { downloadUrl: `/api/files/${file.id}/content` } : {}),
   };
 }
@@ -265,7 +263,7 @@ function toWirePart(
     const summary = part.fileId === null ? undefined : fileIndex.get(part.fileId);
     return {
       ...base,
-      // The orchestrator stores no `origin` on generated parts; the message role is the answer.
+      // Generated parts carry no `origin`; fall back to the message role.
       origin: (part.data['origin'] as string | undefined) ?? role,
       file: summary === undefined ? null : toWireFile(summary),
     };

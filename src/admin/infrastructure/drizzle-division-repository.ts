@@ -153,10 +153,11 @@ export class DrizzleDivisionRepository implements DivisionRepository {
 
   async delete(id: string, tx?: TransactionContext): Promise<boolean> {
     await runDb(tx).execute(sql`
-      UPDATE users SET division_id = NULL WHERE division_id = ${id}::uuid AND deleted_at IS NOT NULL
-    `);
-    await runDb(tx).execute(sql`
-      DELETE FROM quota_policies WHERE division_id = ${id}::uuid
+      UPDATE users
+         SET division_id = NULL,
+             role = CASE WHEN role = 'admin' THEN 'user' ELSE role END,
+             updated_at = now()
+       WHERE division_id = ${id}::uuid AND deleted_at IS NOT NULL
     `);
     const rows = await runDb(tx)
       .delete(divisions)

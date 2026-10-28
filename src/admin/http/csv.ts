@@ -1,9 +1,11 @@
-/** Minimal CSV parsing/serialization for the user-import feature. */
-
 export interface CsvRow {
   readonly email: string;
   readonly name: string;
   readonly division?: string | undefined;
+}
+
+export interface CsvParsedRow extends CsvRow {
+  readonly line: number;
 }
 
 function splitLine(line: string, delimiter: string): string[] {
@@ -36,13 +38,8 @@ function splitLine(line: string, delimiter: string): string[] {
   return fields;
 }
 
-/**
- * Parses CSV text with a fixed `email,name,division` header. Column order is free and
- * matching is case-insensitive; the delimiter is auto-detected (`,` or `;`). Lines with
- * fewer fields than the header are treated as missing trailing columns. Returns the data
- * rows plus 1-based row numbers of lines that could not be mapped to the header.
- */
-export function parseCsv(text: string): { rows: CsvRow[]; malformed: number[] } {
+/** Column order is free and the delimiter is auto-detected; returns parsed rows plus 1-based lines that failed. */
+export function parseCsv(text: string): { rows: CsvParsedRow[]; malformed: number[] } {
   const cleaned = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const lines = cleaned.split(/\r\n|\n|\r/).filter((line) => line.trim() !== '');
   if (lines.length === 0) return { rows: [], malformed: [] };
@@ -56,7 +53,7 @@ export function parseCsv(text: string): { rows: CsvRow[]; malformed: number[] } 
     return { rows: [], malformed: [] };
   }
 
-  const rows: CsvRow[] = [];
+  const rows: CsvParsedRow[] = [];
   const malformed: number[] = [];
   for (let i = 1; i < lines.length; i++) {
     const fields = splitLine(lines[i] ?? '', delimiter);
@@ -68,6 +65,7 @@ export function parseCsv(text: string): { rows: CsvRow[]; malformed: number[] } 
       continue;
     }
     rows.push({
+      line: i + 1,
       email,
       name,
       ...(divisionIndex !== -1 && divisionIndex < fields.length

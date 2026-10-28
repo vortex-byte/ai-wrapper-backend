@@ -33,6 +33,16 @@ describe('capabilities schema', () => {
     expect(partial.maxOutputTokens).toBeUndefined();
   });
 
+  it('leaves documents.pdf absent when a partial patch only touches maxPages', () => {
+    const partial = parsePartialCapabilities({ documents: { maxPages: 40 } });
+    expect(partial.documents).toEqual({ maxPages: 40 });
+    expect(partial.documents?.pdf).toBeUndefined();
+  });
+
+  it('keeps an explicit documents.pdf value in a partial patch', () => {
+    expect(parsePartialCapabilities({ documents: { pdf: true } }).documents).toEqual({ pdf: true });
+  });
+
   it('rejects a non-positive context window', () => {
     const result = ModelCapabilitiesSchema.safeParse({ contextWindow: 0, maxOutputTokens: 10 });
     expect(result.success).toBe(false);

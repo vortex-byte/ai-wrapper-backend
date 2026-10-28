@@ -253,6 +253,111 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
     expect(body.code).toBe('conflict');
   });
 
+  it('signs in the new account after a soft-deleted one held the same email', async () => {
+    await seedSuperAdminUser('admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const create = () =>
+      app.request(
+        new Request('http://localhost/api/admin/users', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: ORIGIN,
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({
+            email: 'recycled@corp.example',
+            displayName: 'Recycled',
+            role: 'user',
+            generatePassword: true,
+          }),
+        }),
+      );
+
+    const first = await create();
+    expect(first.status).toBe(201);
+    const firstId = ((await first.json()) as { data: { id: string } }).data.id;
+
+    const removed = await app.request(
+      new Request(`http://localhost/api/admin/users/${firstId}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(removed.status).toBe(200);
+
+    const second = await create();
+    expect(second.status).toBe(201);
+    const secondBody = (await second.json()) as {
+      data: { id: string; temporaryPassword: string };
+    };
+
+    const login = await app.request(
+      new Request('http://localhost/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
+        body: JSON.stringify({
+          email: 'recycled@corp.example',
+          password: secondBody.data.temporaryPassword,
+        }),
+      }),
+    );
+
+    expect(login.status).toBe(200);
+    const loginBody = (await login.json()) as { data: { user: { id: string } } };
+    expect(loginBody.data.user.id).toBe(secondBody.data.id);
+  });
+
+  it('rejects a CSV import row with an invalid email and reports its line', async () => {
+    await seedSuperAdminUser('admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const csv = 'email,name,division\nok@corp.example,Ok,\nnot-an-email,Broken,\n';
+    const form = new FormData();
+    form.append('file', new File([csv], 'users.csv', { type: 'text/csv' }));
+
+    const res = await app.request(
+      new Request('http://localhost/api/admin/users/import', {
+        method: 'POST',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+        body: form,
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; message: string };
+    expect(body.code).toBe('invalid_request');
+    expect(body.message).toContain('3');
+  });
+
+  it('rejects a CSV import larger than the 500-row cap', async () => {
+    await seedSuperAdminUser('admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const rows = Array.from(
+      { length: 501 },
+      (_, index) => `user${index}@corp.example,User ${index},`,
+    );
+    const csv = `email,name,division\n${rows.join('\n')}\n`;
+    const form = new FormData();
+    form.append('file', new File([csv], 'users.csv', { type: 'text/csv' }));
+
+    const res = await app.request(
+      new Request('http://localhost/api/admin/users/import', {
+        method: 'POST',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+        body: form,
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; message: string };
+    expect(body.code).toBe('invalid_request');
+    expect(body.message).toContain('500');
+  });
+
   it('updates the login email via PATCH and rejects a duplicate with 409', async () => {
     await seedSuperAdminUser('admin@corp.example');
     const target = await seedStandardUser('old@corp.example');

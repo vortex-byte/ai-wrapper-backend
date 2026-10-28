@@ -131,7 +131,7 @@ export class DrizzleUsageRepository implements UsageRepository {
           COALESCE(sum(${usageEvents.inputTokens}), 0) AS input_tokens,
           COALESCE(sum(${usageEvents.outputTokens}), 0) AS output_tokens,
           COALESCE(sum(${usageEvents.quotaTokens}), 0) AS quota_tokens,
-          COALESCE(sum(${usageEvents.estCostMicros}), 0) AS est_cost_micros
+          sum(${usageEvents.estCostMicros})::bigint AS est_cost_micros
         FROM ${usageEvents}
         WHERE ${usageEvents.createdAt} >= (${day}::date AT TIME ZONE 'UTC')
           AND ${usageEvents.createdAt} < ((${day}::date + interval '1 day') AT TIME ZONE 'UTC')

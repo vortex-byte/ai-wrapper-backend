@@ -299,4 +299,33 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
     const publicBody = (await publicRes.json()) as { data: { items: unknown[] } };
     expect(publicBody.data.items).toHaveLength(0);
   });
+
+  it('keeps documents.pdf when a patch only changes documents.maxPages', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const providerRes = await createProvider(cookie, csrfToken);
+    const providerId = ((await providerRes.json()) as { data: { id: string } }).data.id;
+    const modelRes = await createModel(cookie, csrfToken, providerId);
+    const modelId = ((await modelRes.json()) as { data: { id: string } }).data.id;
+
+    const patch = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({ capabilities: { documents: { maxPages: 40 } } }),
+      }),
+    );
+    expect(patch.status).toBe(200);
+
+    const body = (await patch.json()) as {
+      data: { capabilities: { documents: { pdf: boolean; maxPages?: number } } };
+    };
+    expect(body.data.capabilities.documents.pdf).toBe(true);
+    expect(body.data.capabilities.documents.maxPages).toBe(40);
+  });
 });

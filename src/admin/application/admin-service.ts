@@ -2,7 +2,7 @@ import { AUDIT_ACTIONS } from '@/audit/actions.ts';
 import { passwordProblemMessage, validatePassword } from '@/auth/domain/password-policy.ts';
 import type { User, UserRole, UserStatus } from '@/auth/domain/user.ts';
 import type { ListUsersQuery } from '@/auth/ports/user-repository.ts';
-import { withTransaction } from '@/db/index.ts';
+import { withSavepoint, withTransaction } from '@/db/index.ts';
 import { AppError, isForeignKeyViolation, isUniqueViolation } from '@/errors.ts';
 import type { RequestMeta } from '@/request-context.ts';
 import { canUpdateUserRoleOrStatus } from '../domain/last-admin.ts';
@@ -77,6 +77,7 @@ export interface ImportUsersRowInput {
   readonly email: string;
   readonly name: string;
   readonly division?: string | undefined;
+  readonly line?: number | undefined;
 }
 
 export interface ImportedUser {
@@ -160,6 +161,9 @@ function statsRange(clock: Clock, days: number): DivisionStatsRange {
 function describeDivisionReferences(refs: DivisionReferenceCounts): string {
   const parts: string[] = [];
   if (refs.users > 0) parts.push(`${refs.users} user${refs.users === 1 ? '' : 's'}`);
+  if (refs.quotaPolicies > 0) {
+    parts.push(`${refs.quotaPolicies} quota polic${refs.quotaPolicies === 1 ? 'y' : 'ies'}`);
+  }
   const usageRows = refs.usageEvents + refs.usageDaily;
   if (usageRows > 0) parts.push('usage history');
   return parts.join(', ');
@@ -539,7 +543,7 @@ export function createAdminService(deps: AdminDeps): AdminService {
       const candidates: { row: number; email: string; displayName: string; division: Division | null }[] = [];
 
       for (const [index, row] of rows.entries()) {
-        const rowNumber = index + 2; // +2: 1-based rows minus the CSV header line.
+        const rowNumber = row.line ?? index + 2; // JSON has no header line; number rows as if it did.
         const emailKey = row.email.toLowerCase();
 
         const divisionRef = row.division?.trim() ?? '';
@@ -582,7 +586,7 @@ export function createAdminService(deps: AdminDeps): AdminService {
 
         for (const candidate of candidates) {
           const existing = await deps.users.findByEmail(candidate.email, tx);
-          if (existing !== null && existing.deletedAt === null) {
+          if (existing !== null) {
             errors.push({
               row: candidate.row,
               email: candidate.email,
@@ -592,21 +596,53 @@ export function createAdminService(deps: AdminDeps): AdminService {
           }
 
           const id = deps.idGen.uuidv7();
-          let user: User;
           try {
-            user = await deps.users.create(
-              {
-                id,
-                email: candidate.email,
-                displayName: candidate.displayName,
-                passwordHash,
-                role: 'user',
-                status: 'active',
-                divisionId: caller.role === 'admin' ? caller.divisionId : candidate.division?.id ?? null,
-                mustChangePassword: true,
-              },
-              tx,
-            );
+            const imported = await withSavepoint(tx.client, async () => {
+              const user = await deps.users.create(
+                {
+                  id,
+                  email: candidate.email,
+                  displayName: candidate.displayName,
+                  passwordHash,
+                  role: 'user',
+                  status: 'active',
+                  divisionId:
+                    caller.role === 'admin' ? caller.divisionId : candidate.division?.id ?? null,
+                  mustChangePassword: true,
+                },
+                tx,
+              );
+
+              await deps.audit.append(
+                {
+                  actorUserId: caller.actorUserId,
+                  action: AUDIT_ACTIONS.userCreate,
+                  targetType: 'user',
+                  targetId: user.id,
+                  after: {
+                    email: user.email,
+                    displayName: user.displayName,
+                    role: user.role,
+                    status: user.status,
+                    divisionId: user.divisionId,
+                    source: 'csv_import',
+                  },
+                  requestId: caller.meta.requestId,
+                  ip: caller.meta.ip,
+                  userAgentHash: caller.meta.userAgentHash,
+                },
+                tx,
+              );
+
+              return {
+                id: user.id,
+                email: user.email,
+                displayName: user.displayName,
+                divisionId: user.divisionId,
+                divisionExternalRef: candidate.division?.externalRef ?? null,
+              };
+            });
+            created.push(imported);
           } catch (error) {
             if (isUniqueViolation(error)) {
               errors.push({
@@ -618,35 +654,6 @@ export function createAdminService(deps: AdminDeps): AdminService {
             }
             throw error;
           }
-
-          await deps.audit.append(
-            {
-              actorUserId: caller.actorUserId,
-              action: AUDIT_ACTIONS.userCreate,
-              targetType: 'user',
-              targetId: user.id,
-              after: {
-                email: user.email,
-                displayName: user.displayName,
-                role: user.role,
-                status: user.status,
-                divisionId: user.divisionId,
-                source: 'csv_import',
-              },
-              requestId: caller.meta.requestId,
-              ip: caller.meta.ip,
-              userAgentHash: caller.meta.userAgentHash,
-            },
-            tx,
-          );
-
-          created.push({
-            id: user.id,
-            email: user.email,
-            displayName: user.displayName,
-            divisionId: user.divisionId,
-            divisionExternalRef: candidate.division?.externalRef ?? null,
-          });
         }
 
         return { created, errors, temporaryPassword };

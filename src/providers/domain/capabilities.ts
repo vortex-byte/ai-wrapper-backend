@@ -7,6 +7,11 @@ export interface DocumentCapabilities {
   readonly maxPages?: number;
 }
 
+export interface PartialDocumentCapabilities {
+  readonly pdf?: boolean;
+  readonly maxPages?: number;
+}
+
 export interface ModelCapabilities {
   readonly streaming: boolean;
   readonly vision: boolean;
@@ -18,6 +23,20 @@ export interface ModelCapabilities {
   readonly maxImagesPerRequest?: number;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
+}
+
+/** Admin patch: omitted keys keep their stored value. */
+export interface PartialModelCapabilities {
+  readonly streaming?: boolean;
+  readonly vision?: boolean;
+  readonly documents?: PartialDocumentCapabilities;
+  readonly imageGeneration?: boolean;
+  readonly documentGeneration?: boolean;
+  readonly systemPrompt?: boolean;
+  readonly tools?: boolean;
+  readonly maxImagesPerRequest?: number;
+  readonly contextWindow?: number;
+  readonly maxOutputTokens?: number;
 }
 
 /** The model a generation runs on, resolved from the registry. */

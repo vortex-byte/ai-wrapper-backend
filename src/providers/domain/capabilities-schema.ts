@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ModelCapabilities } from './capabilities.ts';
+import type { ModelCapabilities, PartialModelCapabilities } from './capabilities.ts';
 
 /** Zod schemas for validating model capabilities and runtime configurations. */
 
@@ -98,7 +98,7 @@ export function parseCapabilities(
   };
 }
 
-export function parsePartialCapabilities(value: unknown): Partial<ModelCapabilities> {
+export function parsePartialCapabilities(value: unknown): PartialModelCapabilities {
   if (value === undefined || value === null) return {};
   const parsed = PartialModelCapabilitiesSchema.parse(value);
   return {
@@ -107,8 +107,10 @@ export function parsePartialCapabilities(value: unknown): Partial<ModelCapabilit
     ...(parsed.documents !== undefined
       ? {
           documents: {
-            pdf: parsed.documents.pdf ?? false,
-            ...(parsed.documents.maxPages !== undefined ? { maxPages: parsed.documents.maxPages } : {}),
+            ...(parsed.documents.pdf !== undefined ? { pdf: parsed.documents.pdf } : {}),
+            ...(parsed.documents.maxPages !== undefined
+              ? { maxPages: parsed.documents.maxPages }
+              : {}),
           },
         }
       : {}),

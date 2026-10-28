@@ -52,6 +52,7 @@ export interface UpdateUserInput {
 /** Persistence port for users. Methods return domain entities. */
 export interface UserRepository {
   findById(id: string, tx?: TransactionContext): Promise<User | null>;
+  /** Live accounts only, so a re-used email resolves to the new user. */
   findByEmail(email: string, tx?: TransactionContext): Promise<User | null>;
   findMany(
     options: ListUsersQuery,

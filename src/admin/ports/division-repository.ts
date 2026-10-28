@@ -7,7 +7,7 @@ export interface Division {
   readonly createdAt: Date;
 }
 
-/** Inclusive UTC day window, `YYYY-MM-DD`, matching the `usage_daily` buckets. */
+/** Inclusive UTC day range (`YYYY-MM-DD`) matching the `usage_daily` buckets. */
 export interface DivisionStatsRange {
   readonly from: string;
   readonly to: string;

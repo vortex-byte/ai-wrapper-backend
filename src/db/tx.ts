@@ -10,6 +10,34 @@ export interface TransactionOptions {
   readonly userId?: string;
 }
 
+const savepointCounters = new WeakMap<SavepointClient, number>();
+
+/** The subset of a pg client that savepoints need. */
+export interface SavepointClient {
+  query(text: string): Promise<unknown>;
+}
+
+/** Runs `fn` in a savepoint so a failed statement does not abort the surrounding transaction. */
+export async function withSavepoint<T>(
+  client: SavepointClient,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const next = (savepointCounters.get(client) ?? 0) + 1;
+  savepointCounters.set(client, next);
+  const name = `sp_${next}`;
+
+  await client.query(`SAVEPOINT ${name}`);
+  try {
+    const result = await fn();
+    await client.query(`RELEASE SAVEPOINT ${name}`);
+    return result;
+  } catch (error) {
+    await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
+    await client.query(`RELEASE SAVEPOINT ${name}`);
+    throw error;
+  }
+}
+
 export async function withTransaction<T>(
   fn: (tx: TransactionContext) => Promise<T>,
   options: TransactionOptions = {},

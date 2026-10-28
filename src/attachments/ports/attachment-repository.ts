@@ -11,10 +11,7 @@ export interface AttachmentRepository {
 
   findByIdAndUser(attachmentId: string, userId: string): Promise<Attachment | null>;
 
-  /**
-   * Owner-scoped batch read for hydrating message parts. Tombstoned rows are included: the read
-   * API reports them as `expired` instead of losing the part's file entirely.
-   */
+  /** Owner-scoped batch read; tombstoned rows are included so parts keep their file. */
   findManyByIdsForUser(attachmentIds: readonly string[], userId: string): Promise<Attachment[]>;
 
   /** Links uploaded attachments to a message. */

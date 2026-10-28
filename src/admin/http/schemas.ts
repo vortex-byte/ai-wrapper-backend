@@ -85,6 +85,8 @@ export const ListDivisionsQuerySchema = z.object({
 export const UserIdParamSchema = z.uuid();
 export const DivisionIdParamSchema = z.uuid();
 
+export const MAX_IMPORT_ROWS = 500;
+
 export const ImportUsersRowSchema = z.object({
   email: z.email().trim().min(3).max(320),
   name: z.string().trim().min(1).max(256),
@@ -92,8 +94,9 @@ export const ImportUsersRowSchema = z.object({
 });
 
 export const ImportUsersBodySchema = z.object({
-  rows: z.array(ImportUsersRowSchema).min(1).max(500),
+  rows: z.array(ImportUsersRowSchema).min(1).max(MAX_IMPORT_ROWS),
 });
 
 export type ImportUsersRow = z.infer<typeof ImportUsersRowSchema>;
+export type ImportUsersRequestRow = ImportUsersRow & { readonly line?: number | undefined };
 export type ImportUsersBody = z.infer<typeof ImportUsersBodySchema>;

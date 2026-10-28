@@ -733,6 +733,9 @@ Every mutation writes an `audit_logs` row in the same transaction.
 | `POST /api/admin/users` | `admin`, `super_admin` | Create/pre-provision user (`admin` in own division with `role=user`; `super_admin` any role/division) |
 | `GET /api/admin/users/:id` | `admin`, `super_admin` | Detail (`admin` own division only, 404 otherwise; `super_admin` any) |
 | `PATCH /api/admin/users/:id` | `admin`, `super_admin` | Update user (`admin` email/displayName/status in own division; `super_admin` email/role/division/status/profile) |
+| `DELETE /api/admin/users/:id` | `admin`, `super_admin` | Soft-delete user (`admin` own division, `role=user` only, 404 otherwise; `super_admin` any) |
+| `GET /api/admin/users/import/template` | `admin`, `super_admin` | Download the `email,name,division` CSV template |
+| `POST /api/admin/users/import` | `admin`, `super_admin` | Bulk-provision users from CSV or JSON (max 500 rows) |
 | `POST /api/admin/users/:id/password/reset` | `admin`, `super_admin` | Reset password (`admin` own division only, 404 otherwise; `super_admin` any) |
 | `GET /api/admin/divisions` · `GET /api/admin/divisions/:id` · `POST /api/admin/divisions` · `PATCH /api/admin/divisions/:id` · `DELETE /api/admin/divisions/:id` | `super_admin` | Divisions (list/detail include usage + policy stats; guarded hard delete) |
 
@@ -1030,6 +1033,80 @@ the division can be deleted.
 { "status": "ok", "message": "Division deleted." }
 ```
 (empty envelope). `404 not_found` if the division does not exist. Writes an `audit_logs` row (`action: "division.delete"`).
+
+---
+
+### 9.11 `GET /api/admin/users/import/template`
+
+Downloads the CSV template accepted by §9.12 (UTF-8 with BOM, header `email,name,division`).
+Requires `role=admin` or `role=super_admin`.
+
+**Response:** `200`, `Content-Type: text/csv; charset=utf-8`,
+`Content-Disposition: attachment; filename="template_registrasi_pengguna.csv"`.
+
+---
+
+### 9.12 `POST /api/admin/users/import`
+
+Bulk-provisions users at `role='user'` with `status='active'` and `mustChangePassword=true`. Accepts either
+a `multipart/form-data` upload in the `file` part or a JSON body. Both variants share the same limits:
+at most **500 rows** per request.
+
+A division `admin` must belong to a division; every created user is forced into `caller.division_id` and a
+`division` column naming any other division is reported as a row error. `super_admin` may assign the
+`division` column, matched case-insensitively against `divisions.external_ref`.
+
+**Request body (JSON):**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `rows` | array of objects | Yes | 1–500 rows. |
+| `rows[].email` | string (`citext`) | Yes | Login email; must be a valid address and not already live. |
+| `rows[].name` | string | Yes | Display name. |
+| `rows[].division` | string | No | Division `external_ref`. |
+
+**Request body (multipart):** a single `file` part (max 1 MB) containing a CSV whose header includes
+`email` and `name` (order-free, case-insensitive, `,` or `;` delimited) and an optional `division` column.
+
+`200`:
+```json
+{ "status": "ok", "message": "Bulk registration processed.", "data": {
+    "summary": { "total": 3, "created": 2, "skipped": 1 },
+    "temporaryPassword": "Kx7-…",
+    "createdUsers": [
+      { "id": "0192…", "email": "a@corp.example", "displayName": "A",
+        "divisionId": "0192…", "divisionExternalRef": "ENG-01" }
+    ],
+    "errors": [
+      { "row": 4, "email": "b@corp.example", "reason": "Email sudah terdaftar di sistem." }
+    ] } }
+```
+- `row` is the physical line in the uploaded CSV (header included) or the 1-based row index plus one for JSON.
+- `temporaryPassword` is the single password shared by every account created in the batch. It is returned
+  **only** in this response and is never stored in plaintext; each account must change it at first login.
+- Creation is atomic per row: a failing row is skipped and reported, the remaining rows still commit.
+- `400 invalid_request` for an unreadable/oversized CSV, a missing `email`/`name` header, more than 500 rows,
+  or rows with an invalid email or name. The message lists the offending row numbers.
+- `403 forbidden` when a division `admin` has no division.
+
+---
+
+### 9.13 `DELETE /api/admin/users/:id`
+
+Soft-deletes a user: sets `deleted_at`, forces `status='disabled'`, and revokes every active session.
+Writes an `audit_logs` row (`action: "user.delete"`).
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Target user ID. |
+
+When called by a division `admin`, returns **404** if the target is outside the caller's division or has a
+role other than `'user'`. Deleting your own administrator account returns `403 forbidden`. Deleting the last
+active `super_admin` returns `409 conflict`.
+
+`200` → `{ "status": "ok", "message": "User deleted." }` (empty envelope). `404 not_found` for an unknown or
+already-deleted user. The email is released for re-registration because `users_email_live_uq` only covers
+live rows.
 
 ---
 

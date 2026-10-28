@@ -93,7 +93,7 @@ function storageKeyFor(clock: Clock, idGen: IdGenerator): string {
   return `files/${month}/${idGen.uuidv7()}`;
 }
 
-/** Wire vocabulary (§6.1): `ready` is downloadable; tombstones read as `expired`. */
+/** Maps storage status to the read-API vocabulary; tombstones read as `expired`. */
 const MESSAGE_FILE_STATUS: Readonly<Record<AttachmentStatus, MessageFileStatus>> = {
   uploading: 'processing',
   validating: 'processing',
@@ -220,7 +220,6 @@ export class AttachmentService implements MessageFileLookup {
     return toView(attachment, extraction);
   }
 
-  /** Hydrates the parts of a message page; ids owned by another user are simply absent. */
   async listFiles(
     attachmentIds: readonly string[],
     userId: string,

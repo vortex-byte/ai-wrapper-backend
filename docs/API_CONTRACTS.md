@@ -1550,13 +1550,80 @@ Sanitized `error_events` (no provider bodies, keys, or stack traces) in `data` a
 
 ```json
 { "status": "ok", "message": "", "data": { "items": [
-    { "id": "10231", "action": "user.password_reset", "actorUserId": "…",
+    { "id": "10231", "action": "user.password_reset", "actorUserId": "0192a6b1-0000-7000-8000-000000000001",
+      "actor": { "id": "0192a6b1-0000-7000-8000-000000000001", "displayName": "Super Admin", "email": "admin@corp.example" },
       "targetType": "user", "targetId": "…", "before": null,
       "after": { "mustChangePassword": true }, "requestId": "…",
       "ip": "10.0.4.19", "createdAt": "…" } ],
     "nextCursor": null } }
 ```
-`before`/`after` are redacted — key material and passwords never appear.
+`before`/`after` are redacted — key material and passwords never appear. `actor` is enriched with user identity or `null` if unauthenticated/system.
+
+### 12.3 Platform Settings (`GET` & `PATCH /api/admin/settings`)
+
+Super admin endpoints to read and update versioned global platform settings.
+
+#### 12.3.1 `GET /api/admin/settings`
+Returns current settings with metadata (`version`, `updatedAt`, `updatedBy`).
+
+`200`:
+```json
+{
+  "status": "ok",
+  "message": "",
+  "data": {
+    "systemPrompt": {
+      "value": "You are an enterprise AI assistant.",
+      "version": 1,
+      "updatedAt": "2026-10-29T10:00:00.000Z",
+      "updatedBy": {
+        "id": "0192a6b1-0000-7000-8000-000000000001",
+        "displayName": "Super Admin",
+        "email": "admin@corp.example"
+      }
+    },
+    "quotaTimezone": {
+      "value": "Asia/Jakarta",
+      "version": 1,
+      "updatedAt": "2026-10-29T08:00:00.000Z",
+      "updatedBy": null
+    },
+    "attachments": {
+      "value": {
+        "maxBytesPerFile": 31457280,
+        "maxFilesPerRequest": 5,
+        "retentionHours": 24
+      },
+      "version": 1,
+      "updatedAt": "2026-10-29T08:00:00.000Z",
+      "updatedBy": null
+    },
+    "security": {
+      "value": {
+        "sessionIdleMinutes": 480,
+        "loginMaxFailures": 8,
+        "loginLockoutMinutes": 15
+      },
+      "version": 1,
+      "updatedAt": "2026-10-29T08:00:00.000Z",
+      "updatedBy": null
+    }
+  }
+}
+```
+
+#### 12.3.2 `PATCH /api/admin/settings`
+Updates one or more settings fields. Each modified field writes an audit log (`action: "settings.update"`).
+
+**Body parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `systemPrompt` | string (max 10,000) | No | Global system prompt prepended to conversation messages. |
+| `quotaTimezone` | string | No | Valid IANA time zone identifier (e.g. `Asia/Jakarta`). |
+| `attachments` | object | No | Object with `maxBytesPerFile`, `maxFilesPerRequest`, `retentionHours`. |
+| `security` | object | No | Object with `sessionIdleMinutes`, `loginMaxFailures`, `loginLockoutMinutes`. |
+
+`200`: Returns updated settings payload formatted as above.
 
 ---
 

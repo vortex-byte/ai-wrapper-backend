@@ -7,6 +7,7 @@ import { resetDatabase } from './helpers/reset.ts';
 /** Integration tests for migration baseline and triggers against real PostgreSQL. */
 describe('migration baseline', () => {
   beforeAll(async () => {
+    await resetDatabase();
     await runMigrations();
   });
 

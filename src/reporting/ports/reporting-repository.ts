@@ -54,9 +54,16 @@ export interface AuditLogQuery {
   readonly after?: { readonly createdAt: Date; readonly id: number } | undefined;
 }
 
+export interface AuditActor {
+  readonly id: string;
+  readonly displayName: string;
+  readonly email: string;
+}
+
 export interface AuditLogRow {
   readonly id: number;
   readonly actorUserId: string | null;
+  readonly actor: AuditActor | null;
   readonly action: string;
   readonly targetType: string | null;
   readonly targetId: string | null;

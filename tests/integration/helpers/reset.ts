@@ -23,7 +23,8 @@ const RESET_STATEMENTS = [
   'DELETE FROM ai_model_prices',
   'DELETE FROM ai_models',
   'DELETE FROM ai_providers',
-  'UPDATE system_settings SET updated_by = NULL WHERE updated_by IS NOT NULL',
+  "DELETE FROM system_settings WHERE key <> 'quota.timezone'",
+  'UPDATE system_settings SET value = \'"Asia/Jakarta"\'::jsonb, version = 1, updated_by = NULL, updated_at = now() WHERE key = \'quota.timezone\'',
   'DELETE FROM users',
   'DELETE FROM divisions',
 ] as const;

@@ -61,9 +61,16 @@ export interface WireErrorEvent {
   readonly context: unknown;
 }
 
+export interface WireAuditActor {
+  readonly id: string;
+  readonly displayName: string;
+  readonly email: string;
+}
+
 export interface WireAuditLog {
   readonly id: string;
   readonly actorUserId: string | null;
+  readonly actor: WireAuditActor | null;
   readonly action: string;
   readonly targetType: string | null;
   readonly targetId: string | null;
@@ -252,6 +259,7 @@ function toWireAuditLog(row: AuditLogRow): WireAuditLog {
   return {
     id: String(row.id),
     actorUserId: row.actorUserId,
+    actor: row.actor,
     action: row.action,
     targetType: row.targetType,
     targetId: row.targetId,

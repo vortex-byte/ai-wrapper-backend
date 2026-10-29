@@ -11,6 +11,7 @@ import { generationRoutes } from '../generations/http/routes.ts';
 import { quotaRoutes } from '../quota/http/routes.ts';
 import { attachmentRoutes } from '../attachments/http/routes.ts';
 import { reportingRoutes } from '../reporting/http/routes.ts';
+import { settingsRoutes } from '../settings/http/routes.ts';
 import type { AppEnv } from './types.ts';
 
 export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
@@ -82,6 +83,14 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
     '/admin',
     reportingRoutes({
       reporting: services.reporting,
+      auth: services.auth,
+      config,
+    }),
+  );
+  api.route(
+    '/admin',
+    settingsRoutes({
+      settings: services.settings,
       auth: services.auth,
       config,
     }),

@@ -61,6 +61,7 @@ function auditRow(id: number, createdAt: Date): AuditLogRow {
   return {
     id,
     actorUserId: null,
+    actor: null,
     action: 'user.update',
     targetType: 'user',
     targetId: 'u-1',

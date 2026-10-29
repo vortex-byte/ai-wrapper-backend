@@ -249,6 +249,8 @@ export class DrizzleReportingRepository implements ReportingRepository {
       .select({
         id: auditLogs.id,
         actorUserId: auditLogs.actorUserId,
+        actorDisplayName: users.displayName,
+        actorEmail: users.email,
         action: auditLogs.action,
         targetType: auditLogs.targetType,
         targetId: auditLogs.targetId,
@@ -260,6 +262,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         createdAt: auditLogs.createdAt,
       })
       .from(auditLogs)
+      .leftJoin(users, eq(auditLogs.actorUserId, users.id))
       .where(conditions.length === 0 ? undefined : and(...conditions))
       .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
       .limit(query.limit);
@@ -267,6 +270,14 @@ export class DrizzleReportingRepository implements ReportingRepository {
     return rows.map((row) => ({
       id: Number(row.id),
       actorUserId: row.actorUserId,
+      actor:
+        row.actorUserId && row.actorDisplayName && row.actorEmail
+          ? {
+              id: row.actorUserId,
+              displayName: row.actorDisplayName,
+              email: row.actorEmail,
+            }
+          : null,
       action: row.action,
       targetType: row.targetType,
       targetId: row.targetId,

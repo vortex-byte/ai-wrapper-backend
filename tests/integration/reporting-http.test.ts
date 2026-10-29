@@ -258,9 +258,22 @@ describe('admin reporting surface (real PostgreSQL)', () => {
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as {
-      data: { items: Array<{ before: Record<string, unknown>; after: Record<string, unknown> }> };
+      data: {
+        items: Array<{
+          actorUserId: string | null;
+          actor: { id: string; displayName: string; email: string } | null;
+          before: Record<string, unknown>;
+          after: Record<string, unknown>;
+        }>;
+      };
     };
     expect(body.data.items).toHaveLength(1);
+    expect(body.data.items[0]?.actorUserId).toBe(actorId);
+    expect(body.data.items[0]?.actor).toEqual({
+      id: actorId,
+      displayName: 'User root@corp.example',
+      email: 'root@corp.example',
+    });
     expect(body.data.items[0]?.before['passwordHash']).toBe('[redacted]');
     expect(body.data.items[0]?.after['temporaryPassword']).toBe('[redacted]');
   });

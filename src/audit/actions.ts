@@ -14,8 +14,10 @@ export const AUDIT_ACTIONS = {
   divisionDelete: 'division.delete',
   providerCreate: 'provider.create',
   providerUpdate: 'provider.update',
+  providerDelete: 'provider.delete',
   modelCreate: 'model.create',
   modelUpdate: 'model.update',
+  modelDelete: 'model.delete',
   modelPriceSet: 'model.price_set',
   settingsUpdate: 'settings.update',
 } as const;

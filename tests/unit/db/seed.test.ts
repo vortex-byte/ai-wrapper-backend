@@ -25,16 +25,15 @@ describe('example registry seed data', () => {
     });
     expect(EXAMPLE_MODELS).toContainEqual({
       providerKey: 'fake',
-      key: 'fake-model',
       apiModelId: 'fake-model',
       displayName: 'Fake Model (development)',
     });
   });
 
-  it('has unique provider and model keys', () => {
+  it('has unique provider keys and unique (provider, apiModelId) model pairs', () => {
     const providerKeys = EXAMPLE_PROVIDERS.map((p) => p.key);
-    const modelKeys = EXAMPLE_MODELS.map((m) => m.key);
+    const modelPairs = EXAMPLE_MODELS.map((m) => `${m.providerKey}:${m.apiModelId}`);
     expect(new Set(providerKeys).size).toBe(providerKeys.length);
-    expect(new Set(modelKeys).size).toBe(modelKeys.length);
+    expect(new Set(modelPairs).size).toBe(modelPairs.length);
   });
 });

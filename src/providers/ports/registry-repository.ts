@@ -27,7 +27,6 @@ export interface UpdateProviderInput {
 export interface CreateModelInput {
   readonly id: string;
   readonly providerId: string;
-  readonly key: string;
   readonly apiModelId: string;
   readonly displayName: string;
   readonly description: string | null;
@@ -81,13 +80,21 @@ export interface RegistryRepository {
   findProviderByKey(key: string, tx?: TransactionContext): Promise<ProviderRecord | null>;
   createProvider(input: CreateProviderInput, tx?: TransactionContext): Promise<ProviderRecord>;
   updateProvider(input: UpdateProviderInput, tx?: TransactionContext): Promise<ProviderRecord | null>;
+  deleteProvider(id: string, tx?: TransactionContext): Promise<boolean>;
+  countModelsByProviderId(providerId: string, tx?: TransactionContext): Promise<number>;
 
   /** Every model joined with its provider (the shape the registry cache stores). */
   findAllModels(tx?: TransactionContext): Promise<ModelRecord[]>;
   findModelById(id: string, tx?: TransactionContext): Promise<ModelRecord | null>;
-  findModelByKey(key: string, tx?: TransactionContext): Promise<ModelRecord | null>;
+  findModelByProviderAndApiId(
+    providerId: string,
+    apiModelId: string,
+    tx?: TransactionContext,
+  ): Promise<ModelRecord | null>;
   createModel(input: CreateModelInput, tx?: TransactionContext): Promise<ModelRecord>;
   updateModel(input: UpdateModelInput, tx?: TransactionContext): Promise<ModelRecord | null>;
+  deleteModel(id: string, tx?: TransactionContext): Promise<boolean>;
+  countModelReferences(modelId: string, tx?: TransactionContext): Promise<number>;
 
   listPrices(modelId: string, tx?: TransactionContext): Promise<ModelPrice[]>;
   upsertPrice(input: UpsertPriceInput, tx?: TransactionContext): Promise<ModelPrice>;

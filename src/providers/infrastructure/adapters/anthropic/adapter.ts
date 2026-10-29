@@ -14,15 +14,18 @@ import type {
   InputFileUpload,
   ProviderAdapter,
   ProviderArtifact,
+  ProviderModelInfo,
   UploadedInputFile,
 } from '@/providers/ports/provider-adapter.ts';
 import {
   healthFailed,
   healthNotConfigured,
   isAbortLikeError,
+  isChatCapableModelId,
   isTimeoutLikeError,
   numberFromConfig,
   parseRetryAfter,
+  requireApiKey,
   scrubSecrets,
 } from '../shared.ts';
 import { estimateClaudeInputTokens } from './tokenizer/claude-tokenizer.ts';
@@ -1010,6 +1013,16 @@ export class AnthropicAdapter implements ProviderAdapter {
     } catch (error) {
       return healthFailed(error, Date.now() - startedAt);
     }
+  }
+
+  async listModels(ctx: HealthCheckContext): Promise<readonly ProviderModelInfo[]> {
+    const { provider, signal } = ctx;
+    const client = this.buildClient(provider, requireApiKey(provider.secrets));
+    const result = await client.models.list(undefined, { signal });
+    return result.data
+      .map((model) => ({ id: model.id }))
+      .filter((model) => isChatCapableModelId(model.id))
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   private buildClient(provider: ProviderRuntimeConfig, apiKey: string): AnthropicClientLike {

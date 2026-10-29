@@ -70,12 +70,6 @@ export const UpdateProviderBodySchema = z
 export const CreateModelBodySchema = z
   .object({
     providerId: z.uuid(),
-    key: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .regex(/^[a-z0-9][a-z0-9._-]*$/, 'Use lowercase letters, digits, ".", "-" or "_".'),
     apiModelId: z.string().trim().min(1).max(256),
     displayName: z.string().trim().min(1).max(128),
     description: z.string().trim().max(1024).nullable().optional(),

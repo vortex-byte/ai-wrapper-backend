@@ -99,7 +99,6 @@ async function createModel(
       },
       body: JSON.stringify({
         providerId,
-        key: 'gpt-4o',
         apiModelId: 'gpt-4o-2024-08-06',
         displayName: 'GPT-4o',
         status: 'active',
@@ -233,6 +232,209 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
     expect(rows.map((row) => row.action)).toContain('provider.create');
   });
 
+  it('deletes an unused provider and writes a provider.delete audit row', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const created = await createProvider(cookie, csrfToken);
+    const providerId = ((await created.json()) as { data: { id: string } }).data.id;
+
+    const res = await app.request(
+      new Request(`http://localhost/api/admin/providers/${providerId}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string; message: string; data?: unknown };
+    expect(body.status).toBe('ok');
+    expect(body.data).toBeUndefined();
+
+    const list = await app.request(
+      new Request('http://localhost/api/admin/providers', { headers: { Cookie: cookie } }),
+    );
+    const listBody = (await list.json()) as { data: { items: Array<{ id: string }> } };
+    expect(listBody.data.items).toHaveLength(0);
+
+    const { rows } = await getPool().query<{ action: string }>(
+      `SELECT action FROM audit_logs ORDER BY id`,
+    );
+    expect(rows.map((row) => row.action)).toContain('provider.delete');
+  });
+
+  it('refuses to delete a provider that still has models with 409 conflict', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const created = await createProvider(cookie, csrfToken);
+    const providerId = ((await created.json()) as { data: { id: string } }).data.id;
+    expect((await createModel(cookie, csrfToken, providerId)).status).toBe(201);
+
+    const res = await app.request(
+      new Request(`http://localhost/api/admin/providers/${providerId}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('conflict');
+  });
+
+  it('returns 404 not_found when deleting an unknown provider', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const res = await app.request(
+      new Request(`http://localhost/api/admin/providers/${Bun.randomUUIDv7()}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('deletes an unused model and writes a model.delete audit row', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const createdProvider = await createProvider(cookie, csrfToken);
+    const providerId = ((await createdProvider.json()) as { data: { id: string } }).data.id;
+    const createdModel = await createModel(cookie, csrfToken, providerId);
+    const modelId = ((await createdModel.json()) as { data: { id: string } }).data.id;
+
+    const res = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string; message: string; data?: unknown };
+    expect(body.status).toBe('ok');
+    expect(body.data).toBeUndefined();
+
+    const list = await app.request(
+      new Request('http://localhost/api/admin/models', { headers: { Cookie: cookie } }),
+    );
+    const listBody = (await list.json()) as { data: { items: Array<{ id: string }> } };
+    expect(listBody.data.items).toHaveLength(0);
+
+    const { rows } = await getPool().query<{ action: string }>(
+      `SELECT action FROM audit_logs ORDER BY id`,
+    );
+    expect(rows.map((row) => row.action)).toContain('model.delete');
+  });
+
+  it('allows deleting a provider once its last model is removed', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const createdProvider = await createProvider(cookie, csrfToken);
+    const providerId = ((await createdProvider.json()) as { data: { id: string } }).data.id;
+    const createdModel = await createModel(cookie, csrfToken, providerId);
+    const modelId = ((await createdModel.json()) as { data: { id: string } }).data.id;
+
+    const firstDelete = await app.request(
+      new Request(`http://localhost/api/admin/providers/${providerId}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(firstDelete.status).toBe(409);
+
+    const modelDelete = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(modelDelete.status).toBe(200);
+
+    const providerDelete = await app.request(
+      new Request(`http://localhost/api/admin/providers/${providerId}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(providerDelete.status).toBe(200);
+  });
+
+  it('returns 404 not_found when deleting an unknown model', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const res = await app.request(
+      new Request(`http://localhost/api/admin/models/${Bun.randomUUIDv7()}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('refuses to delete a model that is referenced by conversations with 409 conflict', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const createdProvider = await createProvider(cookie, csrfToken);
+    const providerId = ((await createdProvider.json()) as { data: { id: string } }).data.id;
+    const createdModel = await createModel(cookie, csrfToken, providerId);
+    const modelId = ((await createdModel.json()) as { data: { id: string } }).data.id;
+
+    const pool = getPool();
+    const userRow = (await pool.query<{ id: string }>('SELECT id FROM users LIMIT 1')).rows[0];
+    const userId = userRow?.id ?? '';
+    const convId = Bun.randomUUIDv7();
+    await pool.query(
+      `INSERT INTO conversations (id, user_id, model_id) VALUES ($1, $2, $3)`,
+      [convId, userId, modelId],
+    );
+
+    const res = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'DELETE',
+        headers: { Origin: ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrfToken },
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('conflict');
+  });
+
+  it('accepts a status-only patch when stored defaultMaxOutputTokens exceeds maxOutputTokens', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const createdProvider = await createProvider(cookie, csrfToken);
+    const providerId = ((await createdProvider.json()) as { data: { id: string } }).data.id;
+    const createdModel = await createModel(cookie, csrfToken, providerId, {
+      maxOutputTokens: 8_192,
+      defaultMaxOutputTokens: 8_192,
+    });
+    const modelId = ((await createdModel.json()) as { data: { id: string } }).data.id;
+
+    const lower = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({ maxOutputTokens: 4_096 }),
+      }),
+    );
+    expect(lower.status).toBe(400);
+
+    const toggle = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({ status: 'disabled' }),
+      }),
+    );
+    expect(toggle.status).toBe(200);
+  });
+
   it('creates a model and exposes it on GET /api/models with wire shape', async () => {
     const admin = await seedUser('super_admin', 'admin@corp.example');
     void admin;
@@ -327,5 +529,72 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
     };
     expect(body.data.capabilities.documents.pdf).toBe(true);
     expect(body.data.capabilities.documents.maxPages).toBe(40);
+  });
+
+  it('no longer accepts or returns a model key', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const providerRes = await createProvider(cookie, csrfToken);
+    const providerId = ((await providerRes.json()) as { data: { id: string } }).data.id;
+
+    const modelRes = await createModel(cookie, csrfToken, providerId);
+    expect(modelRes.status).toBe(201);
+    const created = (await modelRes.json()) as { data: Record<string, unknown> };
+    expect(Object.keys(created.data)).not.toContain('key');
+    expect(created.data['apiModelId']).toBe('gpt-4o-2024-08-06');
+  });
+
+  it('rejects a second model with the same apiModelId on the same provider', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const providerRes = await createProvider(cookie, csrfToken);
+    const providerId = ((await providerRes.json()) as { data: { id: string } }).data.id;
+
+    expect((await createModel(cookie, csrfToken, providerId)).status).toBe(201);
+    expect((await createModel(cookie, csrfToken, providerId)).status).toBe(409);
+  });
+
+  it('lists provider models from the adapter for the model picker', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const providerRes = await app.request(
+      new Request('http://localhost/api/admin/providers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          key: `fake-${Date.now()}`,
+          displayName: 'Fake (picker)',
+          adapter: 'fake',
+          secretRef: 'FAKE_API_KEY',
+        }),
+      }),
+    );
+    expect(providerRes.status).toBe(201);
+    const providerId = ((await providerRes.json()) as { data: { id: string } }).data.id;
+
+    const res = await app.request(
+      new Request(`http://localhost/api/admin/providers/${providerId}/models`, {
+        headers: { Cookie: cookie },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { items: Array<{ id: string }> } };
+    expect(body.data.items.map((model) => model.id)).toEqual(['fake-model', 'fake-model-mini']);
+  });
+
+  it('returns 404 not_found when listing models of an unknown provider', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie } = await loginAs('admin@corp.example');
+    const res = await app.request(
+      new Request(`http://localhost/api/admin/providers/${Bun.randomUUIDv7()}/models`, {
+        headers: { Cookie: cookie },
+      }),
+    );
+    expect(res.status).toBe(404);
   });
 });

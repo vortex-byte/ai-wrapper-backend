@@ -11,6 +11,7 @@ import type {
   HealthCheckContext,
   HealthCheckResult,
   ProviderAdapter,
+  ProviderModelInfo,
 } from '@/providers/ports/provider-adapter.ts';
 
 /** In-memory test adapter supporting fault injection and deterministic execution. */
@@ -208,6 +209,10 @@ export class FakeProvider implements ProviderAdapter {
 
   async healthCheck(_ctx: HealthCheckContext): Promise<HealthCheckResult> {
     return { ok: this.scenario !== 'provider_unavailable', latencyMs: 0, detail: this.scenario };
+  }
+
+  async listModels(_ctx: HealthCheckContext): Promise<readonly ProviderModelInfo[]> {
+    return [{ id: 'fake-model' }, { id: 'fake-model-mini' }];
   }
 
   /** The full answer text this run would produce — handy for test assertions. */

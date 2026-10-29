@@ -38,11 +38,11 @@ async function seedPrerequisites(): Promise<SeedContext> {
   const modelId = Bun.randomUUIDv7();
   await pool.query(
     `INSERT INTO ai_models
-       (id, provider_id, key, api_model_id, display_name, status, capabilities,
+       (id, provider_id, api_model_id, display_name, status, capabilities,
         context_window, max_output_tokens, default_max_output_tokens)
-     VALUES ($1, $2, $3, 'model-1', 'Model 1', 'active', '{"schemaVersion":1}',
+     VALUES ($1, $2, 'model-1', 'Model 1', 'active', '{"schemaVersion":1}',
              128000, 4096, 1024)`,
-    [modelId, providerId, `model-${modelId}`],
+    [modelId, providerId],
   );
 
   const accountId = Bun.randomUUIDv7();

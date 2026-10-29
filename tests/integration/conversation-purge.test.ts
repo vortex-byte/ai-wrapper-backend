@@ -31,11 +31,11 @@ async function seedConversation(deletedDaysAgo: number | null): Promise<SeededCo
   );
   await pool.query(
     `INSERT INTO ai_models
-       (id, provider_id, key, api_model_id, display_name, status, capabilities,
+       (id, provider_id, api_model_id, display_name, status, capabilities,
         context_window, max_output_tokens, default_max_output_tokens)
-     VALUES ($1, $2, $3, 'purge-model-1', 'Purge Model', 'active', '{"schemaVersion":1}',
+     VALUES ($1, $2, 'purge-model-1', 'Purge Model', 'active', '{"schemaVersion":1}',
              128000, 4096, 1024)`,
-    [modelId, providerId, `purge-model-${modelId}`],
+    [modelId, providerId],
   );
 
   const conversationId = Bun.randomUUIDv7();

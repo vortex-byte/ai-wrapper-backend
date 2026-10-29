@@ -33,6 +33,10 @@ class ScriptedAdapter implements ProviderAdapter {
   async healthCheck(): Promise<{ ok: boolean; latencyMs: number }> {
     return { ok: true, latencyMs: 0 };
   }
+
+  async listModels(): Promise<readonly { id: string }[]> {
+    return [{ id: 'm-1' }];
+  }
 }
 
 function request(): NormalizedChatRequest {

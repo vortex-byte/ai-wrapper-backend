@@ -1269,7 +1269,7 @@ including `divisionId` — and the same `super_admin` requirement.
 
 All provider and model administration endpoints require `role=super_admin`.
 
-### 11.1 Providers (`GET /api/admin/providers`, `POST /api/admin/providers`, `PATCH /api/admin/providers/:id`)
+### 11.1 Providers (`GET /api/admin/providers`, `POST /api/admin/providers`, `PATCH /api/admin/providers/:id`, `DELETE /api/admin/providers/:id`)
 
 Provider registry. **The API key is never accepted or returned** — `secretRef` is the **name of the
 environment variable** that holds it.
@@ -1277,7 +1277,7 @@ environment variable** that holds it.
 **Path parameters:**
 | Parameter | Value type | Required | Description |
 |---|---|---|---|
-| `id` | string (UUIDv7) | Conditional | Target provider ID (required for `PATCH`). |
+| `id` | string (UUIDv7) | Conditional | Target provider ID (required for `PATCH` and `DELETE`). |
 
 **Request body (`POST` / `PATCH`):**
 | Field | Value type | Required | Description |
@@ -1321,12 +1321,20 @@ environment variable** that holds it.
 > Rotating the actual key is an operator action: update the env/`.env` file and restart the process
 > (rolling restart).
 
-### 11.2 Models (`GET /api/admin/models`, `POST /api/admin/models`, `PATCH /api/admin/models/:id`)
+`DELETE /api/admin/providers/:id` (`200`):
+```json
+{ "status": "ok", "message": "Provider deleted." }
+```
+Hard delete of a provider row (empty envelope). `404 not_found` when the provider does not exist.
+`409 conflict` when any model still references the provider — the models must be deleted or moved first.
+Writes an `audit_logs` row (`action: "provider.delete"`) and invalidates the registry cache.
+
+### 11.2 Models (`GET /api/admin/models`, `POST /api/admin/models`, `PATCH /api/admin/models/:id`, `DELETE /api/admin/models/:id`)
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
 |---|---|---|---|
-| `id` | string (UUIDv7) | Conditional | Target model ID (required for `PATCH`). |
+| `id` | string (UUIDv7) | Conditional | Target model ID (required for `PATCH` and `DELETE`). |
 
 **Request body (`POST` / `PATCH`):**
 | Field | Value type | Required | Description |
@@ -1397,6 +1405,18 @@ environment variable** that holds it.
     "status": "disabled", "updatedAt": "2026-10-08T10:30:00Z" } }
 ```
 
+The `defaultMaxOutputTokens ≤ maxOutputTokens` invariant is only enforced when the request touches
+either field, so a status-only `PATCH` is never rejected on account of stored values.
+
+`DELETE /api/admin/models/:id` (`200`):
+```json
+{ "status": "ok", "message": "Model deleted." }
+```
+Hard delete of a model row (empty envelope). `404 not_found` when the model does not exist.
+`409 conflict` when conversations or generation jobs still reference the model — those rows pin the
+model by foreign key and cannot be repointed, so the model must be disabled instead.
+Writes an `audit_logs` row (`action: "model.delete"`) and invalidates the registry cache.
+
 ### 11.3 Model Prices (`GET /api/admin/models/:id/prices`, `POST /api/admin/models/:id/prices`)
 
 Effective-dated token pricing for models used in cost reporting. Requires `role=super_admin`.
@@ -1454,6 +1474,28 @@ Runs a cheap health check now (must not consume meaningful tokens). `200`:
 ```json
 { "status": "ok", "message": "", "data": { "ok": true, "latencyMs": 230, "detail": "models.list ok" } }
 ```
+
+### 11.6 `GET /api/admin/providers/:id/models`
+
+Lists the provider's own model catalogue so an admin can pick an `apiModelId` instead of typing it.
+Requires `role=super_admin`. Chat-capable entries only; non-chat ids (embeddings, audio, moderation,
+image models) are filtered out.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Provider ID whose upstream catalogue to list. |
+
+`200`:
+```json
+{ "status": "ok", "message": "", "data": { "items": [
+    { "id": "gpt-4o", "createdAt": "2026-10-08T10:00:00Z" } ] } }
+```
+
+`404 not_found` when the provider does not exist. `400 invalid_request` when the adapter is not
+registered or `secretRef` is not configured in the environment. `503 provider_unavailable` with
+`retryable: true` when the upstream call fails. The response is never cached server-side — callers
+should refetch when opening the picker.
 
 ---
 

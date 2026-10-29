@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AuthService } from '@/auth/application/auth-service.ts';
 import type { Config } from '@/config/index.ts';
 import { AppError } from '@/errors.ts';
-import { ok } from '@/http/envelope.ts';
+import { ok, okEmpty } from '@/http/envelope.ts';
 import { requireSuperAdmin } from '@/http/middleware/require-role.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requireCsrf } from '@/http/middleware/require-csrf.ts';
@@ -83,6 +83,17 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
     return c.json(ok(toWireProvider(provider), 'Provider updated.'));
   });
 
+  routes.delete('/providers/:id', async (c) => {
+    const caller = c.get('auth');
+    if (!caller) throw new AppError('unauthenticated');
+    await registryAdmin.deleteProvider({
+      id: c.req.param('id'),
+      actorUserId: caller.user.id,
+      meta: requestMeta(c, clientIp(c, config)),
+    });
+    return c.json(okEmpty('Provider deleted.'));
+  });
+
   routes.get('/providers/health', async (c) => {
     const items = await registryAdmin.healthSnapshot();
     return c.json(
@@ -104,6 +115,11 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
     return c.json(ok(result));
   });
 
+  routes.get('/providers/:id/models', async (c) => {
+    const models = await registryAdmin.listProviderModels(c.req.param('id'));
+    return c.json(ok({ items: models.map((model) => ({ ...model })) }));
+  });
+
   routes.get('/models', async (c) => {
     const models = await registryAdmin.listModels();
     return c.json(ok({ items: models.map(toWireModel) }));
@@ -115,7 +131,6 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
     const body = await parseJsonBody(c, CreateModelBodySchema);
     const model = await registryAdmin.createModel({
       providerId: body.providerId,
-      key: body.key,
       apiModelId: body.apiModelId,
       displayName: body.displayName,
       description: body.description ?? null,
@@ -162,6 +177,17 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
       meta: requestMeta(c, clientIp(c, config)),
     });
     return c.json(ok(toWireModel(model), 'Model updated.'));
+  });
+
+  routes.delete('/models/:id', async (c) => {
+    const caller = c.get('auth');
+    if (!caller) throw new AppError('unauthenticated');
+    await registryAdmin.deleteModel({
+      id: c.req.param('id'),
+      actorUserId: caller.user.id,
+      meta: requestMeta(c, clientIp(c, config)),
+    });
+    return c.json(okEmpty('Model deleted.'));
   });
 
   routes.get('/models/:id/prices', async (c) => {
@@ -212,7 +238,6 @@ function toWireModel(model: ModelRecord) {
     providerId: model.providerId,
     providerKey: model.providerKey,
     providerLabel: model.providerDisplayName,
-    key: model.key,
     apiModelId: model.apiModelId,
     displayName: model.displayName,
     description: model.description,

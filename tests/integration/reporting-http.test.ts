@@ -89,9 +89,9 @@ async function seedUsageDay(): Promise<void> {
   );
   await getPool().query(
     `INSERT INTO ai_models
-       (id, provider_id, key, api_model_id, display_name, status, capabilities,
+       (id, provider_id, api_model_id, display_name, status, capabilities,
         context_window, max_output_tokens, default_max_output_tokens)
-     VALUES ($1, $2, 'test-model', 'test-model-1', 'Test Model', 'active',
+     VALUES ($1, $2, 'test-model', 'Test Model', 'active',
              '{"schemaVersion":1}', 128000, 4096, 1024)`,
     [modelId, providerId],
   );

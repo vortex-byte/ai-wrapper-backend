@@ -24,6 +24,13 @@ export interface HealthCheckContext {
   readonly signal: AbortSignal;
 }
 
+/** One entry from a provider's own model catalogue. */
+export interface ProviderModelInfo {
+  readonly id: string;
+  readonly createdAt?: string;
+}
+
+
 /** A provider-owned binary fetched back from a Files API, ready for `ArtifactSink` to store. */
 export interface ProviderArtifact {
   readonly stream: ReadableStream<Uint8Array>;
@@ -64,6 +71,9 @@ export interface ProviderAdapter {
   translateError(err: unknown): ProviderError;
 
   healthCheck(ctx: HealthCheckContext): Promise<HealthCheckResult>;
+
+  /** Lists the provider's own model catalogue, for the admin model picker. */
+  listModels(ctx: HealthCheckContext): Promise<readonly ProviderModelInfo[]>;
 
   /** Downloads a provider-generated artifact file stream. */
   fetchArtifactStream?(

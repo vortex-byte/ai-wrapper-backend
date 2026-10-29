@@ -52,10 +52,10 @@ async function seedUserAndModel(): Promise<{ userId: string; modelId: string; pr
     [providerId, `p-${providerId}`],
   );
   await pool.query(
-    `INSERT INTO ai_models (id, provider_id, key, api_model_id, display_name, status,
+    `INSERT INTO ai_models (id, provider_id, api_model_id, display_name, status,
                             capabilities, context_window, max_output_tokens, default_max_output_tokens)
-     VALUES ($1, $2, $3, 'fake-model', 'Fake', 'active', '{}', 128000, 4096, 2048)`,
-    [modelId, providerId, `m-${modelId}`],
+     VALUES ($1, $2, 'fake-model', 'Fake', 'active', '{}', 128000, 4096, 2048)`,
+    [modelId, providerId],
   );
   return { userId, modelId, providerId };
 }

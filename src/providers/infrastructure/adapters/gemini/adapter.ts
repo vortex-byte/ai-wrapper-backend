@@ -18,6 +18,7 @@ import type {
   InputFileUpload,
   ProviderAdapter,
   ProviderArtifact,
+  ProviderModelInfo,
   UploadedInputFile,
 } from '@/providers/ports/provider-adapter.ts';
 import {
@@ -25,9 +26,11 @@ import {
   healthFailed,
   healthNotConfigured,
   isAbortLikeError,
+  isChatCapableModelId,
   isTimeoutLikeError,
   numberFromConfig,
   parseRetryAfter,
+  requireApiKey,
   scrubSecrets,
 } from '../shared.ts';
 
@@ -1019,6 +1022,33 @@ export class GeminiAdapter implements ProviderAdapter {
   private streamUrl(req: NormalizedChatRequest): string {
     const model = req.model.apiModelId.replace(/^models\//, '');
     return `${this.apiBase(req.provider)}/${API_VERSION}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
+  }
+
+  async listModels(ctx: HealthCheckContext): Promise<readonly ProviderModelInfo[]> {
+    const { provider, signal } = ctx;
+    const apiKey = requireApiKey(provider.secrets);
+    const transport = this.buildTransport(provider, apiKey);
+    const response = await transport({
+      url: `${this.modelsUrl(provider)}?pageSize=1000`,
+      method: 'GET',
+      headers: this.authHeaders(apiKey),
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`models.list failed (${response.status})`);
+    }
+    const payload = (await response.json()) as {
+      models?: readonly { name?: unknown; createTime?: unknown }[];
+    };
+    const models = Array.isArray(payload.models) ? payload.models : [];
+    return models
+      .map((model) => {
+        const name = typeof model.name === 'string' ? model.name.replace(/^models\//, '') : '';
+        const createdAt = typeof model.createTime === 'string' ? model.createTime : undefined;
+        return { id: name, ...(createdAt === undefined ? {} : { createdAt }) };
+      })
+      .filter((model) => model.id !== '' && isChatCapableModelId(model.id))
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   private modelsUrl(provider: ProviderRuntimeConfig): string {

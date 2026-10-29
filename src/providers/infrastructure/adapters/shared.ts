@@ -26,6 +26,29 @@ export function approximateEstimate(textLength: number): EstimateResult {
   return { tokens: Math.ceil(textLength / 4) + 8, confidence: 'approx' };
 }
 
+/** Model ids that are never usable for chat, filtered out of the admin model picker. */
+export function isChatCapableModelId(id: string): boolean {
+  const lower = id.toLowerCase();
+  return !(
+    lower.includes('embedding') ||
+    lower.startsWith('text-embedding') ||
+    lower.includes('whisper') ||
+    lower.includes('tts') ||
+    lower.includes('dall-e') ||
+    lower.includes('moderation') ||
+    lower.includes('rerank')
+  );
+}
+
+/** Resolves the API key or raises the shared "not configured" condition as a thrown error. */
+export function requireApiKey(secrets: Readonly<Record<string, string>>): string {
+  const apiKey = secrets['apiKey'];
+  if (apiKey === undefined || apiKey === '') {
+    throw new Error('secret_not_configured');
+  }
+  return apiKey;
+}
+
 export function parseRetryAfter(header: string | null | undefined): number | undefined {
   if (!header) return undefined;
   const trimmed = header.trim();

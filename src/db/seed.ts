@@ -17,7 +17,6 @@ export interface ExampleProvider {
 
 export interface ExampleModel {
   readonly providerKey: string;
-  readonly key: string;
   readonly apiModelId: string;
   readonly displayName: string;
 }
@@ -37,25 +36,21 @@ export const EXAMPLE_PROVIDERS: readonly ExampleProvider[] = [
 export const EXAMPLE_MODELS: readonly ExampleModel[] = [
   {
     providerKey: 'fake',
-    key: 'fake-model',
     apiModelId: 'fake-model',
     displayName: 'Fake Model (development)',
   },
   {
     providerKey: 'openai',
-    key: 'gpt-4o-mini',
     apiModelId: 'gpt-4o-mini',
     displayName: 'GPT-4o mini',
   },
   {
     providerKey: 'openai',
-    key: 'gpt-4o',
     apiModelId: 'gpt-4o',
     displayName: 'GPT-4o',
   },
   {
     providerKey: 'anthropic',
-    key: 'claude-sonnet',
     apiModelId: 'claude-3-5-sonnet-latest',
     displayName: 'Claude 3.5 Sonnet',
   },
@@ -100,13 +95,13 @@ export async function runExampleSeed(): Promise<SeedResult> {
     }
     for (const model of EXAMPLE_MODELS) {
       const res = await tx.client.query(
-        `INSERT INTO ai_models (id, provider_id, key, api_model_id, display_name, capabilities,
+        `INSERT INTO ai_models (id, provider_id, api_model_id, display_name, capabilities,
                                 context_window, max_output_tokens, default_max_output_tokens)
-         SELECT gen_random_uuid(), p.id, $2, $3, $4, '{"schemaVersion":1,"contextWindow":128000,"maxOutputTokens":4096}'::jsonb, 128000, 4096, 4096
+         SELECT gen_random_uuid(), p.id, $2, $3, '{"schemaVersion":1,"contextWindow":128000,"maxOutputTokens":4096}'::jsonb, 128000, 4096, 4096
            FROM ai_providers p
           WHERE p.key = $1
-         ON CONFLICT (key) DO NOTHING`,
-        [model.providerKey, model.key, model.apiModelId, model.displayName],
+         ON CONFLICT (provider_id, api_model_id) DO NOTHING`,
+        [model.providerKey, model.apiModelId, model.displayName],
       );
       inserted.models = (inserted.models ?? 0) + (res.rowCount ?? 0);
     }

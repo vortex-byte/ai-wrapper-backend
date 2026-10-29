@@ -4,10 +4,10 @@ import type { Clock, IdGenerator } from '@/clock/index.ts';
 import { withTransaction } from '@/db/index.ts';
 import { AppError, isUniqueViolation } from '@/errors.ts';
 import type { RequestMeta } from '@/request-context.ts';
-import type { ModelCapabilities, PartialModelCapabilities } from '../domain/capabilities.ts';
+import type { ModelCapabilities, PartialModelCapabilities, ProviderRuntimeConfig } from '../domain/capabilities.ts';
 import type { ModelRecord, ModelStatus, ProviderRecord, ProviderStatus } from '../domain/registry.ts';
 import type { ModelRegistry } from '../ports/model-registry.ts';
-import type { ProviderAdapter } from '../ports/provider-adapter.ts';
+import type { ProviderAdapter, ProviderModelInfo } from '../ports/provider-adapter.ts';
 import type { ProviderRegistry } from '../ports/provider-registry.ts';
 import type { ModelPrice, RegistryRepository } from '../ports/registry-repository.ts';
 import type { SecretResolver } from '../ports/secret-resolver.ts';
@@ -47,9 +47,14 @@ export interface UpdateProviderInput {
   readonly meta: RequestMeta;
 }
 
+export interface DeleteProviderInput {
+  readonly id: string;
+  readonly actorUserId: string;
+  readonly meta: RequestMeta;
+}
+
 export interface CreateModelInput {
   readonly providerId: string;
-  readonly key: string;
   readonly apiModelId: string;
   readonly displayName: string;
   readonly description?: string | null;
@@ -81,6 +86,12 @@ export interface UpdateModelInput {
   readonly meta: RequestMeta;
 }
 
+export interface DeleteModelInput {
+  readonly id: string;
+  readonly actorUserId: string;
+  readonly meta: RequestMeta;
+}
+
 export interface SetPriceInput {
   readonly modelId: string;
   readonly effectiveFrom: Date;
@@ -107,10 +118,13 @@ export interface RegistryAdminService {
   listPrices(modelId: string): Promise<readonly ModelPrice[]>;
   createProvider(input: CreateProviderInput): Promise<ProviderRecord>;
   updateProvider(input: UpdateProviderInput): Promise<ProviderRecord>;
+  deleteProvider(input: DeleteProviderInput): Promise<void>;
   createModel(input: CreateModelInput): Promise<ModelRecord>;
   updateModel(input: UpdateModelInput): Promise<ModelRecord>;
+  deleteModel(input: DeleteModelInput): Promise<void>;
   setPrice(input: SetPriceInput): Promise<ModelPrice>;
   testProvider(id: string): Promise<{ ok: boolean; latencyMs: number; detail: string }>;
+  listProviderModels(id: string): Promise<readonly ProviderModelInfo[]>;
   healthSnapshot(): Promise<readonly ProviderHealth[]>;
 }
 
@@ -239,6 +253,40 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       return updated;
     },
 
+    async deleteProvider(input) {
+      const existing = await deps.repository.findProviderById(input.id);
+      if (!existing) throw new AppError('not_found', 'Provider not found.');
+
+      const modelCount = await deps.repository.countModelsByProviderId(existing.id);
+      if (modelCount > 0) {
+        throw new AppError(
+          'conflict',
+          `Provider cannot be deleted: it is still referenced by ${modelCount} model(s). Reassign or delete them first.`,
+        );
+      }
+
+      await withTransaction(async (tx) => {
+        const removed = await deps.repository.deleteProvider(existing.id, tx);
+        if (!removed) throw new AppError('not_found', 'Provider not found.');
+        await deps.audit.append(
+          {
+            actorUserId: input.actorUserId,
+            action: AUDIT_ACTIONS.providerDelete,
+            targetType: 'provider',
+            targetId: existing.id,
+            before: publicProvider(existing),
+            requestId: input.meta.requestId,
+            ip: input.meta.ip,
+            userAgentHash: input.meta.userAgentHash,
+          },
+          tx,
+        );
+      });
+
+      lastHealth.delete(existing.id);
+      deps.registry.invalidate();
+    },
+
     async createModel(input) {
       const provider = await deps.repository.findProviderById(input.providerId);
       if (!provider) {
@@ -252,8 +300,13 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       const defaultMaxOutputTokens = input.defaultMaxOutputTokens ?? capabilities.maxOutputTokens;
       assertOutputTokenBounds({ maxOutputTokens, defaultMaxOutputTokens });
 
-      const existing = await deps.repository.findModelByKey(input.key);
-      if (existing) throw new AppError('conflict', 'A model with this key already exists.');
+      const existing = await deps.repository.findModelByProviderAndApiId(
+        input.providerId,
+        input.apiModelId,
+      );
+      if (existing) {
+        throw new AppError('conflict', 'This provider already has a model with that API id.');
+      }
 
       const id = deps.idGen.uuidv7();
       const model = await withTransaction(async (tx) => {
@@ -263,7 +316,6 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
             {
               id,
               providerId: input.providerId,
-              key: input.key,
               apiModelId: input.apiModelId,
               displayName: input.displayName,
               description: input.description ?? null,
@@ -310,9 +362,11 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       const existing = await deps.repository.findModelById(input.id);
       if (!existing) throw new AppError('not_found', 'Model not found.');
 
-      const maxOutputTokens = input.maxOutputTokens ?? existing.maxOutputTokens;
-      const defaultMaxOutputTokens = input.defaultMaxOutputTokens ?? existing.defaultMaxOutputTokens;
-      assertOutputTokenBounds({ maxOutputTokens, defaultMaxOutputTokens });
+      if (input.maxOutputTokens !== undefined || input.defaultMaxOutputTokens !== undefined) {
+        const maxOutputTokens = input.maxOutputTokens ?? existing.maxOutputTokens;
+        const defaultMaxOutputTokens = input.defaultMaxOutputTokens ?? existing.defaultMaxOutputTokens;
+        assertOutputTokenBounds({ maxOutputTokens, defaultMaxOutputTokens });
+      }
 
       const mergedCapabilities: ModelCapabilities | undefined =
         input.capabilities !== undefined || input.contextWindow !== undefined || input.maxOutputTokens !== undefined
@@ -369,6 +423,39 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       return updated;
     },
 
+    async deleteModel(input) {
+      const existing = await deps.repository.findModelById(input.id);
+      if (!existing) throw new AppError('not_found', 'Model not found.');
+
+      const references = await deps.repository.countModelReferences(existing.id);
+      if (references > 0) {
+        throw new AppError(
+          'conflict',
+          'Model cannot be deleted: it is still referenced by existing conversations or generations. Disable it instead.',
+        );
+      }
+
+      await withTransaction(async (tx) => {
+        const removed = await deps.repository.deleteModel(existing.id, tx);
+        if (!removed) throw new AppError('not_found', 'Model not found.');
+        await deps.audit.append(
+          {
+            actorUserId: input.actorUserId,
+            action: AUDIT_ACTIONS.modelDelete,
+            targetType: 'model',
+            targetId: existing.id,
+            before: publicModel(existing),
+            requestId: input.meta.requestId,
+            ip: input.meta.ip,
+            userAgentHash: input.meta.userAgentHash,
+          },
+          tx,
+        );
+      });
+
+      deps.registry.invalidate();
+    },
+
     async setPrice(input) {
       const model = await deps.repository.findModelById(input.modelId);
       if (!model) throw new AppError('not_found', 'Model not found.');
@@ -397,6 +484,8 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
               effectiveFrom: price.effectiveFrom.toISOString(),
               inputMicrosPerMtok: price.inputMicrosPerMtok,
               outputMicrosPerMtok: price.outputMicrosPerMtok,
+              cachedInputMicrosPerMtok: price.cachedInputMicrosPerMtok,
+              currency: price.currency,
             },
             requestId: input.meta.requestId,
             ip: input.meta.ip,
@@ -408,6 +497,38 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       });
     },
 
+    async listProviderModels(id) {
+      const provider = await deps.repository.findProviderById(id);
+      if (!provider) throw new AppError('not_found', 'Provider not found.');
+      const adapter = deps.adapters.get(provider.adapter);
+      if (!adapter) {
+        throw new AppError('invalid_request', `Unknown adapter "${provider.adapter}".`);
+      }
+      const runtime = await resolveProviderRuntime(deps, provider);
+      const timeoutMs =
+        typeof provider.config['connectTimeoutMs'] === 'number'
+          ? provider.config['connectTimeoutMs']
+          : 15_000;
+      const signal = AbortSignal.timeout(timeoutMs);
+      try {
+        return await adapter.listModels({ provider: runtime, signal });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'unknown_error';
+        if (detail === 'secret_not_configured') {
+          throw new AppError(
+            'invalid_request',
+            `Secret "${provider.secretRef}" is not configured for this provider.`,
+            { cause: error },
+          );
+        }
+        throw new AppError(
+          'provider_unavailable',
+          `Could not list models from "${provider.displayName}": ${detail}`,
+          { retryable: true, cause: error },
+        );
+      }
+    },
+
     async testProvider(id) {
       const provider = await deps.repository.findProviderById(id);
       if (!provider) throw new AppError('not_found', 'Provider not found.');
@@ -415,22 +536,13 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       if (!adapter) {
         throw new AppError('invalid_request', `Unknown adapter "${provider.adapter}".`);
       }
-      const resolved = await deps.registry.getRuntimeConfig(
-        (await firstModelIdForProvider(deps, id)) ?? '',
-      );
-      const secret = deps.secrets.resolve(provider.secretRef);
-      const secrets: Record<string, string> =
-        resolved?.runtime.provider.secrets ?? (secret !== null ? { apiKey: secret } : {});
-      const runtime = resolved?.runtime.provider ?? {
-        providerId: provider.id,
-        key: provider.key,
-        adapter: provider.adapter,
-        ...(provider.baseUrl !== null ? { baseUrl: provider.baseUrl } : {}),
-        config: provider.config,
-        secrets,
-      };
-      const controller = new AbortController();
-      const result = await healthCheckAdapter(adapter, runtime, controller.signal);
+      const runtime = await resolveProviderRuntime(deps, provider);
+      const timeoutMs =
+        typeof provider.config['connectTimeoutMs'] === 'number'
+          ? provider.config['connectTimeoutMs']
+          : 15_000;
+      const signal = AbortSignal.timeout(timeoutMs);
+      const result = await healthCheckAdapter(adapter, runtime, signal);
       lastHealth.set(provider.id, {
         at: deps.clock.now(),
         ok: result.ok,
@@ -465,6 +577,28 @@ async function firstModelIdForProvider(
   return models.find((model) => model.providerId === providerId)?.id ?? null;
 }
 
+async function resolveProviderRuntime(
+  deps: RegistryAdminDeps,
+  provider: ProviderRecord,
+): Promise<ProviderRuntimeConfig> {
+  const resolved = await deps.registry.getRuntimeConfig(
+    (await firstModelIdForProvider(deps, provider.id)) ?? '',
+  );
+  const secret = deps.secrets.resolve(provider.secretRef);
+  const secrets: Record<string, string> =
+    resolved?.runtime.provider.secrets ?? (secret !== null ? { apiKey: secret } : {});
+  return (
+    resolved?.runtime.provider ?? {
+      providerId: provider.id,
+      key: provider.key,
+      adapter: provider.adapter,
+      ...(provider.baseUrl !== null ? { baseUrl: provider.baseUrl } : {}),
+      config: provider.config,
+      secrets,
+    }
+  );
+}
+
 async function healthCheckAdapter(
   adapter: ProviderAdapter,
   provider: Parameters<ProviderAdapter['healthCheck']>[0]['provider'],
@@ -488,7 +622,6 @@ function publicProvider(provider: ProviderRecord): Record<string, unknown> {
 
 function publicModel(model: ModelRecord): Record<string, unknown> {
   return {
-    key: model.key,
     apiModelId: model.apiModelId,
     displayName: model.displayName,
     providerId: model.providerId,

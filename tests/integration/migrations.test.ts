@@ -107,10 +107,10 @@ describe('migration baseline', () => {
       );
       for (const modelId of [modelA, modelB]) {
         await pool.query(
-          `INSERT INTO ai_models (id, provider_id, key, api_model_id, display_name, status,
+          `INSERT INTO ai_models (id, provider_id, api_model_id, display_name, status,
                                   capabilities, context_window, max_output_tokens, default_max_output_tokens)
-           VALUES ($1, $2, $3, $4, 'Test Model', 'active', '{"schemaVersion":1}', 8192, 1024, 1024)`,
-          [modelId, providerId, `m-${modelId}`, `api-${modelId}`],
+           VALUES ($1, $2, $3, 'Test Model', 'active', '{"schemaVersion":1}', 8192, 1024, 1024)`,
+          [modelId, providerId, `api-${modelId}`],
         );
       }
       await pool.query(
@@ -192,10 +192,10 @@ describe('migration baseline', () => {
         [providerId, `p-${providerId}`],
       );
       await pool.query(
-        `INSERT INTO ai_models (id, provider_id, key, api_model_id, display_name, status,
+        `INSERT INTO ai_models (id, provider_id, api_model_id, display_name, status,
                                 capabilities, context_window, max_output_tokens, default_max_output_tokens)
-         VALUES ($1, $2, $3, $4, 'Gen Model', 'active', '{"schemaVersion":1}', 8192, 1024, 1024)`,
-        [modelId, providerId, `m-${modelId}`, `api-${modelId}`],
+         VALUES ($1, $2, $3, 'Gen Model', 'active', '{"schemaVersion":1}', 8192, 1024, 1024)`,
+        [modelId, providerId, `api-${modelId}`],
       );
       await pool.query(`INSERT INTO conversations (id, user_id, model_id) VALUES ($1, $2, $3)`, [
         conversationId,

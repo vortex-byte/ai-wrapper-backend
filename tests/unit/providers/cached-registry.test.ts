@@ -45,7 +45,6 @@ function model(overrides: Partial<ModelRecord> = {}): ModelRecord {
     providerKey: 'openai',
     providerDisplayName: 'OpenAI',
     providerStatus: 'active',
-    key: 'gpt',
     apiModelId: 'gpt-4o-mini',
     displayName: 'GPT',
     description: null,
@@ -89,17 +88,34 @@ class CountingRepository implements RegistryRepository {
   async updateProvider(): Promise<ProviderRecord | null> {
     throw new Error('not used');
   }
+  async deleteProvider(): Promise<boolean> {
+    throw new Error('not used');
+  }
+  async countModelsByProviderId(providerId: string): Promise<number> {
+    return this.models.filter((m) => m.providerId === providerId).length;
+  }
   async findModelById(id: string): Promise<ModelRecord | null> {
     return this.models.find((m) => m.id === id) ?? null;
   }
-  async findModelByKey(key: string): Promise<ModelRecord | null> {
-    return this.models.find((m) => m.key === key) ?? null;
+  async findModelByProviderAndApiId(
+    providerId: string,
+    apiModelId: string,
+  ): Promise<ModelRecord | null> {
+    return (
+      this.models.find((m) => m.providerId === providerId && m.apiModelId === apiModelId) ?? null
+    );
   }
   async createModel(): Promise<ModelRecord> {
     throw new Error('not used');
   }
   async updateModel(): Promise<ModelRecord | null> {
     throw new Error('not used');
+  }
+  async deleteModel(): Promise<boolean> {
+    throw new Error('not used');
+  }
+  async countModelReferences(modelId: string): Promise<number> {
+    return this.models.filter((m) => m.id === modelId).length;
   }
   async listPrices(): Promise<never[]> {
     return [];

@@ -150,7 +150,6 @@ export const aiModels = pgTable('ai_models', {
   providerId: uuid('provider_id')
     .notNull()
     .references(() => aiProviders.id),
-  key: text('key').notNull(),
   apiModelId: text('api_model_id').notNull(),
   displayName: text('display_name').notNull(),
   description: text('description'),
@@ -168,7 +167,9 @@ export const aiModels = pgTable('ai_models', {
   updatedAt: timestamptz('updated_at')
     .notNull()
     .default(sql`now()`),
-});
+}, (table) => [
+  uniqueIndex('ai_models_provider_api_id_uq').on(table.providerId, table.apiModelId),
+]);
 
 export const aiModelPrices = pgTable('ai_model_prices', {
   id: uuid('id').primaryKey(),

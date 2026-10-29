@@ -593,4 +593,39 @@ describe('OpenAIAdapter — multimodal input and reasoning config', () => {
     // Reasoning models reject sampling params.
     expect(params['temperature']).toBeUndefined();
   });
+
+  it('lists only chat-capable models sorted by id', async () => {
+    const adapter = new OpenAIAdapter(() => ({
+      models: {
+        async list() {
+          return {
+            data: [
+              { id: 'text-embedding-3-small' },
+              { id: 'whisper-1' },
+              { id: 'o4-mini' },
+              { id: 'dall-e-3' },
+              { id: 'gpt-4o' },
+            ],
+          };
+        },
+      },
+      chat: { completions: { create: async () => (async function* () {})() } },
+    }));
+
+    const models = await adapter.listModels({
+      provider: makeOpenAIRequest().provider,
+      signal: new AbortController().signal,
+    });
+    expect(models.map((model) => model.id)).toEqual(['gpt-4o', 'o4-mini']);
+  });
+
+  it('lists nothing as a key when the provider secret is missing', async () => {
+    const adapter = new OpenAIAdapter(() => createMockOpenAIClient([]));
+    await expect(
+      adapter.listModels({
+        provider: { ...makeOpenAIRequest().provider, secrets: {} },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('secret_not_configured');
+  });
 });

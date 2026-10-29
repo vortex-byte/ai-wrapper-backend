@@ -1,6 +1,6 @@
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
-import { aiModelPrices, aiModels, aiProviders } from '@/db/schema.ts';
+import { aiModelPrices, aiModels, aiProviders, conversations, generationJobs, usageEvents } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
 import type { ModelCapabilities } from '../domain/capabilities.ts';
 import { parseCapabilities, parseConfig, toCapabilitiesJson } from '../domain/capabilities-schema.ts';
@@ -37,7 +37,6 @@ const modelColumns = {
   providerKey: aiProviders.key,
   providerDisplayName: aiProviders.displayName,
   providerStatus: aiProviders.status,
-  key: aiModels.key,
   apiModelId: aiModels.apiModelId,
   displayName: aiModels.displayName,
   description: aiModels.description,
@@ -73,7 +72,6 @@ interface ModelRow {
   providerKey: string;
   providerDisplayName: string;
   providerStatus: string;
-  key: string;
   apiModelId: string;
   displayName: string;
   description: string | null;
@@ -112,7 +110,6 @@ function toModel(row: ModelRow): ModelRecord {
     providerKey: row.providerKey,
     providerDisplayName: row.providerDisplayName,
     providerStatus: row.providerStatus as ProviderStatus,
-    key: row.key,
     apiModelId: row.apiModelId,
     displayName: row.displayName,
     description: row.description,
@@ -212,6 +209,22 @@ export class DrizzleRegistryRepository implements RegistryRepository {
     return rows[0] ? toProvider(rows[0]) : null;
   }
 
+  async deleteProvider(id: string, tx?: TransactionContext): Promise<boolean> {
+    const rows = await runDb(tx)
+      .delete(aiProviders)
+      .where(eq(aiProviders.id, id))
+      .returning({ id: aiProviders.id });
+    return rows.length > 0;
+  }
+
+  async countModelsByProviderId(providerId: string, tx?: TransactionContext): Promise<number> {
+    const rows = await runDb(tx)
+      .select({ id: aiModels.id })
+      .from(aiModels)
+      .where(eq(aiModels.providerId, providerId));
+    return rows.length;
+  }
+
   async findAllModels(tx?: TransactionContext): Promise<ModelRecord[]> {
     const rows = await modelSelect(runDb(tx))
       .orderBy(asc(aiModels.sortOrder), asc(aiModels.id));
@@ -223,8 +236,14 @@ export class DrizzleRegistryRepository implements RegistryRepository {
     return rows[0] ? toModel(rows[0]) : null;
   }
 
-  async findModelByKey(key: string, tx?: TransactionContext): Promise<ModelRecord | null> {
-    const rows = await modelSelect(runDb(tx)).where(eq(aiModels.key, key)).limit(1);
+  async findModelByProviderAndApiId(
+    providerId: string,
+    apiModelId: string,
+    tx?: TransactionContext,
+  ): Promise<ModelRecord | null> {
+    const rows = await modelSelect(runDb(tx))
+      .where(and(eq(aiModels.providerId, providerId), eq(aiModels.apiModelId, apiModelId)))
+      .limit(1);
     return rows[0] ? toModel(rows[0]) : null;
   }
 
@@ -234,7 +253,6 @@ export class DrizzleRegistryRepository implements RegistryRepository {
       .values({
         id: input.id,
         providerId: input.providerId,
-        key: input.key,
         apiModelId: input.apiModelId,
         displayName: input.displayName,
         description: input.description,
@@ -277,6 +295,36 @@ export class DrizzleRegistryRepository implements RegistryRepository {
       .returning({ id: aiModels.id });
     if (!rows[0]) return null;
     return this.findModelById(input.id, tx);
+  }
+
+  async deleteModel(id: string, tx?: TransactionContext): Promise<boolean> {
+    const rows = await runDb(tx)
+      .delete(aiModels)
+      .where(eq(aiModels.id, id))
+      .returning({ id: aiModels.id });
+    return rows.length > 0;
+  }
+
+  async countModelReferences(modelId: string, tx?: TransactionContext): Promise<number> {
+    const db = runDb(tx);
+    const [conversationRefs] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.modelId, modelId))
+      .limit(1);
+    if (conversationRefs) return 1;
+    const [jobRefs] = await db
+      .select({ id: generationJobs.id })
+      .from(generationJobs)
+      .where(eq(generationJobs.modelId, modelId))
+      .limit(1);
+    if (jobRefs) return 1;
+    const [usageRefs] = await db
+      .select({ id: usageEvents.id })
+      .from(usageEvents)
+      .where(eq(usageEvents.modelId, modelId))
+      .limit(1);
+    return usageRefs ? 1 : 0;
   }
 
   async listPrices(modelId: string, tx?: TransactionContext): Promise<ModelPrice[]> {

@@ -73,12 +73,12 @@ async function seedActiveModel(providerAdapter = 'openai'): Promise<string> {
     [providerId, `p-${providerId}`, providerAdapter],
   );
   await pool.query(
-    `INSERT INTO ai_models (id, provider_id, key, api_model_id, display_name, status,
+    `INSERT INTO ai_models (id, provider_id, api_model_id, display_name, status,
                             capabilities, context_window, max_output_tokens, default_max_output_tokens)
-     VALUES ($1, $2, $3, 'gpt-4o', 'GPT-4o', 'active',
+     VALUES ($1, $2, 'gpt-4o', 'GPT-4o', 'active',
              '{"schemaVersion":1,"streaming":true,"vision":true,"documents":{"pdf":true},"imageGeneration":false,"documentGeneration":false,"systemPrompt":true,"tools":false,"contextWindow":128000,"maxOutputTokens":4096}',
              128000, 4096, 2048)`,
-    [modelId, providerId, `m-${modelId}`],
+    [modelId, providerId],
   );
   services.registry.invalidate();
   return modelId;

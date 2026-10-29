@@ -144,7 +144,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
       const rows = await runDb(tx)
         .select({
           id: aiModels.id,
-          key: aiModels.key,
+          key: aiModels.apiModelId,
           displayName: aiModels.displayName,
           providerKey: aiProviders.key,
         })

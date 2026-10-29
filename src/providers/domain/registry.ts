@@ -27,7 +27,6 @@ export interface ModelRecord {
   readonly providerKey: string;
   readonly providerDisplayName: string;
   readonly providerStatus: ProviderStatus;
-  readonly key: string;
   readonly apiModelId: string;
   readonly displayName: string;
   readonly description: string | null;

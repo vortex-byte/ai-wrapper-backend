@@ -6,9 +6,14 @@ import type {
   AuditLogRow,
   ErrorEventQuery,
   ErrorEventRow,
+  ModelUsageRow,
+  RecentRequestRow,
   ReportingRepository,
+  UsageBreakdownRow,
   UsageReportQuery,
   UsageReportRow,
+  UsageSummaryRow,
+  UsageTimeseriesRow,
 } from '@/reporting/ports/reporting-repository.ts';
 
 const NOW = new Date('2026-10-20T12:00:00.000Z');
@@ -17,6 +22,7 @@ class FakeReportingRepository implements ReportingRepository {
   usageQueries: UsageReportQuery[] = [];
   errorQueries: ErrorEventQuery[] = [];
   auditQueries: AuditLogQuery[] = [];
+  summaryQueries: { from: Date; to: Date; divisionId?: string | undefined }[] = [];
 
   errorRows: ErrorEventRow[] = [];
   auditRows: AuditLogRow[] = [];
@@ -35,6 +41,41 @@ class FakeReportingRepository implements ReportingRepository {
   async listAuditLogs(query: AuditLogQuery): Promise<readonly AuditLogRow[]> {
     this.auditQueries.push(query);
     return this.auditRows;
+  }
+
+  async usageSummary(query: {
+    from: Date;
+    to: Date;
+    divisionId?: string | undefined;
+  }): Promise<UsageSummaryRow> {
+    this.summaryQueries.push(query);
+    return {
+      totalRequests: 0,
+      totalFailedRequests: 0,
+      totalInputTokens: 0,
+      totalCachedTokens: 0,
+      totalOutputTokens: 0,
+      totalCostUsd: 0,
+    };
+  }
+
+  async listRecentRequests(): Promise<readonly RecentRequestRow[]> {
+    return [];
+  }
+
+  async usageBreakdown(): Promise<{
+    byProvider: readonly UsageBreakdownRow[];
+    byModel: readonly UsageBreakdownRow[];
+  }> {
+    return { byProvider: [], byModel: [] };
+  }
+
+  async usageTimeseries(): Promise<readonly UsageTimeseriesRow[]> {
+    return [];
+  }
+
+  async modelUsage(): Promise<readonly ModelUsageRow[]> {
+    return [];
   }
 }
 
@@ -144,6 +185,33 @@ describe('ReportingService.usage', () => {
     const [, row] = csv.split('\r\n');
     expect(row).toContain("'=cmd");
     expect(row).toContain("'@evil");
+  });
+});
+
+describe('ReportingService.usageSummary', () => {
+  it('resolves the today period to the UTC day start', async () => {
+    const repository = new FakeReportingRepository();
+    await service(repository).usageSummary({ period: 'today' });
+
+    const query = repository.summaryQueries[0];
+    expect(query?.to).toEqual(NOW);
+    expect(query?.from).toEqual(new Date('2026-10-20T00:00:00.000Z'));
+  });
+
+  it('resolves the 7d period to seven days back', async () => {
+    const repository = new FakeReportingRepository();
+    await service(repository).usageSummary({ period: '7d' });
+
+    const query = repository.summaryQueries[0];
+    expect(query?.from).toEqual(new Date(NOW.getTime() - 7 * 86_400_000));
+  });
+
+  it('falls back to the default range when no period is given', async () => {
+    const repository = new FakeReportingRepository();
+    await service(repository).usageSummary({});
+
+    const query = repository.summaryQueries[0];
+    expect(query?.from).toEqual(new Date(NOW.getTime() - 30 * 86_400_000));
   });
 });
 

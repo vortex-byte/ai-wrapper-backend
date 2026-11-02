@@ -8,33 +8,84 @@ import { requireCsrf } from '@/http/middleware/require-csrf.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
 import { requireSuperAdmin } from '@/http/middleware/require-role.ts';
+import { rateLimit } from '@/http/middleware/rate-limit.ts';
+import type { RateLimiter } from '@/http/ports/rate-limiter.ts';
 import type { AppEnv } from '@/http/types.ts';
 import type { ReportingService } from '../application/reporting-service.ts';
 import {
   AuditSearchQuerySchema,
   ErrorExplorerQuerySchema,
+  RecentRequestsQuerySchema,
   UsageQuerySchema,
+  UsageSummaryQuerySchema,
+  UsageTimeseriesQuerySchema,
+  UsageWindowQuerySchema,
 } from './schemas.ts';
 
 export interface ReportingRoutesDeps {
   readonly reporting: ReportingService;
   readonly auth: AuthService;
   readonly config: Config;
+  readonly rateLimiter: RateLimiter;
 }
 
 export function reportingRoutes(deps: ReportingRoutesDeps): Hono<AppEnv> {
-  const { reporting, auth, config } = deps;
+  const { reporting, auth, config, rateLimiter } = deps;
   const routes = new Hono<AppEnv>();
 
   routes.use('*', requireCsrf(config));
   routes.use('*', requireAuth(auth, config));
   routes.use('*', requirePasswordChanged());
   routes.use('*', requireSuperAdmin());
+  routes.use(
+    '/usage/*',
+    rateLimit(config, rateLimiter, {
+      name: 'reporting-usage',
+      scope: 'user',
+      limit: config.RATE_LIMIT_REPORTING_REQUESTS,
+      windowSeconds: config.RATE_LIMIT_WINDOW_SECONDS,
+    }),
+  );
 
   routes.get('/usage', async (c) => {
     const query = parseQuery(c, UsageQuerySchema);
     const items = await reporting.usage(query);
+    privateCache(c, 30);
+    return c.json(ok({ items }));
+  });
+
+  routes.get('/usage/summary', async (c) => {
+    const query = parseQuery(c, UsageSummaryQuerySchema);
+    const summary = await reporting.usageSummary(query);
+    privateCache(c, 30);
+    return c.json(ok(summary));
+  });
+
+  routes.get('/usage/recent', async (c) => {
+    const query = parseQuery(c, RecentRequestsQuerySchema);
+    const items = await reporting.recentRequests({ limit: query.limit });
     noStore(c);
+    return c.json(ok({ items }));
+  });
+
+  routes.get('/usage/breakdown', async (c) => {
+    const query = parseQuery(c, UsageWindowQuerySchema);
+    const breakdown = await reporting.usageBreakdown(query);
+    privateCache(c, 60);
+    return c.json(ok(breakdown));
+  });
+
+  routes.get('/usage/timeseries', async (c) => {
+    const query = parseQuery(c, UsageTimeseriesQuerySchema);
+    const items = await reporting.usageTimeseries(query);
+    privateCache(c, 60);
+    return c.json(ok({ items }));
+  });
+
+  routes.get('/usage/models', async (c) => {
+    const query = parseQuery(c, UsageWindowQuerySchema);
+    const items = await reporting.modelUsage(query);
+    privateCache(c, 60);
     return c.json(ok({ items }));
   });
 
@@ -67,6 +118,16 @@ export function reportingRoutes(deps: ReportingRoutesDeps): Hono<AppEnv> {
 
 function noStore(c: { header(name: string, value: string): void }): void {
   c.header('Cache-Control', 'no-store');
+}
+
+function privateCache(
+  c: { header(name: string, value: string): void },
+  maxAgeSeconds: number,
+): void {
+  c.header(
+    'Cache-Control',
+    `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds}`,
+  );
 }
 
 function parseQuery<S extends z.ZodTypeAny>(

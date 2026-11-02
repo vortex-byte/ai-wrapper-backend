@@ -1,12 +1,14 @@
 import { and, desc, eq, gte, inArray, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
 import {
+  aiModelPrices,
   aiModels,
   aiProviders,
   auditLogs,
   divisions,
   errorEvents,
   usageDaily,
+  usageEvents,
   users,
 } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
@@ -15,12 +17,27 @@ import type {
   AuditLogRow,
   ErrorEventQuery,
   ErrorEventRow,
+  ModelUsageRow,
+  RecentRequestQuery,
+  RecentRequestRow,
   ReportingRepository,
+  TimeseriesQuery,
+  UsageBreakdownRow,
   UsageReportQuery,
   UsageReportRow,
+  UsageSummaryRow,
+  UsageTimeseriesRow,
+  UsageWindowQuery,
 } from '../ports/reporting-repository.ts';
 
 const MICROS_PER_USD = 1_000_000;
+
+const WINDOW_START_CLAUSE = (from: Date, to: Date, divisionId?: string): SQL => {
+  const start = sql`${usageEvents.createdAt} >= ${from.toISOString()}`;
+  const end = sql`${usageEvents.createdAt} <= ${to.toISOString()}`;
+  const scope = divisionId === undefined ? undefined : eq(usageEvents.divisionId, divisionId);
+  return scope === undefined ? sql`${start} AND ${end}` : sql`${start} AND ${end} AND ${scope}`;
+};
 
 export class DrizzleReportingRepository implements ReportingRepository {
   async aggregateUsage(
@@ -105,6 +122,228 @@ export class DrizzleReportingRepository implements ReportingRepository {
           provider: requests === 0 ? 0 : providerSourced / requests,
           estimated: requests === 0 ? 0 : (requests - providerSourced) / requests,
         },
+      };
+    });
+  }
+
+  async usageSummary(query: UsageWindowQuery, tx?: TransactionContext): Promise<UsageSummaryRow> {
+    const rows = await runDb(tx)
+      .select({
+        totalRequests: sql<number>`count(*)::int`,
+        totalFailedRequests: sql<number>`count(*) FILTER (WHERE ${usageEvents.outcome} = 'failed')::int`,
+        totalInputTokens: sql<number>`COALESCE(sum(${usageEvents.inputTokens}), 0)::bigint`,
+        totalCachedTokens: sql<number>`COALESCE(sum(${usageEvents.cachedInputTokens}), 0)::bigint`,
+        totalOutputTokens: sql<number>`COALESCE(sum(${usageEvents.outputTokens}), 0)::bigint`,
+        totalCostMicros: sql<number>`COALESCE(sum(${usageEvents.estCostMicros}), 0)::bigint`,
+      })
+      .from(usageEvents)
+      .where(WINDOW_START_CLAUSE(query.from, query.to, query.divisionId));
+
+    const row = rows[0];
+    if (row === undefined) {
+      return {
+        totalRequests: 0,
+        totalFailedRequests: 0,
+        totalInputTokens: 0,
+        totalCachedTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+      };
+    }
+    return {
+      totalRequests: Number(row.totalRequests),
+      totalFailedRequests: Number(row.totalFailedRequests),
+      totalInputTokens: Number(row.totalInputTokens),
+      totalCachedTokens: Number(row.totalCachedTokens),
+      totalOutputTokens: Number(row.totalOutputTokens),
+      totalCostUsd: Number(row.totalCostMicros) / MICROS_PER_USD,
+    };
+  }
+
+  async listRecentRequests(
+    query: RecentRequestQuery,
+    tx?: TransactionContext,
+  ): Promise<readonly RecentRequestRow[]> {
+    const rows = await runDb(tx)
+      .select({
+        id: usageEvents.id,
+        model: aiModels.apiModelId,
+        modelName: aiModels.displayName,
+        provider: aiProviders.key,
+        promptTokens: usageEvents.inputTokens,
+        completionTokens: usageEvents.outputTokens,
+        cachedTokens: usageEvents.cachedInputTokens,
+        outcome: usageEvents.outcome,
+        createdAt: usageEvents.createdAt,
+      })
+      .from(usageEvents)
+      .leftJoin(aiModels, eq(aiModels.id, usageEvents.modelId))
+      .leftJoin(aiProviders, eq(aiProviders.id, usageEvents.providerId))
+      .orderBy(desc(usageEvents.createdAt))
+      .limit(query.limit);
+
+    return rows.map((row) => ({
+      id: row.id,
+      model: row.model ?? 'unknown',
+      modelName: row.modelName ?? row.model ?? 'unknown',
+      provider: row.provider ?? 'unknown',
+      promptTokens: Number(row.promptTokens),
+      completionTokens: Number(row.completionTokens),
+      cachedTokens: Number(row.cachedTokens ?? 0),
+      status: row.outcome === 'failed' ? 'error' : 'ok',
+      timestamp: row.createdAt,
+    }));
+  }
+
+  async usageBreakdown(
+    query: UsageWindowQuery,
+    tx?: TransactionContext,
+  ): Promise<{
+    readonly byProvider: readonly UsageBreakdownRow[];
+    readonly byModel: readonly UsageBreakdownRow[];
+  }> {
+    const where = WINDOW_START_CLAUSE(query.from, query.to, query.divisionId);
+    const tokenExpr = sql<number>`COALESCE(sum(${usageEvents.inputTokens} + ${usageEvents.outputTokens}), 0)::bigint`;
+
+    const providerRows = await runDb(tx)
+      .select({
+        id: aiProviders.id,
+        name: aiProviders.displayName,
+        tokens: tokenExpr,
+        requests: sql<number>`count(*)::int`,
+      })
+      .from(usageEvents)
+      .leftJoin(aiProviders, eq(aiProviders.id, usageEvents.providerId))
+      .where(where)
+      .groupBy(aiProviders.id, aiProviders.displayName)
+      .orderBy(desc(tokenExpr));
+
+    const modelRows = await runDb(tx)
+      .select({
+        id: aiModels.id,
+        name: aiModels.displayName,
+        provider: aiProviders.key,
+        tokens: tokenExpr,
+        requests: sql<number>`count(*)::int`,
+      })
+      .from(usageEvents)
+      .leftJoin(aiModels, eq(aiModels.id, usageEvents.modelId))
+      .leftJoin(aiProviders, eq(aiProviders.id, usageEvents.providerId))
+      .where(where)
+      .groupBy(aiModels.id, aiModels.displayName, aiProviders.key)
+      .orderBy(desc(tokenExpr));
+
+    const toBreakdown = (row: {
+      id: string | null;
+      name: string | null;
+      provider?: string | null;
+      tokens: number;
+      requests: number;
+    }): UsageBreakdownRow => ({
+      id: row.id ?? 'unknown',
+      name: row.name ?? 'Unknown',
+      provider: row.provider ?? null,
+      tokens: Number(row.tokens),
+      requests: Number(row.requests),
+    });
+
+    return {
+      byProvider: providerRows.map(toBreakdown),
+      byModel: modelRows.map(toBreakdown),
+    };
+  }
+
+  async usageTimeseries(
+    query: TimeseriesQuery,
+    tx?: TransactionContext,
+  ): Promise<readonly UsageTimeseriesRow[]> {
+    const bucket = sql<string>`to_char(date_trunc(${query.interval}, ${usageEvents.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD HH24:MI')`;
+    const rows = await runDb(tx)
+      .select({
+        bucket,
+        tokens: sql<number>`COALESCE(sum(${usageEvents.inputTokens} + ${usageEvents.outputTokens}), 0)::bigint`,
+        requests: sql<number>`count(*)::int`,
+        costMicros: sql<number>`COALESCE(sum(${usageEvents.estCostMicros}), 0)::bigint`,
+      })
+      .from(usageEvents)
+      .where(WINDOW_START_CLAUSE(query.from, query.to, query.divisionId))
+      .groupBy(bucket)
+      .orderBy(bucket);
+
+    return rows.map((row) => ({
+      date: row.bucket,
+      tokens: Number(row.tokens),
+      requests: Number(row.requests),
+      costUsd: Number(row.costMicros) / MICROS_PER_USD,
+    }));
+  }
+
+  async modelUsage(
+    query: UsageWindowQuery,
+    tx?: TransactionContext,
+  ): Promise<readonly ModelUsageRow[]> {
+    const where = WINDOW_START_CLAUSE(query.from, query.to, query.divisionId);
+    const rows = await runDb(tx)
+      .select({
+        modelId: aiModels.id,
+        apiModelId: aiModels.apiModelId,
+        displayName: aiModels.displayName,
+        provider: aiProviders.displayName,
+        requests: sql<number>`count(*)::int`,
+        lastUsed: sql<Date | null>`max(${usageEvents.createdAt})`,
+        inputTokens: sql<number>`COALESCE(sum(${usageEvents.inputTokens}), 0)::bigint`,
+        cachedTokens: sql<number>`COALESCE(sum(${usageEvents.cachedInputTokens}), 0)::bigint`,
+        outputTokens: sql<number>`COALESCE(sum(${usageEvents.outputTokens}), 0)::bigint`,
+      })
+      .from(usageEvents)
+      .leftJoin(aiModels, eq(aiModels.id, usageEvents.modelId))
+      .leftJoin(aiProviders, eq(aiProviders.id, usageEvents.providerId))
+      .where(where)
+      .groupBy(aiModels.id, aiModels.apiModelId, aiModels.displayName, aiProviders.displayName);
+
+    const prices = await runDb(tx)
+      .select({
+        modelId: aiModelPrices.modelId,
+        inputMicrosPerMtok: aiModelPrices.inputMicrosPerMtok,
+        outputMicrosPerMtok: aiModelPrices.outputMicrosPerMtok,
+        cachedInputMicrosPerMtok: aiModelPrices.cachedInputMicrosPerMtok,
+      })
+      .from(aiModelPrices);
+
+    const priceByModel = new Map<string, (typeof prices)[number]>();
+    for (const price of prices) {
+      if (!priceByModel.has(price.modelId)) priceByModel.set(price.modelId, price);
+    }
+
+    return rows.map((row) => {
+      const inputTokens = Number(row.inputTokens);
+      const cachedTokens = Number(row.cachedTokens);
+      const outputTokens = Number(row.outputTokens);
+      const price = row.modelId === null ? undefined : priceByModel.get(row.modelId);
+      const nonCachedInput = Math.max(0, inputTokens - cachedTokens);
+      const inputCostUsd =
+        price === undefined ? 0 : (nonCachedInput * price.inputMicrosPerMtok) / MICROS_PER_USD / 1_000_000;
+      const cachedMicros = price?.cachedInputMicrosPerMtok ?? price?.inputMicrosPerMtok;
+      const cachedCostUsd =
+        cachedMicros === undefined || cachedMicros === null
+          ? 0
+          : (cachedTokens * cachedMicros) / MICROS_PER_USD / 1_000_000;
+      const outputCostUsd =
+        price === undefined ? 0 : (outputTokens * price.outputMicrosPerMtok) / MICROS_PER_USD / 1_000_000;
+      return {
+        modelId: row.modelId ?? 'unknown',
+        apiModelId: row.apiModelId ?? 'unknown',
+        displayName: row.displayName ?? row.apiModelId ?? 'Unknown',
+        provider: row.provider ?? 'unknown',
+        requests: Number(row.requests),
+        lastUsed: row.lastUsed === null ? null : new Date(row.lastUsed),
+        inputTokens,
+        cachedTokens,
+        outputTokens,
+        inputCostUsd,
+        cachedCostUsd,
+        outputCostUsd,
+        totalCostUsd: inputCostUsd + cachedCostUsd + outputCostUsd,
       };
     });
   }

@@ -75,11 +75,105 @@ export interface AuditLogRow {
   readonly createdAt: Date;
 }
 
+export interface UsageWindowQuery {
+  readonly from: Date;
+  readonly to: Date;
+  readonly divisionId?: string | undefined;
+}
+
+export interface UsageSummaryRow {
+  readonly totalRequests: number;
+  readonly totalFailedRequests: number;
+  readonly totalInputTokens: number;
+  readonly totalCachedTokens: number;
+  readonly totalOutputTokens: number;
+  readonly totalCostUsd: number;
+}
+
+export interface RecentRequestRow {
+  readonly id: string;
+  readonly model: string;
+  readonly modelName: string;
+  readonly provider: string;
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly cachedTokens: number;
+  readonly status: string;
+  readonly timestamp: Date;
+}
+
+export interface UsageBreakdownRow {
+  readonly id: string;
+  readonly name: string;
+  readonly provider: string | null;
+  readonly tokens: number;
+  readonly requests: number;
+}
+
+export interface UsageTimeseriesRow {
+  readonly date: string;
+  readonly tokens: number;
+  readonly requests: number;
+  readonly costUsd: number;
+}
+
+export interface ModelUsageRow {
+  readonly modelId: string;
+  readonly apiModelId: string;
+  readonly displayName: string;
+  readonly provider: string;
+  readonly requests: number;
+  readonly lastUsed: Date | null;
+  readonly inputTokens: number;
+  readonly cachedTokens: number;
+  readonly outputTokens: number;
+  readonly inputCostUsd: number;
+  readonly cachedCostUsd: number;
+  readonly outputCostUsd: number;
+  readonly totalCostUsd: number;
+}
+
+export interface RecentRequestQuery {
+  readonly limit: number;
+}
+
+export interface TimeseriesQuery {
+  readonly from: Date;
+  readonly to: Date;
+  readonly interval: 'hour' | 'day';
+  readonly divisionId?: string | undefined;
+}
+
 export interface ReportingRepository {
   aggregateUsage(
     query: UsageReportQuery,
     tx?: TransactionContext,
   ): Promise<readonly UsageReportRow[]>;
+
+  usageSummary(query: UsageWindowQuery, tx?: TransactionContext): Promise<UsageSummaryRow>;
+
+  listRecentRequests(
+    query: RecentRequestQuery,
+    tx?: TransactionContext,
+  ): Promise<readonly RecentRequestRow[]>;
+
+  usageBreakdown(
+    query: UsageWindowQuery,
+    tx?: TransactionContext,
+  ): Promise<{
+    readonly byProvider: readonly UsageBreakdownRow[];
+    readonly byModel: readonly UsageBreakdownRow[];
+  }>;
+
+  usageTimeseries(
+    query: TimeseriesQuery,
+    tx?: TransactionContext,
+  ): Promise<readonly UsageTimeseriesRow[]>;
+
+  modelUsage(
+    query: UsageWindowQuery,
+    tx?: TransactionContext,
+  ): Promise<readonly ModelUsageRow[]>;
 
   listErrorEvents(
     query: ErrorEventQuery,

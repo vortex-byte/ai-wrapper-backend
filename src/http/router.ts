@@ -85,6 +85,7 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
       reporting: services.reporting,
       auth: services.auth,
       config,
+      rateLimiter: services.rateLimiter,
     }),
   );
   api.route(

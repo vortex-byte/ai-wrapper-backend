@@ -89,6 +89,7 @@ export const EnvSchema = z
     RATE_LIMIT_LOGIN_REQUESTS: z.coerce.number().int().min(1).default(10),
     RATE_LIMIT_UPLOAD_REQUESTS: z.coerce.number().int().min(1).default(30),
     RATE_LIMIT_GENERATION_REQUESTS: z.coerce.number().int().min(1).default(20),
+    RATE_LIMIT_REPORTING_REQUESTS: z.coerce.number().int().min(1).default(60),
 
     CONVERSATION_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
 

@@ -22,6 +22,7 @@ export default defineConfig({
       RATE_LIMIT_LOGIN_REQUESTS: '100000',
       RATE_LIMIT_GENERATION_REQUESTS: '100000',
       RATE_LIMIT_UPLOAD_REQUESTS: '100000',
+      RATE_LIMIT_REPORTING_REQUESTS: '100000',
     },
     coverage: {
       provider: 'v8',

@@ -8,6 +8,8 @@ import type {
   ReportingRepository,
   UsageGroupBy,
   UsageReportRow,
+  RecentRequestRow,
+  UsageSummaryRow,
 } from '../ports/reporting-repository.ts';
 
 export interface ReportingServiceDeps {
@@ -20,6 +22,20 @@ export interface UsageReportInput {
   readonly to?: string | undefined;
   readonly groupBy: UsageGroupBy;
   readonly divisionId?: string | undefined;
+}
+
+export interface UsageWindowInput {
+  readonly from?: string | undefined;
+  readonly to?: string | undefined;
+  readonly divisionId?: string | undefined;
+}
+
+export interface UsageSummaryInput extends UsageWindowInput {
+  readonly period?: string | undefined;
+}
+
+export interface UsageTimeseriesInput extends UsageWindowInput {
+  readonly interval: 'hour' | 'day';
 }
 
 export interface ErrorExplorerInput {
@@ -81,6 +97,45 @@ export interface WireAuditLog {
   readonly createdAt: string;
 }
 
+export interface WireBreakdownEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly provider: string | null;
+  readonly tokens: number;
+  readonly requests: number;
+}
+
+export interface UsageBreakdownResult {
+  readonly byProvider: readonly WireBreakdownEntry[];
+  readonly byModel: readonly WireBreakdownEntry[];
+}
+
+export interface WireTimeseriesPoint {
+  readonly date: string;
+  readonly label: string;
+  readonly tokens: number;
+  readonly requests: number;
+  readonly costUsd: number;
+}
+
+export interface WireModelUsage {
+  readonly modelId: string;
+  readonly apiModelId: string;
+  readonly displayName: string;
+  readonly provider: string;
+  readonly requests: number;
+  readonly lastUsed: string | null;
+  readonly inputTokens: number;
+  readonly cachedTokens: number;
+  readonly outputTokens: number;
+  readonly inputCostUsd: number;
+  readonly cachedCostUsd: number;
+  readonly outputCostUsd: number;
+  readonly totalCostUsd: number;
+}
+
+export type { UsageSummaryRow };
+
 const DEFAULT_RANGE_DAYS = 30;
 
 function encodeCursor(date: Date, id: number): string {
@@ -124,6 +179,24 @@ export class ReportingService {
     return { from: resolvedFrom, to: resolvedTo };
   }
 
+  private periodRange(
+    period: string | undefined,
+    from: string | undefined,
+    to: string | undefined,
+  ): { from: Date; to: Date } {
+    const now = this.now();
+    if (period === undefined || period === 'all') return this.range(from, to);
+    if (period === 'today') {
+      const start = new Date(now);
+      start.setUTCHours(0, 0, 0, 0);
+      return { from: start, to: now };
+    }
+    const hours: Record<string, number> = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30, '90d': 24 * 90 };
+    const span = hours[period];
+    if (span === undefined) return this.range(from, to);
+    return { from: new Date(now.getTime() - span * 3600 * 1000), to: now };
+  }
+
   async usage(input: UsageReportInput): Promise<readonly UsageReportRow[]> {
     const { from, to } = this.range(input.from, input.to);
     return this.repository.aggregateUsage({
@@ -132,6 +205,61 @@ export class ReportingService {
       groupBy: input.groupBy,
       divisionId: input.divisionId,
     });
+  }
+
+  async usageSummary(input: UsageSummaryInput): Promise<UsageSummaryRow> {
+    const { from, to } = this.periodRange(input.period, input.from, input.to);
+    return this.repository.usageSummary({ from, to, divisionId: input.divisionId });
+  }
+
+  async recentRequests(input: { limit: number }): Promise<readonly RecentRequestRow[]> {
+    return this.repository.listRecentRequests({ limit: input.limit });
+  }
+
+  async usageBreakdown(input: UsageWindowInput): Promise<UsageBreakdownResult> {
+    const { from, to } = this.range(input.from, input.to);
+    const result = await this.repository.usageBreakdown({ from, to, divisionId: input.divisionId });
+    return {
+      byProvider: result.byProvider.map(toWireBreakdown),
+      byModel: result.byModel.map(toWireBreakdown),
+    };
+  }
+
+  async usageTimeseries(input: UsageTimeseriesInput): Promise<readonly WireTimeseriesPoint[]> {
+    const { from, to } = this.range(input.from, input.to);
+    const rows = await this.repository.usageTimeseries({
+      from,
+      to,
+      interval: input.interval,
+      divisionId: input.divisionId,
+    });
+    return rows.map((row) => ({
+      date: row.date,
+      label: formatBucketLabel(row.date, input.interval),
+      tokens: row.tokens,
+      requests: row.requests,
+      costUsd: row.costUsd,
+    }));
+  }
+
+  async modelUsage(input: UsageWindowInput): Promise<readonly WireModelUsage[]> {
+    const { from, to } = this.range(input.from, input.to);
+    const rows = await this.repository.modelUsage({ from, to, divisionId: input.divisionId });
+    return rows.map((row) => ({
+      modelId: row.modelId,
+      apiModelId: row.apiModelId,
+      displayName: row.displayName,
+      provider: row.provider,
+      requests: row.requests,
+      lastUsed: row.lastUsed === null ? null : row.lastUsed.toISOString(),
+      inputTokens: row.inputTokens,
+      cachedTokens: row.cachedTokens,
+      outputTokens: row.outputTokens,
+      inputCostUsd: row.inputCostUsd,
+      cachedCostUsd: row.cachedCostUsd,
+      outputCostUsd: row.outputCostUsd,
+      totalCostUsd: row.totalCostUsd,
+    }));
   }
 
   async usageCsv(input: UsageReportInput): Promise<string> {
@@ -253,6 +381,44 @@ function toWireErrorEvent(row: ErrorEventRow): WireErrorEvent {
     message: row.message,
     context: redactValue(row.context),
   };
+}
+
+function toWireBreakdown(row: {
+  readonly id: string;
+  readonly name: string;
+  readonly provider: string | null;
+  readonly tokens: number;
+  readonly requests: number;
+}): WireBreakdownEntry {
+  return {
+    id: row.id,
+    name: row.name,
+    provider: row.provider,
+    tokens: row.tokens,
+    requests: row.requests,
+  };
+}
+
+const bucketLabelDay = new Intl.DateTimeFormat('id-ID', {
+  day: 'numeric',
+  month: 'short',
+  timeZone: 'UTC',
+});
+
+function formatBucketLabel(date: string, interval: 'hour' | 'day'): string {
+  const instant = new Date(
+    interval === 'hour' ? `${date.replace(' ', 'T')}:00Z` : `${date}T00:00:00Z`,
+  );
+  if (Number.isNaN(instant.getTime())) return date;
+  if (interval === 'hour') {
+    return new Intl.DateTimeFormat('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      timeZone: 'UTC',
+    }).format(instant);
+  }
+  return bucketLabelDay.format(instant);
 }
 
 function toWireAuditLog(row: AuditLogRow): WireAuditLog {

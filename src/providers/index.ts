@@ -11,9 +11,13 @@ export type {
   DocumentCapabilities,
   ModelCapabilities,
   ModelRuntimeConfig,
+  PartialReasoningCapability,
   ProviderRuntimeConfig,
   NormalizedChatRequest,
+  ReasoningCapability,
+  ReasoningEffort,
 } from './domain/capabilities.ts';
+export { REASONING_EFFORTS } from './domain/capabilities.ts';
 export {
   ModelCapabilitiesSchema,
   PartialModelCapabilitiesSchema,

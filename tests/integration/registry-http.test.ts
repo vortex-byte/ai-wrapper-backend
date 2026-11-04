@@ -531,6 +531,69 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
     expect(body.data.capabilities.documents.maxPages).toBe(40);
   });
 
+  it('round-trips a reasoning capability and clears it with null', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const providerRes = await createProvider(cookie, csrfToken);
+    const providerId = ((await providerRes.json()) as { data: { id: string } }).data.id;
+
+    const reasoning = {
+      availableEfforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+    };
+    const modelRes = await createModel(cookie, csrfToken, providerId, {
+      capabilities: { ...CAPABILITIES, reasoning },
+    });
+    expect(modelRes.status).toBe(201);
+    const createdBody = (await modelRes.json()) as {
+      data: { id: string; capabilities: { reasoning?: unknown } };
+    };
+    expect(createdBody.data.capabilities.reasoning).toEqual(reasoning);
+    const modelId = createdBody.data.id;
+
+    const publicRes = await app.request(
+      new Request('http://localhost/api/models', { headers: { Cookie: cookie } }),
+    );
+    const publicBody = (await publicRes.json()) as {
+      data: { items: Array<{ capabilities: { reasoning?: unknown } }> };
+    };
+    expect(publicBody.data.items[0]?.capabilities.reasoning).toEqual(reasoning);
+
+    const invalid = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          capabilities: { reasoning: { availableEfforts: ['low'], defaultEffort: 'high' } },
+        }),
+      }),
+    );
+    expect(invalid.status).toBe(400);
+
+    const cleared = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({ capabilities: { reasoning: null } }),
+      }),
+    );
+    expect(cleared.status).toBe(200);
+    const clearedBody = (await cleared.json()) as {
+      data: { capabilities: { reasoning?: unknown } };
+    };
+    expect(clearedBody.data.capabilities.reasoning).toBeUndefined();
+  });
+
   it('no longer accepts or returns a model key', async () => {
     await seedUser('super_admin', 'admin@corp.example');
     const { cookie, csrfToken } = await loginAs('admin@corp.example');

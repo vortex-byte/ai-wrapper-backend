@@ -5,6 +5,7 @@ import type {
   NormalizedMessage,
   NormalizedPart,
   ProviderRuntimeConfig,
+  ReasoningEffort,
 } from '@/providers/index.ts';
 import type { MessageWithParts } from '@/conversations/domain/conversation.ts';
 import { estimateMediaTokens, estimateTextTokens } from '@/estimation.ts';
@@ -24,6 +25,8 @@ export interface ContextBuilderInput {
   readonly userIdHash: string;
   /** Client opted into image output for this turn. */
   readonly imageGeneration?: boolean;
+  /** Reasoning depth for this turn; the caller has already checked it against the model. */
+  readonly reasoningEffort?: ReasoningEffort | undefined;
 }
 
 export interface TruncationInfo {
@@ -175,6 +178,7 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     maxOutputTokens,
     responseModalities:
       input.imageGeneration === true && capabilities.imageGeneration ? ['text', 'image'] : ['text'],
+    ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
     metadata: { userIdHash: input.userIdHash },
   };
 

@@ -4,7 +4,13 @@ import type { Clock, IdGenerator } from '@/clock/index.ts';
 import { withTransaction } from '@/db/index.ts';
 import { AppError, isUniqueViolation } from '@/errors.ts';
 import type { RequestMeta } from '@/request-context.ts';
-import type { ModelCapabilities, PartialModelCapabilities, ProviderRuntimeConfig } from '../domain/capabilities.ts';
+import type {
+  ModelCapabilities,
+  PartialModelCapabilities,
+  PartialReasoningCapability,
+  ProviderRuntimeConfig,
+  ReasoningCapability,
+} from '../domain/capabilities.ts';
 import type { ModelRecord, ModelStatus, ProviderRecord, ProviderStatus } from '../domain/registry.ts';
 import type { ModelRegistry } from '../ports/model-registry.ts';
 import type { ProviderAdapter, ProviderModelInfo } from '../ports/provider-adapter.ts';
@@ -145,6 +151,37 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
     if (input.defaultMaxOutputTokens > input.maxOutputTokens) {
       throw new AppError('invalid_request', 'defaultMaxOutputTokens must not exceed maxOutputTokens.');
     }
+  }
+
+  /** `null` clears the capability, omission keeps it, an object replaces what it sets. */
+  function mergeReasoningCapability(
+    current: ReasoningCapability | undefined,
+    patch: PartialReasoningCapability | null | undefined,
+  ): ReasoningCapability | undefined {
+    if (patch === undefined) return current;
+    if (patch === null) return undefined;
+
+    const availableEfforts = patch.availableEfforts ?? current?.availableEfforts;
+    const defaultEffort = patch.defaultEffort ?? current?.defaultEffort;
+    if (availableEfforts === undefined || defaultEffort === undefined) {
+      throw new AppError(
+        'invalid_request',
+        'Reasoning capabilities require availableEfforts and defaultEffort.',
+      );
+    }
+    if (!availableEfforts.includes(defaultEffort)) {
+      throw new AppError('invalid_request', 'defaultEffort must be one of availableEfforts.', {
+        details: {
+          fields: [
+            {
+              field: 'capabilities.reasoning.defaultEffort',
+              message: 'Pick a default from the available efforts.',
+            },
+          ],
+        },
+      });
+    }
+    return { availableEfforts: [...availableEfforts], defaultEffort };
   }
 
   return {
@@ -370,16 +407,26 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
 
       const mergedCapabilities: ModelCapabilities | undefined =
         input.capabilities !== undefined || input.contextWindow !== undefined || input.maxOutputTokens !== undefined
-          ? {
-              ...existing.capabilities,
-              ...(input.capabilities ?? {}),
-              documents: {
-                ...existing.capabilities.documents,
-                ...(input.capabilities?.documents ?? {}),
-              },
-              contextWindow: input.contextWindow ?? input.capabilities?.contextWindow ?? existing.capabilities.contextWindow,
-              maxOutputTokens: input.maxOutputTokens ?? input.capabilities?.maxOutputTokens ?? existing.capabilities.maxOutputTokens,
-            }
+          ? (() => {
+              const { reasoning: reasoningPatch, ...capabilityPatch } = input.capabilities ?? {};
+              const { reasoning: _existingReasoning, ...existingCapabilities } =
+                existing.capabilities;
+              const reasoning = mergeReasoningCapability(
+                existing.capabilities.reasoning,
+                reasoningPatch,
+              );
+              return {
+                ...existingCapabilities,
+                ...capabilityPatch,
+                documents: {
+                  ...existing.capabilities.documents,
+                  ...(input.capabilities?.documents ?? {}),
+                },
+                contextWindow: input.contextWindow ?? input.capabilities?.contextWindow ?? existing.capabilities.contextWindow,
+                maxOutputTokens: input.maxOutputTokens ?? input.capabilities?.maxOutputTokens ?? existing.capabilities.maxOutputTokens,
+                ...(reasoning !== undefined ? { reasoning } : {}),
+              };
+            })()
           : undefined;
 
       const updated = await withTransaction(async (tx) => {

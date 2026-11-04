@@ -60,4 +60,14 @@ describe('canonicalRequestHash', () => {
     );
     expect(text).not.toBe(file);
   });
+
+  it('changes when the reasoning effort changes', () => {
+    const low = canonicalRequestHash(CONV, [{ type: 'text', text: 'Hi' }], {
+      reasoningEffort: 'low',
+    });
+    const high = canonicalRequestHash(CONV, [{ type: 'text', text: 'Hi' }], {
+      reasoningEffort: 'high',
+    });
+    expect(low).not.toBe(high);
+  });
 });

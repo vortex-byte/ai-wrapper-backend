@@ -11,7 +11,7 @@ import { requireAdmin, requireSuperAdmin } from '@/http/middleware/require-role.
 import { clientIp, requestMeta } from '@/http/request-meta.ts';
 import type { AppEnv } from '@/http/types.ts';
 import { parseJsonBody } from '@/http/validate.ts';
-import type { AdminService, PublicUser } from '../application/admin-service.ts';
+import type { AdminService, PublicUser, PublicUserWithDivision } from '../application/admin-service.ts';
 import type { Division, DivisionWithStats } from '../ports/division-repository.ts';
 import { CSV_TEMPLATE_CONTENT, CSV_TEMPLATE_FILENAME, parseCsv } from './csv.ts';
 import {
@@ -64,6 +64,14 @@ function toWireUser(user: PublicUser): WireUser {
     updatedAt: user.updatedAt.toISOString(),
     lastLoginAt: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
   };
+}
+
+export interface WireUserWithDivision extends WireUser {
+  readonly divisionName: string | null;
+}
+
+function toWireUserWithDivision(user: PublicUserWithDivision): WireUserWithDivision {
+  return { ...toWireUser(user), divisionName: user.divisionName };
 }
 
 export interface WireDivision {
@@ -128,12 +136,16 @@ export function adminRoutes(deps: AdminRoutesDeps): Hono<AppEnv> {
       divisionId: caller.user.divisionId,
       meta: requestMeta(c, clientIp(c, config)),
     };
-    const result = await admin.listUsers(queryInput, callerCtx);
+    const [result, divisionOptions] = await Promise.all([
+      admin.listUsers(queryInput, callerCtx),
+      caller.user.role === 'super_admin' ? admin.listDivisionOptions() : Promise.resolve([]),
+    ]);
     return c.json(
       ok(
         {
-          items: result.items.map(toWireUser),
+          items: result.items.map(toWireUserWithDivision),
           nextCursor: result.nextCursor,
+          divisions: divisionOptions,
         },
         '',
       ),

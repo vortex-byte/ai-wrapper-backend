@@ -120,8 +120,15 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
       }),
     );
     expect(listRes.status).toBe(200);
-    const listBody = (await listRes.json()) as { data: { items: Array<{ id: string }> } };
+    const listBody = (await listRes.json()) as {
+      data: {
+        items: Array<{ id: string; divisionName: string | null }>;
+        divisions: Array<{ id: string; name: string }>;
+      };
+    };
     expect(listBody.data.items).toHaveLength(1);
+    expect(listBody.data.items[0]?.divisionName).toBeNull();
+    expect(listBody.data.divisions).toEqual([]);
 
     const createRes = await app.request(
       new Request('http://localhost/api/admin/users', {
@@ -484,11 +491,18 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
         }),
       );
       expect(listRes.status).toBe(200);
-      const listBody = (await listRes.json()) as { data: { items: Array<{ id: string }> } };
+      const listBody = (await listRes.json()) as {
+        data: {
+          items: Array<{ id: string; divisionName: string | null }>;
+          divisions: Array<{ id: string; name: string }>;
+        };
+      };
       const listedIds = listBody.data.items.map((i) => i.id);
       expect(listedIds).toContain(divAdmin.id);
       expect(listedIds).toContain(userDiv1.id);
       expect(listedIds).not.toContain(userDiv2.id);
+      expect(listBody.data.items.every((i) => i.divisionName === 'Engineering')).toBe(true);
+      expect(listBody.data.divisions).toEqual([]);
 
       // 2. Cross-division access returns 404 (opaque existence protection)
       const getCrossRes = await app.request(

@@ -133,7 +133,8 @@ describe('admin reporting surface (real PostgreSQL)', () => {
     const adminCookie = await loginAs('admin@corp.example');
 
     for (const path of [
-      '/api/admin/usage?groupBy=day',
+      '/api/admin/dashboard',
+      '/api/admin/usage/report',
       '/api/admin/usage/export?groupBy=day',
       '/api/admin/errors',
       '/api/admin/audit-logs',
@@ -148,12 +149,16 @@ describe('admin reporting surface (real PostgreSQL)', () => {
     await seedUsageDay();
     const cookie = await loginAs('root@corp.example');
 
-    const res = await get('/api/admin/usage?groupBy=day&from=2026-10-01&to=2026-10-31', cookie);
+    const res = await get(
+      '/api/admin/usage/report?from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z',
+      cookie,
+    );
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as {
       data: {
-        items: Array<{
+        window: { from: string; to: string };
+        byUser: Array<{
           key: Record<string, string | null>;
           requests: number;
           failedRequests: number;
@@ -163,13 +168,69 @@ describe('admin reporting surface (real PostgreSQL)', () => {
       };
     };
 
-    const row = body.data.items.find((item) => item.key['day'] === '2026-10-18');
+    expect(body.data.window).toEqual({
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-31T23:59:59.999Z',
+    });
+
+    const row = body.data.byUser.find((item) => item.key['email'] === 'usage@corp.example');
     expect(row).toBeDefined();
     expect(row?.requests).toBe(4);
     expect(row?.failedRequests).toBe(1);
     expect(row?.inputTokens).toBe(1000);
     expect(row?.usageSource.provider).toBeCloseTo(0.75);
     expect(row?.usageSource.estimated).toBeCloseTo(0.25);
+  });
+
+  it('returns only the requested report sections', async () => {
+    await seedUser('super_admin', 'root@corp.example');
+    await seedUsageDay();
+    const cookie = await loginAs('root@corp.example');
+
+    const res = await get(
+      '/api/admin/usage/report?sections=byUser&from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z',
+      cookie,
+    );
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as { data: Record<string, unknown> };
+    expect(Object.keys(body.data).sort()).toEqual(['byUser', 'window']);
+    expect(Array.isArray(body.data['byUser'])).toBe(true);
+  });
+
+  it('rejects unknown report sections', async () => {
+    await seedUser('super_admin', 'root@corp.example');
+    const cookie = await loginAs('root@corp.example');
+
+    const res = await get('/api/admin/usage/report?sections=bogus', cookie);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns the dashboard report in a single response', async () => {
+    await seedUser('super_admin', 'root@corp.example');
+    const cookie = await loginAs('root@corp.example');
+
+    const res = await get('/api/admin/dashboard', cookie);
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as {
+      data: {
+        window: { from: string; to: string };
+        summary: { totalRequests: number };
+        recent: unknown[];
+        breakdown: { byProvider: unknown[]; byModel: unknown[] };
+        models: unknown[];
+        departmentUsage: unknown[];
+      };
+    };
+
+    expect(new Date(body.data.window.from).toISOString()).toBe(body.data.window.from);
+    expect(body.data.window.to.endsWith('T23:59:59.999Z')).toBe(true);
+    expect(body.data.summary.totalRequests).toBe(0);
+    expect(body.data.recent).toEqual([]);
+    expect(body.data.breakdown).toEqual({ byProvider: [], byModel: [] });
+    expect(body.data.models).toEqual([]);
+    expect(body.data.departmentUsage).toEqual([]);
   });
 
   it('exports the same aggregate as CSV', async () => {
@@ -194,20 +255,41 @@ describe('admin reporting surface (real PostgreSQL)', () => {
     await seedUsageDay();
     const cookie = await loginAs('root@corp.example');
 
+    const secondUser = await users.create({
+      id: Bun.randomUUIDv7(),
+      email: 'unknown-cost@corp.example',
+      displayName: 'Unknown Cost User',
+      passwordHash: await hasher.hash(PASSWORD),
+      role: 'user',
+      mustChangePassword: false,
+      status: 'active',
+    });
+
     await getPool().query(
       `INSERT INTO usage_daily
          (day, user_id, division_id, provider_id, model_id, requests, failed_requests,
           provider_sourced_requests, input_tokens, output_tokens, quota_tokens, est_cost_micros)
-       SELECT '2026-10-19', user_id, division_id, provider_id, model_id, 2, 0, 2, 10, 5, 15, NULL
+       SELECT '2026-10-19', $1, division_id, provider_id, model_id, 2, 0, 2, 10, 5, 15, NULL
          FROM usage_daily WHERE day = '2026-10-18'`,
+      [secondUser.id],
     );
 
-    const res = await get('/api/admin/usage?groupBy=day&from=2026-10-01&to=2026-10-31', cookie);
+    const res = await get(
+      '/api/admin/usage/report?from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z',
+      cookie,
+    );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      data: { items: Array<{ key: Record<string, string | null>; estimatedCostUsd: number | null }> };
+      data: {
+        byUser: Array<{
+          key: Record<string, string | null>;
+          estimatedCostUsd: number | null;
+        }>;
+      };
     };
-    const row = body.data.items.find((item) => item.key['day'] === '2026-10-19');
+    const row = body.data.byUser.find(
+      (item) => item.key['email'] === 'unknown-cost@corp.example',
+    );
     expect(row?.estimatedCostUsd).toBeNull();
 
     const csv = await get(

@@ -67,6 +67,23 @@ describe('Context Builder', () => {
     expect(result.request.responseModalities).toEqual(['text']);
   });
 
+  it('carries the resolved reasoning effort into the request', () => {
+    const base = {
+      requestId: 'req-reasoning',
+      generationId: 'gen-reasoning',
+      model: mockModel,
+      provider: mockProvider,
+      newParts: [{ type: 'text' as const, text: 'Think it through' }],
+      history: [],
+      userIdHash: 'hash-1',
+    };
+
+    expect(buildContext(base).request.reasoningEffort).toBeUndefined();
+    expect(buildContext({ ...base, reasoningEffort: 'xhigh' }).request.reasoningEffort).toBe(
+      'xhigh',
+    );
+  });
+
   it('concatenates system prompts and calculates remaining budget', () => {
     const result = buildContext({
       requestId: 'req-1',

@@ -419,6 +419,35 @@ describe('AnthropicAdapter (Unit)', () => {
     }
   });
 
+  it('maps the requested reasoning effort to an extended-thinking budget', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      reasoningEffort: 'high',
+      maxOutputTokens: 8192,
+      temperature: 0.3,
+      topP: 0.8,
+    });
+    const params = adapter.toProviderRequest(req) as {
+      thinking?: { type: string; budget_tokens: number };
+      temperature?: number;
+      top_p?: number;
+    };
+
+    expect(params.thinking).toEqual({ type: 'enabled', budget_tokens: 4096 });
+    // Extended thinking rejects sampling overrides.
+    expect(params.temperature).toBeUndefined();
+    expect(params.top_p).toBeUndefined();
+  });
+
+  it('skips thinking when the output budget leaves no room', () => {
+    const adapter = new AnthropicAdapter();
+    const params = adapter.toProviderRequest(
+      makeAnthropicRequest({ reasoningEffort: 'max', maxOutputTokens: 1024 }),
+    ) as { thinking?: unknown };
+
+    expect(params.thinking).toBeUndefined();
+  });
+
   it('translates Anthropic 429 rate limit errors with retry-after header', () => {
     const adapter = new AnthropicAdapter();
     const error = new Anthropic.RateLimitError(

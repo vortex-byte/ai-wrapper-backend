@@ -453,4 +453,93 @@ describe('Generation HTTP Surface & Streaming (P2-5 & P2-6)', () => {
     );
     expect(firstRows[0]?.superseded_by).toBe(newAssistantId);
   });
+
+  it('POST /api/conversations/:id/messages/:mid/retry regenerates a completed answer and drops later turns', async () => {
+    const modelId = await seedActiveModel('fake');
+    await seedUser('regenerate@corp.example');
+    const auth = await loginAs('regenerate@corp.example');
+    const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
+    const pool = getPool();
+
+    const waitIdle = async () => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const { rows } = await pool.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM generation_jobs
+           WHERE conversation_id = $1 AND status IN ('pending','generating')`,
+          [convId],
+        );
+        if (rows[0]?.count === '0') return;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+    };
+
+    const firstRes = await send(convId, auth.cookie, auth.csrfToken, {
+      key: Bun.randomUUIDv7(),
+      text: 'First question',
+    });
+    expect(firstRes.status).toBe(202);
+    const firstBody = (await firstRes.json()) as {
+      data: {
+        userMessage: { id: string };
+        assistantMessage: { id: string };
+        generation: { id: string };
+      };
+    };
+    await waitIdle();
+
+    const secondRes = await send(convId, auth.cookie, auth.csrfToken, {
+      key: Bun.randomUUIDv7(),
+      text: 'Second question',
+    });
+    expect(secondRes.status).toBe(202);
+    const secondBody = (await secondRes.json()) as {
+      data: { userMessage: { id: string }; assistantMessage: { id: string } };
+    };
+    await waitIdle();
+
+    const retryRes = await app.request(
+      new Request(
+        `http://localhost/api/conversations/${convId}/messages/${firstBody.data.userMessage.id}/retry`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: auth.cookie,
+            Origin: ORIGIN,
+            'X-CSRF-Token': auth.csrfToken,
+            'Idempotency-Key': Bun.randomUUIDv7(),
+          },
+          body: JSON.stringify({}),
+        },
+      ),
+    );
+    expect(retryRes.status).toBe(202);
+    const retryBody = (await retryRes.json()) as {
+      data: { assistantMessage: { id: string } };
+    };
+    const newAssistantId = retryBody.data.assistantMessage.id;
+    expect(newAssistantId).not.toBe(firstBody.data.assistantMessage.id);
+    await waitIdle();
+
+    const listRes = await app.request(
+      new Request(`http://localhost/api/conversations/${convId}/messages`, {
+        headers: { Cookie: auth.cookie },
+      }),
+    );
+    expect(listRes.status).toBe(200);
+    const listBody = (await listRes.json()) as { data: { items: Array<{ id: string }> } };
+    expect(listBody.data.items.map((m) => m.id)).toEqual([
+      firstBody.data.userMessage.id,
+      newAssistantId,
+    ]);
+
+    const { rows } = await pool.query<{ id: string; superseded_by: string | null }>(
+      'SELECT id, superseded_by FROM messages WHERE conversation_id = $1',
+      [convId],
+    );
+    const supersedeOf = (id: string) => rows.find((row) => row.id === id)?.superseded_by ?? null;
+    expect(supersedeOf(firstBody.data.assistantMessage.id)).toBe(newAssistantId);
+    expect(supersedeOf(secondBody.data.userMessage.id)).toBe(newAssistantId);
+    expect(supersedeOf(secondBody.data.assistantMessage.id)).toBe(newAssistantId);
+  });
 });

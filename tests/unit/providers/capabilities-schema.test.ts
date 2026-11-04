@@ -67,4 +67,40 @@ describe('capabilities schema', () => {
     expect(parsed.maxImagesPerRequest).toBe(10);
     expect(parsed.vision).toBe(true);
   });
+
+  it('parses a reasoning capability and requires the default to be selectable', () => {
+    const parsed = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      reasoning: { availableEfforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+    });
+    expect(parsed.reasoning).toEqual({
+      availableEfforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+    });
+
+    const outside = ModelCapabilitiesSchema.safeParse({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      reasoning: { availableEfforts: ['low'], defaultEffort: 'high' },
+    });
+    expect(outside.success).toBe(false);
+  });
+
+  it('treats a null reasoning capability as absent', () => {
+    const parsed = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      reasoning: null,
+    });
+    expect(parsed.reasoning).toBeUndefined();
+  });
+
+  it('lets a partial patch clear reasoning with null', () => {
+    expect(parsePartialCapabilities({ reasoning: null })).toEqual({ reasoning: null });
+  });
+
+  it('rejects an unknown effort value in a partial patch', () => {
+    expect(() => parsePartialCapabilities({ reasoning: { defaultEffort: 'extreme' } })).toThrow();
+  });
 });

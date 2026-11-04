@@ -15,7 +15,11 @@ import type { GenerationEnqueuer, EnqueueGenerationInput } from '../ports/genera
 import type { AttachmentService } from '@/attachments/application/attachment-service.ts';
 import type { AttachmentRepository } from '@/attachments/ports/attachment-repository.ts';
 import type { Attachment, ResolvedAttachmentPart } from '@/attachments/domain/attachment.ts';
-import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import type {
+  ModelCapabilities,
+  NormalizedChatRequest,
+  ReasoningEffort,
+} from '@/providers/domain/capabilities.ts';
 import { validatePartsForModel } from '@/providers/domain/capability-validation.ts';
 import type { SettingsService } from '@/settings/application/settings-service.ts';
 import type { Finalizer } from './finalizer.ts';
@@ -56,6 +60,7 @@ export type SendPartInput =
 export interface GenerationOptions {
   readonly maxOutputTokens?: number | undefined;
   readonly tools?: { readonly imageGeneration?: boolean | undefined } | undefined;
+  readonly reasoningEffort?: ReasoningEffort | undefined;
 }
 
 export interface SendMessageInput {
@@ -159,6 +164,8 @@ export function createSendService(deps: SendMessageDeps): SendService {
       if (wantsImageOutput && !model.capabilities.imageGeneration) {
         throw new AppError('unsupported_for_model', 'The selected model cannot generate images.');
       }
+
+      const reasoningEffort = resolveReasoningEffort(model, input.options?.reasoningEffort);
 
       let resolvedAttachmentParts: NormalizedPart[] = [];
       let resolvedAttachments: Attachment[] = [];
@@ -277,6 +284,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           maxOutputTokensOverride: maxOutputTokens,
           userIdHash,
           ...(wantsImageOutput ? { imageGeneration: true } : {}),
+          ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
         });
 
         const seqs = await deps.conversations.allocateSeqPair(conversation.id, tx);
@@ -365,7 +373,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
               estInputTokens: built.estimatedTokens,
               maxOutputTokens,
               modelLock: { modelId: model.id, providerId: provider.id, configVersion: null },
-              options: toStoredOptions(input.options),
+              options: toStoredOptions(input.options, reasoningEffort),
               contextInfo: {
                 truncated: built.truncation.truncated,
                 droppedMessageCount: built.truncation.droppedMessageCount,
@@ -543,19 +551,8 @@ export function createSendService(deps: SendMessageDeps): SendService {
       }
 
       const oldAssistant = pairedAssistant.message;
-      const isFailedOrCancelled =
-        oldAssistant.status === 'failed' ||
-        oldAssistant.status === 'incomplete' ||
-        oldAssistant.finishReason === 'error' ||
-        oldAssistant.finishReason === 'cancelled' ||
-        oldAssistant.finishReason === 'timeout' ||
-        oldAssistant.finishReason === 'interrupted';
-
-      if (!isFailedOrCancelled) {
-        throw new AppError(
-          'conflict',
-          'Only failed or cancelled assistant messages can be retried.',
-        );
+      if (oldAssistant.status === 'streaming') {
+        throw new AppError('conflict', 'This assistant message is still generating.');
       }
 
       const resolved = await deps.registry.getRuntimeConfig(conversation.modelId);
@@ -572,6 +569,8 @@ export function createSendService(deps: SendMessageDeps): SendService {
       if (wantsImageOutput && !model.capabilities.imageGeneration) {
         throw new AppError('unsupported_for_model', 'The selected model cannot generate images.');
       }
+
+      const reasoningEffort = resolveReasoningEffort(model, input.options?.reasoningEffort);
 
       if (deps.orchestrator?.isDraining) {
         throw new AppError('service_busy', 'Server is shutting down.', {
@@ -677,6 +676,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           maxOutputTokensOverride: maxOutputTokens,
           userIdHash,
           ...(wantsImageOutput ? { imageGeneration: true } : {}),
+          ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
         });
 
         const newAssistantSeq = await deps.conversations.allocateSeq(conversation.id, 1, tx);
@@ -699,6 +699,13 @@ export function createSendService(deps: SendMessageDeps): SendService {
         };
         await deps.conversations.insertMessage(newAssistantMessage, tx);
 
+        await deps.conversations.supersedeMessagesAfter(
+          conversation.id,
+          userMsgWithParts.message.seq,
+          newAssistantMessage.id,
+          tx,
+        );
+
         await deps.conversations.updateMessage(
           oldAssistant.id,
           { supersededBy: newAssistantMessage.id },
@@ -719,7 +726,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
               estInputTokens: built.estimatedTokens,
               maxOutputTokens,
               modelLock: { modelId: model.id, providerId: provider.id, configVersion: null },
-              options: toStoredOptions(input.options),
+              options: toStoredOptions(input.options, reasoningEffort),
               contextInfo: {
                 truncated: built.truncation.truncated,
                 droppedMessageCount: built.truncation.droppedMessageCount,
@@ -896,6 +903,7 @@ export function canonicalRequestHash(
     ),
     maxOutputTokens: options?.maxOutputTokens ?? null,
     imageGeneration: options?.tools?.imageGeneration === true,
+    reasoningEffort: options?.reasoningEffort ?? null,
   });
   return createHash('sha256').update(canonical).digest('hex');
 }
@@ -915,12 +923,40 @@ function chatResponseModalities(
 /** `generation_jobs.options` is an open jsonb blob; keep it to the fields we accept. */
 function toStoredOptions(
   options: GenerationOptions | undefined,
+  resolvedReasoningEffort: ReasoningEffort | undefined,
 ): Readonly<Record<string, unknown>> {
-  if (options === undefined) return {};
+  const reasoningEffort = options?.reasoningEffort ?? resolvedReasoningEffort;
   return {
-    ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
-    ...(options.tools !== undefined ? { tools: { ...options.tools } } : {}),
+    ...(options?.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
+    ...(options?.tools !== undefined ? { tools: { ...options.tools } } : {}),
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
   };
+}
+
+/** Rejects an effort the model does not offer; falls back to the model default when omitted. */
+function resolveReasoningEffort(
+  model: { readonly capabilities: ModelCapabilities },
+  requested: ReasoningEffort | undefined,
+): ReasoningEffort | undefined {
+  const capability = model.capabilities.reasoning;
+  if (capability === undefined) {
+    if (requested !== undefined) {
+      throw new AppError(
+        'unsupported_for_model',
+        'The selected model does not support reasoning effort.',
+      );
+    }
+    return undefined;
+  }
+  if (requested === undefined) return capability.defaultEffort;
+  if (!capability.availableEfforts.includes(requested)) {
+    throw new AppError(
+      'unsupported_for_model',
+      'The selected reasoning effort is not available for this model.',
+      { details: { availableEfforts: capability.availableEfforts } },
+    );
+  }
+  return requested;
 }
 
 function clampMaxOutputTokens(

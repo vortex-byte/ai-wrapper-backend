@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { decodeSeqCursor } from '@/cursor.ts';
+import { REASONING_EFFORTS } from '@/providers/domain/capabilities.ts';
 
 /** Zod schemas and cursor validators for conversation endpoints. */
 
@@ -73,6 +74,7 @@ const SendOptionsSchema = z
   .object({
     maxOutputTokens: z.number().int().min(1).max(1_000_000).optional(),
     tools: z.object({ imageGeneration: z.boolean().optional() }).optional(),
+    reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
   })
   .optional();
 

@@ -1,6 +1,7 @@
 import type {
   NormalizedChatRequest,
   ProviderRuntimeConfig,
+  ReasoningEffort,
 } from '@/providers/domain/capabilities.ts';
 import { providerError, type ProviderError } from '@/providers/domain/errors.ts';
 import type {
@@ -48,6 +49,25 @@ const MAX_INLINE_BYTES = 15 * 1024 * 1024;
 const INLINE_ARTIFACT_PREFIX = 'gemini-inline:';
 /** Legacy self-describing data URL handle (`data:<mime>;base64,...`) for backwards compatibility. */
 const INLINE_DATA_URL_PREFIX = 'data:';
+
+/** Thinking-token budgets per selectable effort (`thinkingConfig.thinkingBudget`). */
+const THINKING_BUDGETS: Readonly<Record<ReasoningEffort, number>> = {
+  low: 1024,
+  medium: 4096,
+  high: 8192,
+  xhigh: 16384,
+  max: 24576,
+};
+
+const MIN_OUTPUT_HEADROOM = 1024;
+
+/** Keeps the thinking budget below `maxOutputTokens` so a visible answer always fits. */
+function resolveThinkingBudget(effort: ReasoningEffort, maxOutputTokens: number): number {
+  const budget = THINKING_BUDGETS[effort];
+  const ceiling = maxOutputTokens - MIN_OUTPUT_HEADROOM;
+  if (ceiling <= 0) return budget;
+  return Math.min(budget, ceiling);
+}
 
 /** Minimal structural view of a `fetch` Response, so the adapter owns SSE parsing. */
 export interface GeminiResponseLike {
@@ -538,6 +558,9 @@ export class GeminiAdapter implements ProviderAdapter {
         maxOutputTokens: req.maxOutputTokens,
         ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
         ...(typeof req.topP === 'number' ? { topP: req.topP } : {}),
+        ...(req.reasoningEffort !== undefined
+          ? { thinkingConfig: { thinkingBudget: resolveThinkingBudget(req.reasoningEffort, req.maxOutputTokens) } }
+          : {}),
       },
       ...(tools.length > 0 ? { tools } : {}),
     };
@@ -836,7 +859,6 @@ export class GeminiAdapter implements ProviderAdapter {
         });
       }
 
-      // Status-name-only failures (a mid-stream frame carrying an error object, no HTTP status).
       if (statusName === 'INVALID_ARGUMENT') {
         return providerError('invalid_request', 'The model provider rejected the request.', {
           retryable: false,

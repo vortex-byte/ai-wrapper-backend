@@ -16,6 +16,7 @@ import type {
   PasswordUpdate,
   UpdateUserInput,
   UserRepository,
+  UserWithDivision,
 } from '@/auth/ports/user-repository.ts';
 import type { AuditEntry, AuditLogRepository } from '@/audit/ports/audit-log-repository.ts';
 import type { Clock } from '@/clock/index.ts';
@@ -99,7 +100,7 @@ export class InMemoryUserRepository implements UserRepository {
 
   async findMany(
     options: ListUsersQuery,
-  ): Promise<{ items: User[]; nextCursor: string | null }> {
+  ): Promise<{ items: UserWithDivision[]; nextCursor: string | null }> {
     let list = Array.from(this.rows.values()).filter((u) => u.deletedAt === null);
 
     if (options.status) {
@@ -132,7 +133,7 @@ export class InMemoryUserRepository implements UserRepository {
 
     const limit = options.limit ?? 50;
     const hasNext = list.length > limit;
-    const items = list.slice(0, limit);
+    const items = list.slice(0, limit).map((user) => ({ ...user, divisionName: null }));
 
     let nextCursor: string | null = null;
     const last = items[items.length - 1];

@@ -62,7 +62,23 @@ async function loginAs(
   };
 }
 
-async function seedActiveModel(providerAdapter = 'openai'): Promise<string> {
+const DEFAULT_CAPABILITIES = {
+  schemaVersion: 1,
+  streaming: true,
+  vision: true,
+  documents: { pdf: true },
+  imageGeneration: false,
+  documentGeneration: false,
+  systemPrompt: true,
+  tools: false,
+  contextWindow: 128_000,
+  maxOutputTokens: 4_096,
+};
+
+async function seedActiveModel(
+  providerAdapter = 'openai',
+  capabilities: Record<string, unknown> = DEFAULT_CAPABILITIES,
+): Promise<string> {
   const pool = getPool();
   const providerId = Bun.randomUUIDv7();
   const modelId = Bun.randomUUIDv7();
@@ -75,10 +91,8 @@ async function seedActiveModel(providerAdapter = 'openai'): Promise<string> {
   await pool.query(
     `INSERT INTO ai_models (id, provider_id, api_model_id, display_name, status,
                             capabilities, context_window, max_output_tokens, default_max_output_tokens)
-     VALUES ($1, $2, 'gpt-4o', 'GPT-4o', 'active',
-             '{"schemaVersion":1,"streaming":true,"vision":true,"documents":{"pdf":true},"imageGeneration":false,"documentGeneration":false,"systemPrompt":true,"tools":false,"contextWindow":128000,"maxOutputTokens":4096}',
-             128000, 4096, 2048)`,
-    [modelId, providerId],
+     VALUES ($1, $2, 'gpt-4o', 'GPT-4o', 'active', $3, 128000, 4096, 2048)`,
+    [modelId, providerId, JSON.stringify(capabilities)],
   );
   services.registry.invalidate();
   return modelId;
@@ -321,6 +335,68 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
       text: 'Second',
     });
     expect(second.status).toBe(202);
+  });
+
+  it('stores the selected reasoning effort on the generation job', async () => {
+    const modelId = await seedActiveModel('openai', {
+      ...DEFAULT_CAPABILITIES,
+      reasoning: { availableEfforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+    });
+    await seedUser('reasoning@corp.example');
+    const auth = await loginAs('reasoning@corp.example');
+    const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
+
+    const res = await send(convId, auth.cookie, auth.csrfToken, {
+      key: Bun.randomUUIDv7(),
+      body: {
+        parts: [{ type: 'text', text: 'Think about it' }],
+        options: { reasoningEffort: 'high' },
+      },
+    });
+    expect(res.status).toBe(202);
+
+    const { rows } = await getPool().query<{ options: { reasoningEffort?: string } }>(
+      'SELECT options FROM generation_jobs WHERE conversation_id = $1',
+      [convId],
+    );
+    expect(rows[0]?.options.reasoningEffort).toBe('high');
+  });
+
+  it('rejects a reasoning effort the model does not offer', async () => {
+    const modelId = await seedActiveModel('openai', {
+      ...DEFAULT_CAPABILITIES,
+      reasoning: { availableEfforts: ['low'], defaultEffort: 'low' },
+    });
+    await seedUser('reasoning-bad@corp.example');
+    const auth = await loginAs('reasoning-bad@corp.example');
+    const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
+
+    const res = await send(convId, auth.cookie, auth.csrfToken, {
+      key: Bun.randomUUIDv7(),
+      body: {
+        parts: [{ type: 'text', text: 'Think harder' }],
+        options: { reasoningEffort: 'max' },
+      },
+    });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe('unsupported_for_model');
+  });
+
+  it('rejects a reasoning effort for a model without reasoning support', async () => {
+    const modelId = await seedActiveModel();
+    await seedUser('reasoning-none@corp.example');
+    const auth = await loginAs('reasoning-none@corp.example');
+    const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
+
+    const res = await send(convId, auth.cookie, auth.csrfToken, {
+      key: Bun.randomUUIDv7(),
+      body: {
+        parts: [{ type: 'text', text: 'Think' }],
+        options: { reasoningEffort: 'low' },
+      },
+    });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe('unsupported_for_model');
   });
 
   it('requires a UUID Idempotency-Key (400 when missing or malformed)', async () => {

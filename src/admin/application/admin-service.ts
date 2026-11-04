@@ -1,7 +1,7 @@
 import { AUDIT_ACTIONS } from '@/audit/actions.ts';
 import { passwordProblemMessage, validatePassword } from '@/auth/domain/password-policy.ts';
 import type { User, UserRole, UserStatus } from '@/auth/domain/user.ts';
-import type { ListUsersQuery } from '@/auth/ports/user-repository.ts';
+import type { ListUsersQuery, UserWithDivision } from '@/auth/ports/user-repository.ts';
 import { withSavepoint, withTransaction } from '@/db/index.ts';
 import { AppError, isForeignKeyViolation, isUniqueViolation } from '@/errors.ts';
 import type { RequestMeta } from '@/request-context.ts';
@@ -19,6 +19,8 @@ import type { AdminDeps } from './deps.ts';
 /** User projection for the admin surface; omits password hashes and failure counters. */
 export type PublicUser = Omit<User, 'passwordHash' | 'failedLoginAttempts' | 'lockedUntil'>;
 
+export type PublicUserWithDivision = PublicUser & { readonly divisionName: string | null };
+
 function toPublicUser(user: User): PublicUser {
   const {
     passwordHash: _passwordHash,
@@ -27,6 +29,10 @@ function toPublicUser(user: User): PublicUser {
     ...rest
   } = user;
   return rest;
+}
+
+function toPublicUserWithDivision(user: UserWithDivision): PublicUserWithDivision {
+  return { ...toPublicUser(user), divisionName: user.divisionName };
 }
 
 export interface CallerContext {
@@ -131,11 +137,17 @@ export interface DeleteDivisionInput {
   readonly meta: RequestMeta;
 }
 
+export interface DivisionOption {
+  readonly id: string;
+  readonly name: string;
+}
+
 export interface AdminService {
   listUsers(
     query: ListUsersQuery,
     caller: CallerContext,
-  ): Promise<{ items: PublicUser[]; nextCursor: string | null }>;
+  ): Promise<{ items: PublicUserWithDivision[]; nextCursor: string | null }>;
+  listDivisionOptions(): Promise<readonly DivisionOption[]>;
   getUser(id: string, caller: CallerContext): Promise<PublicUser>;
   createUser(input: CreateUserInput): Promise<CreateUserResult>;
   updateUser(input: UpdateUserInput): Promise<PublicUser>;
@@ -185,7 +197,15 @@ export function createAdminService(deps: AdminDeps): AdminService {
           : query;
 
       const result = await deps.users.findMany(effectiveQuery);
-      return { items: result.items.map(toPublicUser), nextCursor: result.nextCursor };
+      return {
+        items: result.items.map(toPublicUserWithDivision),
+        nextCursor: result.nextCursor,
+      };
+    },
+
+    async listDivisionOptions() {
+      const divisions = await deps.divisions.findMany();
+      return divisions.map((division) => ({ id: division.id, name: division.name }));
     },
 
     async getUser(id, caller) {

@@ -1,5 +1,23 @@
 import { getPool } from '@/db/index.ts';
 
+function assertTestDatabaseUrl(url: string | undefined): void {
+  if (!url) {
+    throw new Error('[CRITICAL SAFETY] Ditolak: DATABASE_URL tidak terdefinisi.');
+  }
+  const dbName = (() => {
+    try {
+      return new URL(url).pathname.replace(/^\//, '');
+    } catch {
+      throw new Error('[CRITICAL SAFETY] Ditolak: Format DATABASE_URL tidak valid.');
+    }
+  })();
+  if (!/test/i.test(dbName)) {
+    throw new Error(
+      `[CRITICAL SAFETY] Ditolak: resetDatabase() menolak beroperasi pada database "${dbName}". Nama database WAJIB mengandung kata "test"!`,
+    );
+  }
+}
+
 /** Resets identity and conversational data between tests while preserving seed settings. */
 const RESET_STATEMENTS = [
   'DELETE FROM audit_logs',
@@ -30,7 +48,23 @@ const RESET_STATEMENTS = [
 ] as const;
 
 export async function resetDatabase(): Promise<void> {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error(
+      `[CRITICAL SAFETY] Ditolak: resetDatabase() hanya boleh dijalankan pada NODE_ENV='test' (saat ini: '${process.env.NODE_ENV}').`,
+    );
+  }
+
+  assertTestDatabaseUrl(process.env.DATABASE_URL);
+
   const pool = getPool();
+  const dbNameResult = await pool.query<{ current_database: string }>('SELECT current_database()');
+  const currentDb = dbNameResult.rows[0]?.current_database ?? '';
+  if (!/test/i.test(currentDb)) {
+    throw new Error(
+      `[CRITICAL SAFETY] Ditolak: Koneksi database aktif adalah "${currentDb}". Operasi reset dibatalkan karena nama database tidak mengandung kata "test"!`,
+    );
+  }
+
   for (let attempt = 0; ; attempt++) {
     try {
       for (const statement of RESET_STATEMENTS) {

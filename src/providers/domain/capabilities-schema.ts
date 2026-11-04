@@ -1,10 +1,63 @@
 import { z } from 'zod';
-import type { ModelCapabilities, PartialModelCapabilities } from './capabilities.ts';
+import type {
+  ModelCapabilities,
+  PartialModelCapabilities,
+  ReasoningEffort,
+} from './capabilities.ts';
+import { REASONING_EFFORTS } from './capabilities.ts';
 
 /** Zod schemas for validating model capabilities and runtime configurations. */
 
 /** Current capability blob version. Bump when a required key changes meaning. */
 export const CAPABILITIES_SCHEMA_VERSION = 1;
+
+const ReasoningEffortSchema = z.enum(REASONING_EFFORTS);
+
+interface ReasoningEffortsShape {
+  readonly availableEfforts?: readonly ReasoningEffort[] | undefined;
+  readonly defaultEffort?: ReasoningEffort | undefined;
+}
+
+/** A default outside the selectable set would make the picker unable to represent the model. */
+const defaultEffortIsAvailable = (value: ReasoningEffortsShape): boolean => {
+  if (value.availableEfforts === undefined || value.defaultEffort === undefined) return true;
+  return value.availableEfforts.includes(value.defaultEffort);
+};
+
+const effortsAreUnique = (value: ReasoningEffortsShape): boolean => {
+  if (value.availableEfforts === undefined) return true;
+  return new Set(value.availableEfforts).size === value.availableEfforts.length;
+};
+
+const ReasoningCapabilitySchema = z
+  .object({
+    availableEfforts: z.array(ReasoningEffortSchema).min(1),
+    defaultEffort: ReasoningEffortSchema,
+  })
+  .strict()
+  .refine(effortsAreUnique, {
+    message: 'availableEfforts must not contain duplicates.',
+    path: ['availableEfforts'],
+  })
+  .refine(defaultEffortIsAvailable, {
+    message: 'defaultEffort must be one of availableEfforts.',
+    path: ['defaultEffort'],
+  });
+
+const PartialReasoningCapabilitySchema = z
+  .object({
+    availableEfforts: z.array(ReasoningEffortSchema).min(1).optional(),
+    defaultEffort: ReasoningEffortSchema.optional(),
+  })
+  .strict()
+  .refine(effortsAreUnique, {
+    message: 'availableEfforts must not contain duplicates.',
+    path: ['availableEfforts'],
+  })
+  .refine(defaultEffortIsAvailable, {
+    message: 'defaultEffort must be one of availableEfforts.',
+    path: ['defaultEffort'],
+  });
 
 const DocumentCapabilitiesSchema = z
   .object({
@@ -27,6 +80,7 @@ export const ModelCapabilitiesSchema = z
     maxImagesPerRequest: z.number().int().positive().optional(),
     contextWindow: z.number().int().positive(),
     maxOutputTokens: z.number().int().positive(),
+    reasoning: ReasoningCapabilitySchema.nullish(),
   })
   .strict();
 
@@ -50,6 +104,7 @@ export const PartialModelCapabilitiesSchema = z
     maxImagesPerRequest: z.number().int().positive().optional(),
     contextWindow: z.number().int().positive().optional(),
     maxOutputTokens: z.number().int().positive().optional(),
+    reasoning: PartialReasoningCapabilitySchema.nullable().optional(),
   })
   .strict();
 
@@ -95,6 +150,14 @@ export function parseCapabilities(
       : {}),
     contextWindow: parsed.contextWindow,
     maxOutputTokens: parsed.maxOutputTokens,
+    ...(parsed.reasoning !== undefined && parsed.reasoning !== null
+      ? {
+          reasoning: {
+            availableEfforts: [...parsed.reasoning.availableEfforts],
+            defaultEffort: parsed.reasoning.defaultEffort,
+          },
+        }
+      : {}),
   };
 }
 
@@ -125,6 +188,20 @@ export function parsePartialCapabilities(value: unknown): PartialModelCapabiliti
       : {}),
     ...(parsed.contextWindow !== undefined ? { contextWindow: parsed.contextWindow } : {}),
     ...(parsed.maxOutputTokens !== undefined ? { maxOutputTokens: parsed.maxOutputTokens } : {}),
+    ...(parsed.reasoning !== undefined
+      ? parsed.reasoning === null
+        ? { reasoning: null }
+        : {
+            reasoning: {
+              ...(parsed.reasoning.availableEfforts !== undefined
+                ? { availableEfforts: [...parsed.reasoning.availableEfforts] }
+                : {}),
+              ...(parsed.reasoning.defaultEffort !== undefined
+                ? { defaultEffort: parsed.reasoning.defaultEffort }
+                : {}),
+            },
+          }
+      : {}),
   };
 }
 
@@ -133,5 +210,10 @@ export function parseConfig(value: unknown): Readonly<Record<string, unknown>> {
 }
 
 export function toCapabilitiesJson(capabilities: ModelCapabilities): Record<string, unknown> {
-  return { schemaVersion: CAPABILITIES_SCHEMA_VERSION, ...capabilities };
+  const { reasoning, ...rest } = capabilities;
+  return {
+    schemaVersion: CAPABILITIES_SCHEMA_VERSION,
+    ...rest,
+    ...(reasoning !== undefined ? { reasoning } : {}),
+  };
 }

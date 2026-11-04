@@ -110,6 +110,14 @@ export interface ConversationRepository {
     tx?: TransactionContext,
   ): Promise<void>;
 
+  /** Marks every message after `seq` as superseded by `replacementId`. */
+  supersedeMessagesAfter(
+    conversationId: string,
+    seq: number,
+    replacementId: string,
+    tx?: TransactionContext,
+  ): Promise<number>;
+
   appendPartText(
     partId: string,
     chunk: string,

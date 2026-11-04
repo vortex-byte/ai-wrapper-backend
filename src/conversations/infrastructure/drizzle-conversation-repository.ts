@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
 import { conversations, attachments, generationJobs, messageParts, messages } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
@@ -345,6 +345,27 @@ export class DrizzleConversationRepository implements ConversationRepository {
       .update(messages)
       .set(values)
       .where(eq(messages.id, id));
+  }
+
+  async supersedeMessagesAfter(
+    conversationId: string,
+    seq: number,
+    replacementId: string,
+    tx?: TransactionContext,
+  ): Promise<number> {
+    const rows = await runDb(tx)
+      .update(messages)
+      .set({ supersededBy: replacementId })
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          gt(messages.seq, seq),
+          ne(messages.id, replacementId),
+          isNull(messages.supersededBy),
+        ),
+      )
+      .returning({ id: messages.id });
+    return rows.length;
   }
 
   async insertParts(parts: readonly MessagePart[], tx?: TransactionContext): Promise<void> {

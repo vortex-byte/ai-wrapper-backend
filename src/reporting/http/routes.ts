@@ -15,10 +15,7 @@ import type { ReportingService } from '../application/reporting-service.ts';
 import {
   AuditSearchQuerySchema,
   ErrorExplorerQuerySchema,
-  RecentRequestsQuerySchema,
   UsageQuerySchema,
-  UsageSummaryQuerySchema,
-  UsageTimeseriesQuerySchema,
   UsageWindowQuerySchema,
 } from './schemas.ts';
 
@@ -47,46 +44,17 @@ export function reportingRoutes(deps: ReportingRoutesDeps): Hono<AppEnv> {
     }),
   );
 
-  routes.get('/usage', async (c) => {
-    const query = parseQuery(c, UsageQuerySchema);
-    const items = await reporting.usage(query);
+  routes.get('/dashboard', async (c) => {
+    const report = await reporting.dashboard();
     privateCache(c, 30);
-    return c.json(ok({ items }));
+    return c.json(ok(report));
   });
 
-  routes.get('/usage/summary', async (c) => {
-    const query = parseQuery(c, UsageSummaryQuerySchema);
-    const summary = await reporting.usageSummary(query);
+  routes.get('/usage/report', async (c) => {
+    const query = parseQuery(c, UsageWindowQuerySchema);
+    const report = await reporting.usageReport(query);
     privateCache(c, 30);
-    return c.json(ok(summary));
-  });
-
-  routes.get('/usage/recent', async (c) => {
-    const query = parseQuery(c, RecentRequestsQuerySchema);
-    const items = await reporting.recentRequests({ limit: query.limit });
-    noStore(c);
-    return c.json(ok({ items }));
-  });
-
-  routes.get('/usage/breakdown', async (c) => {
-    const query = parseQuery(c, UsageWindowQuerySchema);
-    const breakdown = await reporting.usageBreakdown(query);
-    privateCache(c, 60);
-    return c.json(ok(breakdown));
-  });
-
-  routes.get('/usage/timeseries', async (c) => {
-    const query = parseQuery(c, UsageTimeseriesQuerySchema);
-    const items = await reporting.usageTimeseries(query);
-    privateCache(c, 60);
-    return c.json(ok({ items }));
-  });
-
-  routes.get('/usage/models', async (c) => {
-    const query = parseQuery(c, UsageWindowQuerySchema);
-    const items = await reporting.modelUsage(query);
-    privateCache(c, 60);
-    return c.json(ok({ items }));
+    return c.json(ok(report));
   });
 
   routes.get('/usage/export', async (c) => {

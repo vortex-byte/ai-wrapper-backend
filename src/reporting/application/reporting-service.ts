@@ -5,6 +5,7 @@ import type {
   AuditLogRow,
   ErrorEventQuery,
   ErrorEventRow,
+  ModelUsageRow,
   ReportingRepository,
   UsageGroupBy,
   UsageReportRow,
@@ -24,18 +25,23 @@ export interface UsageReportInput {
   readonly divisionId?: string | undefined;
 }
 
+export const USAGE_REPORT_SECTIONS = [
+  'summary',
+  'recent',
+  'breakdown',
+  'timeseries',
+  'models',
+  'byDivision',
+  'byUser',
+] as const;
+
+export type UsageReportSection = (typeof USAGE_REPORT_SECTIONS)[number];
+
 export interface UsageWindowInput {
   readonly from?: string | undefined;
   readonly to?: string | undefined;
   readonly divisionId?: string | undefined;
-}
-
-export interface UsageSummaryInput extends UsageWindowInput {
-  readonly period?: string | undefined;
-}
-
-export interface UsageTimeseriesInput extends UsageWindowInput {
-  readonly interval: 'hour' | 'day';
+  readonly sections?: readonly UsageReportSection[] | undefined;
 }
 
 export interface ErrorExplorerInput {
@@ -134,6 +140,43 @@ export interface WireModelUsage {
   readonly totalCostUsd: number;
 }
 
+export interface WireRecentRequest {
+  readonly id: string;
+  readonly model: string;
+  readonly modelName: string;
+  readonly provider: string;
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly cachedTokens: number;
+  readonly status: string;
+  readonly timestamp: string;
+}
+
+export interface WireWindow {
+  readonly from: string;
+  readonly to: string;
+}
+
+export interface DashboardReport {
+  readonly window: WireWindow;
+  readonly summary: UsageSummaryRow;
+  readonly recent: readonly WireRecentRequest[];
+  readonly breakdown: UsageBreakdownResult;
+  readonly models: readonly WireModelUsage[];
+  readonly departmentUsage: readonly UsageReportRow[];
+}
+
+export interface UsageReportResult {
+  readonly window: WireWindow;
+  readonly summary?: UsageSummaryRow | undefined;
+  readonly recent?: readonly WireRecentRequest[] | undefined;
+  readonly breakdown?: UsageBreakdownResult | undefined;
+  readonly timeseries?: readonly WireTimeseriesPoint[] | undefined;
+  readonly models?: readonly WireModelUsage[] | undefined;
+  readonly byDivision?: readonly UsageReportRow[] | undefined;
+  readonly byUser?: readonly UsageReportRow[] | undefined;
+}
+
 export type { UsageSummaryRow };
 
 const DEFAULT_RANGE_DAYS = 30;
@@ -179,24 +222,6 @@ export class ReportingService {
     return { from: resolvedFrom, to: resolvedTo };
   }
 
-  private periodRange(
-    period: string | undefined,
-    from: string | undefined,
-    to: string | undefined,
-  ): { from: Date; to: Date } {
-    const now = this.now();
-    if (period === undefined || period === 'all') return this.range(from, to);
-    if (period === 'today') {
-      const start = new Date(now);
-      start.setUTCHours(0, 0, 0, 0);
-      return { from: start, to: now };
-    }
-    const hours: Record<string, number> = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30, '90d': 24 * 90 };
-    const span = hours[period];
-    if (span === undefined) return this.range(from, to);
-    return { from: new Date(now.getTime() - span * 3600 * 1000), to: now };
-  }
-
   async usage(input: UsageReportInput): Promise<readonly UsageReportRow[]> {
     const { from, to } = this.range(input.from, input.to);
     return this.repository.aggregateUsage({
@@ -207,59 +232,89 @@ export class ReportingService {
     });
   }
 
-  async usageSummary(input: UsageSummaryInput): Promise<UsageSummaryRow> {
-    const { from, to } = this.periodRange(input.period, input.from, input.to);
-    return this.repository.usageSummary({ from, to, divisionId: input.divisionId });
-  }
+  async dashboard(): Promise<DashboardReport> {
+    const now = this.now();
+    const dayStart = new Date(now);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(now);
+    dayEnd.setUTCHours(23, 59, 59, 999);
+    const monthStart = new Date(dayStart.getTime() - 29 * 24 * 3600 * 1000);
 
-  async recentRequests(input: { limit: number }): Promise<readonly RecentRequestRow[]> {
-    return this.repository.listRecentRequests({ limit: input.limit });
-  }
+    const [summary, recentRows, breakdown, modelRows, departmentUsage] = await Promise.all([
+      this.repository.usageSummary({ from: dayStart, to: dayEnd }),
+      this.repository.listRecentRequests({ limit: 20 }),
+      this.repository.usageBreakdown({ from: dayStart, to: dayEnd }),
+      this.repository.modelUsage({ from: dayStart, to: dayEnd }),
+      this.repository.aggregateUsage({ from: monthStart, to: dayEnd, groupBy: 'division' }),
+    ]);
 
-  async usageBreakdown(input: UsageWindowInput): Promise<UsageBreakdownResult> {
-    const { from, to } = this.range(input.from, input.to);
-    const result = await this.repository.usageBreakdown({ from, to, divisionId: input.divisionId });
     return {
-      byProvider: result.byProvider.map(toWireBreakdown),
-      byModel: result.byModel.map(toWireBreakdown),
+      window: { from: dayStart.toISOString(), to: dayEnd.toISOString() },
+      summary,
+      recent: recentRows.map(toWireRecentRequest),
+      breakdown: {
+        byProvider: breakdown.byProvider.map(toWireBreakdown),
+        byModel: breakdown.byModel.map(toWireBreakdown),
+      },
+      models: modelRows.map(toWireModelUsage),
+      departmentUsage,
     };
   }
 
-  async usageTimeseries(input: UsageTimeseriesInput): Promise<readonly WireTimeseriesPoint[]> {
+  async usageReport(input: UsageWindowInput): Promise<UsageReportResult> {
     const { from, to } = this.range(input.from, input.to);
-    const rows = await this.repository.usageTimeseries({
-      from,
-      to,
-      interval: input.interval,
-      divisionId: input.divisionId,
-    });
-    return rows.map((row) => ({
-      date: row.date,
-      label: formatBucketLabel(row.date, input.interval),
-      tokens: row.tokens,
-      requests: row.requests,
-      costUsd: row.costUsd,
-    }));
-  }
+    const divisionId = input.divisionId;
+    const wanted = new Set<UsageReportSection>(input.sections ?? USAGE_REPORT_SECTIONS);
+    const wants = (section: UsageReportSection) => wanted.has(section);
 
-  async modelUsage(input: UsageWindowInput): Promise<readonly WireModelUsage[]> {
-    const { from, to } = this.range(input.from, input.to);
-    const rows = await this.repository.modelUsage({ from, to, divisionId: input.divisionId });
-    return rows.map((row) => ({
-      modelId: row.modelId,
-      apiModelId: row.apiModelId,
-      displayName: row.displayName,
-      provider: row.provider,
-      requests: row.requests,
-      lastUsed: row.lastUsed === null ? null : row.lastUsed.toISOString(),
-      inputTokens: row.inputTokens,
-      cachedTokens: row.cachedTokens,
-      outputTokens: row.outputTokens,
-      inputCostUsd: row.inputCostUsd,
-      cachedCostUsd: row.cachedCostUsd,
-      outputCostUsd: row.outputCostUsd,
-      totalCostUsd: row.totalCostUsd,
-    }));
+    const [summary, recentRows, breakdown, timeseriesRows, modelRows, byDivision, byUser] =
+      await Promise.all([
+        wants('summary') ? this.repository.usageSummary({ from, to, divisionId }) : undefined,
+        wants('recent')
+          ? this.repository.listRecentRequests({ limit: 20, divisionId })
+          : undefined,
+        wants('breakdown')
+          ? this.repository.usageBreakdown({ from, to, divisionId })
+          : undefined,
+        wants('timeseries')
+          ? this.repository.usageTimeseries({ from, to, interval: 'day', divisionId })
+          : undefined,
+        wants('models') ? this.repository.modelUsage({ from, to, divisionId }) : undefined,
+        wants('byDivision')
+          ? this.repository.aggregateUsage({ from, to, groupBy: 'division', divisionId })
+          : undefined,
+        wants('byUser')
+          ? this.repository.aggregateUsage({ from, to, groupBy: 'user', divisionId })
+          : undefined,
+      ]);
+
+    return {
+      window: { from: from.toISOString(), to: to.toISOString() },
+      ...(summary === undefined ? {} : { summary }),
+      ...(recentRows === undefined ? {} : { recent: recentRows.map(toWireRecentRequest) }),
+      ...(breakdown === undefined
+        ? {}
+        : {
+            breakdown: {
+              byProvider: breakdown.byProvider.map(toWireBreakdown),
+              byModel: breakdown.byModel.map(toWireBreakdown),
+            },
+          }),
+      ...(timeseriesRows === undefined
+        ? {}
+        : {
+            timeseries: timeseriesRows.map((row) => ({
+              date: row.date,
+              label: formatBucketLabel(row.date, 'day'),
+              tokens: row.tokens,
+              requests: row.requests,
+              costUsd: row.costUsd,
+            })),
+          }),
+      ...(modelRows === undefined ? {} : { models: modelRows.map(toWireModelUsage) }),
+      ...(byDivision === undefined ? {} : { byDivision }),
+      ...(byUser === undefined ? {} : { byUser }),
+    };
   }
 
   async usageCsv(input: UsageReportInput): Promise<string> {
@@ -396,6 +451,38 @@ function toWireBreakdown(row: {
     provider: row.provider,
     tokens: row.tokens,
     requests: row.requests,
+  };
+}
+
+function toWireRecentRequest(row: RecentRequestRow): WireRecentRequest {
+  return {
+    id: row.id,
+    model: row.model,
+    modelName: row.modelName,
+    provider: row.provider,
+    promptTokens: row.promptTokens,
+    completionTokens: row.completionTokens,
+    cachedTokens: row.cachedTokens,
+    status: row.status,
+    timestamp: row.timestamp.toISOString(),
+  };
+}
+
+function toWireModelUsage(row: ModelUsageRow): WireModelUsage {
+  return {
+    modelId: row.modelId,
+    apiModelId: row.apiModelId,
+    displayName: row.displayName,
+    provider: row.provider,
+    requests: row.requests,
+    lastUsed: row.lastUsed === null ? null : row.lastUsed.toISOString(),
+    inputTokens: row.inputTokens,
+    cachedTokens: row.cachedTokens,
+    outputTokens: row.outputTokens,
+    inputCostUsd: row.inputCostUsd,
+    cachedCostUsd: row.cachedCostUsd,
+    outputCostUsd: row.outputCostUsd,
+    totalCostUsd: row.totalCostUsd,
   };
 }
 

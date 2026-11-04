@@ -22,22 +22,30 @@ export const ListQuerySchema = z.object({
   cursor: z.string().trim().min(1).max(512).optional(),
 });
 
+export const UsageReportSectionSchema = z.enum([
+  'summary',
+  'recent',
+  'breakdown',
+  'timeseries',
+  'models',
+  'byDivision',
+  'byUser',
+]);
+
 export const UsageWindowQuerySchema = z.object({
   from: ISO_DATE.optional(),
   to: ISO_DATE.optional(),
   divisionId: z.uuid().optional(),
-});
-
-export const UsageSummaryQuerySchema = UsageWindowQuerySchema.extend({
-  period: z.enum(['today', '24h', '7d', '30d', '90d', 'all']).optional(),
-});
-
-export const RecentRequestsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-});
-
-export const UsageTimeseriesQuerySchema = UsageWindowQuerySchema.extend({
-  interval: z.enum(['hour', 'day']).default('day'),
+  sections: z
+    .string()
+    .trim()
+    .optional()
+    .transform((raw) =>
+      raw === undefined || raw === ''
+        ? undefined
+        : raw.split(',').map((part) => part.trim()),
+    )
+    .pipe(z.array(UsageReportSectionSchema).nonempty().optional()),
 });
 
 export const ErrorExplorerQuerySchema = ListQuerySchema.extend({
@@ -56,7 +64,4 @@ export const AuditSearchQuerySchema = ListQuerySchema.extend({
 export type UsageQuery = z.infer<typeof UsageQuerySchema>;
 export type ErrorExplorerQuery = z.infer<typeof ErrorExplorerQuerySchema>;
 export type AuditSearchQuery = z.infer<typeof AuditSearchQuerySchema>;
-export type UsageSummaryQuery = z.infer<typeof UsageSummaryQuerySchema>;
-export type RecentRequestsQuery = z.infer<typeof RecentRequestsQuerySchema>;
-export type UsageTimeseriesQuery = z.infer<typeof UsageTimeseriesQuerySchema>;
 export type UsageWindowQuery = z.infer<typeof UsageWindowQuerySchema>;

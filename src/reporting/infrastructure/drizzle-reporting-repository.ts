@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
 import {
   aiModelPrices,
@@ -44,69 +44,35 @@ export class DrizzleReportingRepository implements ReportingRepository {
     query: UsageReportQuery,
     tx?: TransactionContext,
   ): Promise<readonly UsageReportRow[]> {
-    const monthExpr = sql<string>`to_char(${usageDaily.day}, 'YYYY-MM')`;
+    const fromDay = query.from.toISOString().slice(0, 10);
+    const toDay = query.to.toISOString().slice(0, 10);
+    const conditions: SQL[] = [gte(usageDaily.day, fromDay), lte(usageDaily.day, toDay)];
+    if (query.divisionId !== undefined) {
+      conditions.push(eq(usageDaily.divisionId, query.divisionId));
+    }
+    const where = and(...conditions);
 
-    const dimension = (() => {
-      switch (query.groupBy) {
-        case 'user':
-          return { expr: usageDaily.userId, column: 'userId' as const };
-        case 'model':
-          return { expr: usageDaily.modelId, column: 'modelId' as const };
-        case 'provider':
-          return { expr: usageDaily.providerId, column: 'providerId' as const };
-        case 'division':
-          return { expr: usageDaily.divisionId, column: 'divisionId' as const };
-        case 'month':
-          return { expr: monthExpr, column: 'month' as const };
-        case 'day':
-        default:
-          return { expr: usageDaily.day, column: 'day' as const };
-      }
-    })();
+    const sums = {
+      requests: sql<number>`COALESCE(sum(${usageDaily.requests}), 0)::int`,
+      failedRequests: sql<number>`COALESCE(sum(${usageDaily.failedRequests}), 0)::int`,
+      providerSourced: sql<number>`COALESCE(sum(${usageDaily.providerSourcedRequests}), 0)::int`,
+      inputTokens: sql<number>`COALESCE(sum(${usageDaily.inputTokens}), 0)::bigint`,
+      outputTokens: sql<number>`COALESCE(sum(${usageDaily.outputTokens}), 0)::bigint`,
+      quotaTokens: sql<number>`COALESCE(sum(${usageDaily.quotaTokens}), 0)::bigint`,
+      estCostMicros: sql<number | null>`sum(${usageDaily.estCostMicros})::bigint`,
+    };
 
-    const where = query.divisionId === undefined
-      ? and(
-          gte(usageDaily.day, query.from.toISOString().slice(0, 10)),
-          lte(usageDaily.day, query.to.toISOString().slice(0, 10)),
-        )
-      : and(
-          gte(usageDaily.day, query.from.toISOString().slice(0, 10)),
-          lte(usageDaily.day, query.to.toISOString().slice(0, 10)),
-          eq(usageDaily.divisionId, query.divisionId),
-        );
+    interface SumRow {
+      requests: number;
+      failedRequests: number;
+      providerSourced: number;
+      inputTokens: number;
+      outputTokens: number;
+      quotaTokens: number;
+      estCostMicros: number | null;
+    }
 
-    const rows = await runDb(tx)
-      .select({
-        key: sql<string | null>`${dimension.expr}`,
-        requests: sql<number>`COALESCE(sum(${usageDaily.requests}), 0)::int`,
-        failedRequests: sql<number>`COALESCE(sum(${usageDaily.failedRequests}), 0)::int`,
-        providerSourced: sql<number>`COALESCE(sum(${usageDaily.providerSourcedRequests}), 0)::int`,
-        inputTokens: sql<number>`COALESCE(sum(${usageDaily.inputTokens}), 0)::bigint`,
-        outputTokens: sql<number>`COALESCE(sum(${usageDaily.outputTokens}), 0)::bigint`,
-        quotaTokens: sql<number>`COALESCE(sum(${usageDaily.quotaTokens}), 0)::bigint`,
-        estCostMicros: sql<number | null>`sum(${usageDaily.estCostMicros})::bigint`,
-      })
-      .from(usageDaily)
-      .where(where)
-      .groupBy(dimension.expr)
-      .orderBy(
-        ...(query.groupBy === 'user' || query.groupBy === 'division'
-          ? [desc(sql`COALESCE(sum(${usageDaily.quotaTokens}), 0)`), dimension.expr]
-          : [dimension.expr]),
-      );
-
-    const labels = await this.resolveLabels(
-      query.groupBy,
-      rows.map((row) => (row.key === null ? null : String(row.key))),
-      tx,
-    );
-
-    return rows.map((row) => {
-      const rawKey = row.key === null ? null : String(row.key);
-      const key: Record<string, string | null> = {
-        [dimension.column]: rawKey,
-        ...(labels.get(rawKey ?? '') ?? {}),
-      };
+    const toRow = (key: Record<string, string | null>, row: SumRow): UsageReportRow => {
       const requests = Number(row.requests);
       const providerSourced = Number(row.providerSourced);
       return {
@@ -123,7 +89,106 @@ export class DrizzleReportingRepository implements ReportingRepository {
           estimated: requests === 0 ? 0 : (requests - providerSourced) / requests,
         },
       };
-    });
+    };
+
+    const db = runDb(tx);
+
+    switch (query.groupBy) {
+      case 'user': {
+        const rows = await db
+          .select({
+            key: usageDaily.userId,
+            email: users.email,
+            displayName: users.displayName,
+            ...sums,
+          })
+          .from(usageDaily)
+          .leftJoin(users, eq(users.id, usageDaily.userId))
+          .where(where)
+          .groupBy(usageDaily.userId, users.email, users.displayName)
+          .orderBy(desc(sums.quotaTokens), usageDaily.userId);
+        return rows.map((row) =>
+          toRow({ userId: row.key, email: row.email, displayName: row.displayName }, row),
+        );
+      }
+      case 'division': {
+        const rows = await db
+          .select({ key: usageDaily.divisionId, name: divisions.name, ...sums })
+          .from(usageDaily)
+          .leftJoin(divisions, eq(divisions.id, usageDaily.divisionId))
+          .where(where)
+          .groupBy(usageDaily.divisionId, divisions.name)
+          .orderBy(desc(sums.quotaTokens), usageDaily.divisionId);
+        return rows.map((row) => toRow({ divisionId: row.key, name: row.name }, row));
+      }
+      case 'model': {
+        const rows = await db
+          .select({
+            key: usageDaily.modelId,
+            modelKey: aiModels.apiModelId,
+            displayName: aiModels.displayName,
+            provider: aiProviders.key,
+            ...sums,
+          })
+          .from(usageDaily)
+          .leftJoin(aiModels, eq(aiModels.id, usageDaily.modelId))
+          .leftJoin(aiProviders, eq(aiProviders.id, aiModels.providerId))
+          .where(where)
+          .groupBy(usageDaily.modelId, aiModels.apiModelId, aiModels.displayName, aiProviders.key)
+          .orderBy(usageDaily.modelId);
+        return rows.map((row) =>
+          toRow(
+            {
+              modelId: row.key,
+              modelKey: row.modelKey,
+              displayName: row.displayName,
+              provider: row.provider,
+            },
+            row,
+          ),
+        );
+      }
+      case 'provider': {
+        const rows = await db
+          .select({
+            key: usageDaily.providerId,
+            providerKey: aiProviders.key,
+            displayName: aiProviders.displayName,
+            ...sums,
+          })
+          .from(usageDaily)
+          .leftJoin(aiProviders, eq(aiProviders.id, usageDaily.providerId))
+          .where(where)
+          .groupBy(usageDaily.providerId, aiProviders.key, aiProviders.displayName)
+          .orderBy(usageDaily.providerId);
+        return rows.map((row) =>
+          toRow(
+            { providerId: row.key, providerKey: row.providerKey, displayName: row.displayName },
+            row,
+          ),
+        );
+      }
+      case 'month': {
+        const monthExpr = sql<string>`to_char(${usageDaily.day}, 'YYYY-MM')`;
+        const rows = await db
+          .select({ key: monthExpr, ...sums })
+          .from(usageDaily)
+          .where(where)
+          .groupBy(monthExpr)
+          .orderBy(monthExpr);
+        return rows.map((row) => toRow({ month: row.key }, row));
+      }
+      case 'day':
+      default: {
+        const rows = await db
+          .select({ key: usageDaily.day, ...sums })
+          .from(usageDaily)
+          .where(where)
+          .groupBy(usageDaily.day)
+          .orderBy(usageDaily.day);
+        return rows.map((row) => toRow({ day: row.key }, row));
+      }
+    }
   }
 
   async usageSummary(query: UsageWindowQuery, tx?: TransactionContext): Promise<UsageSummaryRow> {
@@ -179,6 +244,11 @@ export class DrizzleReportingRepository implements ReportingRepository {
       .from(usageEvents)
       .leftJoin(aiModels, eq(aiModels.id, usageEvents.modelId))
       .leftJoin(aiProviders, eq(aiProviders.id, usageEvents.providerId))
+      .where(
+        query.divisionId === undefined
+          ? undefined
+          : eq(usageEvents.divisionId, query.divisionId),
+      )
       .orderBy(desc(usageEvents.createdAt))
       .limit(query.limit);
 
@@ -205,7 +275,9 @@ export class DrizzleReportingRepository implements ReportingRepository {
     const where = WINDOW_START_CLAUSE(query.from, query.to, query.divisionId);
     const tokenExpr = sql<number>`COALESCE(sum(${usageEvents.inputTokens} + ${usageEvents.outputTokens}), 0)::bigint`;
 
-    const providerRows = await runDb(tx)
+    const db = runDb(tx);
+
+    const providerQuery = db
       .select({
         id: aiProviders.id,
         name: aiProviders.displayName,
@@ -218,7 +290,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
       .groupBy(aiProviders.id, aiProviders.displayName)
       .orderBy(desc(tokenExpr));
 
-    const modelRows = await runDb(tx)
+    const modelQuery = db
       .select({
         id: aiModels.id,
         name: aiModels.displayName,
@@ -232,6 +304,10 @@ export class DrizzleReportingRepository implements ReportingRepository {
       .where(where)
       .groupBy(aiModels.id, aiModels.displayName, aiProviders.key)
       .orderBy(desc(tokenExpr));
+
+    const [providerRows, modelRows] = tx
+      ? [await providerQuery, await modelQuery]
+      : await Promise.all([providerQuery, modelQuery]);
 
     const toBreakdown = (row: {
       id: string | null;
@@ -257,7 +333,8 @@ export class DrizzleReportingRepository implements ReportingRepository {
     query: TimeseriesQuery,
     tx?: TransactionContext,
   ): Promise<readonly UsageTimeseriesRow[]> {
-    const bucket = sql<string>`to_char(date_trunc(${query.interval}, ${usageEvents.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD HH24:MI')`;
+    const interval = query.interval === 'hour' ? 'hour' : 'day';
+    const bucket = sql<string>`to_char(date_trunc(${sql.raw(`'${interval}'`)}, ${usageEvents.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD HH24:MI')`;
     const rows = await runDb(tx)
       .select({
         bucket,
@@ -346,71 +423,6 @@ export class DrizzleReportingRepository implements ReportingRepository {
         totalCostUsd: inputCostUsd + cachedCostUsd + outputCostUsd,
       };
     });
-  }
-
-  private async resolveLabels(
-    groupBy: UsageReportQuery['groupBy'],
-    keys: readonly (string | null)[],
-    tx?: TransactionContext,
-  ): Promise<Map<string, Record<string, string | null>>> {
-    const out = new Map<string, Record<string, string | null>>();
-    const ids = Array.from(
-      new Set(keys.filter((key): key is string => key !== null && key.length > 0)),
-    );
-    if (ids.length === 0) return out;
-
-    if (groupBy === 'user') {
-      const rows = await runDb(tx)
-        .select({ id: users.id, email: users.email, displayName: users.displayName })
-        .from(users)
-        .where(inArray(users.id, ids));
-      for (const row of rows) {
-        out.set(row.id, { email: row.email, displayName: row.displayName });
-      }
-      return out;
-    }
-
-    if (groupBy === 'division') {
-      const rows = await runDb(tx)
-        .select({ id: divisions.id, name: divisions.name })
-        .from(divisions)
-        .where(inArray(divisions.id, ids));
-      for (const row of rows) out.set(row.id, { name: row.name });
-      return out;
-    }
-
-    if (groupBy === 'model') {
-      const rows = await runDb(tx)
-        .select({
-          id: aiModels.id,
-          key: aiModels.apiModelId,
-          displayName: aiModels.displayName,
-          providerKey: aiProviders.key,
-        })
-        .from(aiModels)
-        .leftJoin(aiProviders, eq(aiProviders.id, aiModels.providerId))
-        .where(inArray(aiModels.id, ids));
-      for (const row of rows) {
-        out.set(row.id, {
-          modelKey: row.key,
-          displayName: row.displayName,
-          provider: row.providerKey,
-        });
-      }
-      return out;
-    }
-
-    if (groupBy === 'provider') {
-      const rows = await runDb(tx)
-        .select({ id: aiProviders.id, key: aiProviders.key, displayName: aiProviders.displayName })
-        .from(aiProviders)
-        .where(inArray(aiProviders.id, ids));
-      for (const row of rows) {
-        out.set(row.id, { providerKey: row.key, displayName: row.displayName });
-      }
-    }
-
-    return out;
   }
 
   async listErrorEvents(

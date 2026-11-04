@@ -135,6 +135,7 @@ export interface ModelUsageRow {
 
 export interface RecentRequestQuery {
   readonly limit: number;
+  readonly divisionId?: string | undefined;
 }
 
 export interface TimeseriesQuery {

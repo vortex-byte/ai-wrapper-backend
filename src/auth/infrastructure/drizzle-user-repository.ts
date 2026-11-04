@@ -1,7 +1,7 @@
 import { and, desc, eq, ilike, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { runDb } from '@/db/client.ts';
-import { users } from '@/db/schema.ts';
+import { users, divisions } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
 import { AppError } from '@/errors.ts';
 import { USER_ROLES, USER_STATUSES, type User, type UserRole, type UserStatus } from '../domain/user.ts';
@@ -13,6 +13,7 @@ import type {
   PasswordUpdate,
   UpdateUserInput,
   UserRepository,
+  UserWithDivision,
 } from '../ports/user-repository.ts';
 
 const userColumns = {
@@ -92,7 +93,7 @@ export class DrizzleUserRepository implements UserRepository {
   async findMany(
     options: ListUsersQuery,
     tx?: TransactionContext,
-  ): Promise<{ items: User[]; nextCursor: string | null }> {
+  ): Promise<{ items: UserWithDivision[]; nextCursor: string | null }> {
     const limit = Math.min(options.limit ?? 50, 100);
     const conditions: SQL[] = [isNull(users.deletedAt)];
 
@@ -118,15 +119,19 @@ export class DrizzleUserRepository implements UserRepository {
     }
 
     const rows = await runDb(tx)
-      .select(userColumns)
+      .select({ ...userColumns, divisionName: divisions.name })
       .from(users)
+      .leftJoin(divisions, eq(divisions.id, users.divisionId))
       .where(and(...conditions))
       .orderBy(desc(users.createdAt), desc(users.id))
       .limit(limit + 1);
 
     const hasNext = rows.length > limit;
     const itemRows = hasNext ? rows.slice(0, limit) : rows;
-    const items = itemRows.map(toUser);
+    const items = itemRows.map((row) => ({
+      ...toUser(row),
+      divisionName: row.divisionName,
+    }));
 
     let nextCursor: string | null = null;
     if (hasNext && itemRows.length > 0) {

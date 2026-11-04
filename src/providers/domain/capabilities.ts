@@ -2,6 +2,21 @@
 
 import type { NormalizedMessage } from './pal.ts';
 
+/** Selectable reasoning depths, ordered from shallowest to deepest. */
+export const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export interface ReasoningCapability {
+  readonly availableEfforts: readonly ReasoningEffort[];
+  readonly defaultEffort: ReasoningEffort;
+}
+
+export interface PartialReasoningCapability {
+  readonly availableEfforts?: readonly ReasoningEffort[];
+  readonly defaultEffort?: ReasoningEffort;
+}
+
 export interface DocumentCapabilities {
   readonly pdf: boolean;
   readonly maxPages?: number;
@@ -23,6 +38,8 @@ export interface ModelCapabilities {
   readonly maxImagesPerRequest?: number;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
+  /** Omitted when the model is not configurable as a reasoning model. */
+  readonly reasoning?: ReasoningCapability;
 }
 
 /** Admin patch: omitted keys keep their stored value. */
@@ -37,6 +54,8 @@ export interface PartialModelCapabilities {
   readonly maxImagesPerRequest?: number;
   readonly contextWindow?: number;
   readonly maxOutputTokens?: number;
+  /** `null` clears the stored capability; omission keeps it. */
+  readonly reasoning?: PartialReasoningCapability | null;
 }
 
 /** The model a generation runs on, resolved from the registry. */
@@ -73,6 +92,8 @@ export interface NormalizedChatRequest {
   readonly temperature?: number;
   readonly topP?: number;
   readonly responseModalities: readonly ('text' | 'image' | 'file')[];
+  /** Reasoning depth for this turn; absent when the model has no reasoning capability. */
+  readonly reasoningEffort?: ReasoningEffort | undefined;
   readonly tools?: never;
   readonly metadata: { readonly userIdHash: string };
   /** Container sandbox request for code execution and file generation. */

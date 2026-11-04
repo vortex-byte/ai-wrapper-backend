@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type {
   NormalizedChatRequest,
   ProviderRuntimeConfig,
+  ReasoningEffort,
 } from '@/providers/domain/capabilities.ts';
 import { providerError, type ProviderError } from '@/providers/domain/errors.ts';
 import type { GenerationEvent } from '@/providers/domain/pal.ts';
@@ -64,6 +65,18 @@ const DEFAULT_CODE_EXECUTION_TOOL_TYPE = 'code_execution_20250825';
 
 /** Hard cap on `pause_turn` continuations, so a provider cannot loop us forever. */
 const MAX_PAUSE_TURNS = 8;
+
+/** Anthropic refuses a thinking budget below this value. */
+const MIN_THINKING_BUDGET = 1024;
+
+/** Extended-thinking token budgets per selectable effort. */
+const THINKING_BUDGETS: Readonly<Record<ReasoningEffort, number>> = {
+  low: 1024,
+  medium: 2048,
+  high: 4096,
+  xhigh: 8192,
+  max: 16000,
+};
 
 const DEFAULT_OUTPUT_DIR_ENV = 'OUTPUT_DIR';
 
@@ -238,6 +251,8 @@ interface RawAnthropicStreamEvent {
     readonly type?: string;
     readonly text?: string;
     readonly partial_json?: string;
+    readonly thinking?: string;
+    readonly signature?: string;
     readonly stop_reason?: string | null;
   };
   readonly usage?: {
@@ -258,6 +273,9 @@ export class AnthropicAdapter implements ProviderAdapter {
     const turns = messages ?? this.buildMessages(req);
     const system = this.buildSystem(req);
     const container = this.buildContainer(req);
+    const thinking = this.buildThinking(req);
+    // Extended thinking rejects sampling overrides, so they are dropped while it is enabled.
+    const sampling = thinking === undefined;
 
     return {
       model: req.model.apiModelId,
@@ -265,11 +283,24 @@ export class AnthropicAdapter implements ProviderAdapter {
       ...(system !== undefined ? { system } : {}),
       messages: turns,
       stream: true,
-      ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
-      ...(typeof req.topP === 'number' ? { top_p: req.topP } : {}),
+      ...(sampling && typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
+      ...(sampling && typeof req.topP === 'number' ? { top_p: req.topP } : {}),
       ...(container.tools !== undefined ? { tools: container.tools } : {}),
       ...(container.container !== undefined ? { container: container.container } : {}),
+      ...(thinking !== undefined ? { thinking } : {}),
     };
+  }
+
+  /** Maps the requested effort to an extended-thinking budget, when the budget fits the turn. */
+  private buildThinking(
+    req: NormalizedChatRequest,
+  ): { readonly type: 'enabled'; readonly budget_tokens: number } | undefined {
+    const effort = req.reasoningEffort;
+    if (effort === undefined) return undefined;
+    // The budget must stay below `max_tokens` so the model still has room to answer.
+    const budget = Math.min(THINKING_BUDGETS[effort], req.maxOutputTokens - MIN_THINKING_BUDGET);
+    if (budget < MIN_THINKING_BUDGET) return undefined;
+    return { type: 'enabled', budget_tokens: budget };
   }
 
   /** Formats system prompt with output directory instructions when container is enabled. */
@@ -688,6 +719,24 @@ export class AnthropicAdapter implements ProviderAdapter {
         index,
         (runState.toolInputJson.get(index) ?? '') + ev.delta.partial_json,
       );
+      return;
+    }
+
+    if (ev.delta?.type === 'thinking_delta' && typeof ev.delta.thinking === 'string') {
+      const block = runState.turnBlocks.get(index);
+      if (block !== undefined) {
+        block['thinking'] =
+          (typeof block['thinking'] === 'string' ? block['thinking'] : '') + ev.delta.thinking;
+      }
+      return;
+    }
+
+    if (ev.delta?.type === 'signature_delta' && typeof ev.delta.signature === 'string') {
+      const block = runState.turnBlocks.get(index);
+      if (block !== undefined) {
+        block['signature'] =
+          (typeof block['signature'] === 'string' ? block['signature'] : '') + ev.delta.signature;
+      }
       return;
     }
 

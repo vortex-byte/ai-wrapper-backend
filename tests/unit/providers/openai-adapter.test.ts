@@ -594,6 +594,20 @@ describe('OpenAIAdapter — multimodal input and reasoning config', () => {
     expect(params['temperature']).toBeUndefined();
   });
 
+  it('lets the per-request reasoning effort override the registry config', () => {
+    const adapter = new OpenAIAdapter(() => createMockOpenAIClient([]));
+    const req = makeOpenAIRequest({ temperature: 0.4 });
+    const params = adapter.toProviderRequest({
+      ...req,
+      reasoningEffort: 'low',
+      model: { ...req.model, config: { reasoningEffort: 'high' } },
+    }) as Record<string, unknown>;
+
+    expect(params['reasoning_effort']).toBe('low');
+    // A per-request effort also means sampling params must be dropped.
+    expect(params['temperature']).toBeUndefined();
+  });
+
   it('lists only chat-capable models sorted by id', async () => {
     const adapter = new OpenAIAdapter(() => ({
       models: {

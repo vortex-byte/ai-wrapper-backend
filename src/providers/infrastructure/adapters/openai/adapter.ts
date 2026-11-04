@@ -354,11 +354,11 @@ function readBodyField(err: ApiErrorShape, field: 'code' | 'type'): string | und
 }
 
 /** Checks whether model configuration supports sampling parameters (temperature, top_p). */
-function supportsSamplingParams(model: ModelRuntimeConfig): boolean {
+function supportsSamplingParams(model: ModelRuntimeConfig, effort?: unknown): boolean {
   const override = model.config['supportsSamplingParams'];
   if (typeof override === 'boolean') return override;
-  const effort = model.config['reasoningEffort'];
-  if (typeof effort === 'string' && effort !== 'none') return false;
+  const effectiveEffort = effort === undefined ? model.config['reasoningEffort'] : effort;
+  if (typeof effectiveEffort === 'string' && effectiveEffort !== 'none') return false;
   return !/^(o[0-9]|gpt-[56])/.test(model.apiModelId);
 }
 
@@ -401,8 +401,8 @@ export class OpenAIAdapter implements ProviderAdapter {
     req: NormalizedChatRequest,
     messages: OpenAIMessage[],
   ): Record<string, unknown> {
-    const sampling = supportsSamplingParams(req.model);
-    const reasoningEffort = req.model.config['reasoningEffort'];
+    const reasoningEffort = req.reasoningEffort ?? req.model.config['reasoningEffort'];
+    const sampling = supportsSamplingParams(req.model, reasoningEffort);
 
     return {
       model: req.model.apiModelId,
@@ -504,8 +504,8 @@ export class OpenAIAdapter implements ProviderAdapter {
   private async buildResponsesRequest(
     req: NormalizedChatRequest,
   ): Promise<Record<string, unknown>> {
-    const sampling = supportsSamplingParams(req.model);
-    const reasoningEffort = req.model.config['reasoningEffort'];
+    const reasoningEffort = req.reasoningEffort ?? req.model.config['reasoningEffort'];
+    const sampling = supportsSamplingParams(req.model, reasoningEffort);
     const tools = this.buildResponsesTools(req);
 
     const base = req.system !== undefined && req.system.trim().length > 0 ? req.system : '';

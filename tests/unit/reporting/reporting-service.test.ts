@@ -23,10 +23,18 @@ class FakeReportingRepository implements ReportingRepository {
   errorQueries: ErrorEventQuery[] = [];
   auditQueries: AuditLogQuery[] = [];
   summaryQueries: { from: Date; to: Date; divisionId?: string | undefined }[] = [];
+  recentQueries: { limit: number; divisionId?: string | undefined }[] = [];
 
   errorRows: ErrorEventRow[] = [];
   auditRows: AuditLogRow[] = [];
   usageRows: UsageReportRow[] = [];
+  recentRows: RecentRequestRow[] = [];
+  breakdownRows: { byProvider: UsageBreakdownRow[]; byModel: UsageBreakdownRow[] } = {
+    byProvider: [],
+    byModel: [],
+  };
+  timeseriesRows: UsageTimeseriesRow[] = [];
+  modelUsageRows: ModelUsageRow[] = [];
 
   async aggregateUsage(query: UsageReportQuery): Promise<readonly UsageReportRow[]> {
     this.usageQueries.push(query);
@@ -59,23 +67,27 @@ class FakeReportingRepository implements ReportingRepository {
     };
   }
 
-  async listRecentRequests(): Promise<readonly RecentRequestRow[]> {
-    return [];
+  async listRecentRequests(query: {
+    limit: number;
+    divisionId?: string | undefined;
+  }): Promise<readonly RecentRequestRow[]> {
+    this.recentQueries.push(query);
+    return this.recentRows;
   }
 
   async usageBreakdown(): Promise<{
     byProvider: readonly UsageBreakdownRow[];
     byModel: readonly UsageBreakdownRow[];
   }> {
-    return { byProvider: [], byModel: [] };
+    return this.breakdownRows;
   }
 
   async usageTimeseries(): Promise<readonly UsageTimeseriesRow[]> {
-    return [];
+    return this.timeseriesRows;
   }
 
   async modelUsage(): Promise<readonly ModelUsageRow[]> {
-    return [];
+    return this.modelUsageRows;
   }
 }
 
@@ -188,30 +200,118 @@ describe('ReportingService.usage', () => {
   });
 });
 
-describe('ReportingService.usageSummary', () => {
-  it('resolves the today period to the UTC day start', async () => {
+describe('ReportingService.dashboard', () => {
+  it('uses the UTC day for the summary and a 30-day window for department usage', async () => {
     const repository = new FakeReportingRepository();
-    await service(repository).usageSummary({ period: 'today' });
+    await service(repository).dashboard();
 
-    const query = repository.summaryQueries[0];
-    expect(query?.to).toEqual(NOW);
-    expect(query?.from).toEqual(new Date('2026-10-20T00:00:00.000Z'));
+    const summary = repository.summaryQueries[0];
+    expect(summary?.from).toEqual(new Date('2026-10-20T00:00:00.000Z'));
+    expect(summary?.to).toEqual(new Date('2026-10-20T23:59:59.999Z'));
+
+    const divisionQuery = repository.usageQueries[0];
+    expect(divisionQuery?.groupBy).toBe('division');
+    expect(divisionQuery?.from).toEqual(new Date('2026-09-21T00:00:00.000Z'));
+    expect(divisionQuery?.to).toEqual(new Date('2026-10-20T23:59:59.999Z'));
   });
 
-  it('resolves the 7d period to seven days back', async () => {
+  it('returns the window, summary, recent, breakdown and models in one report', async () => {
     const repository = new FakeReportingRepository();
-    await service(repository).usageSummary({ period: '7d' });
+    repository.recentRows = [
+      {
+        id: 'u-1',
+        model: 'gpt-4o',
+        modelName: 'GPT-4o',
+        provider: 'openai',
+        promptTokens: 10,
+        completionTokens: 5,
+        cachedTokens: 0,
+        status: 'ok',
+        timestamp: new Date('2026-10-20T10:00:00.000Z'),
+      },
+    ];
 
-    const query = repository.summaryQueries[0];
-    expect(query?.from).toEqual(new Date(NOW.getTime() - 7 * 86_400_000));
+    const report = await service(repository).dashboard();
+    expect(report.window).toEqual({
+      from: '2026-10-20T00:00:00.000Z',
+      to: '2026-10-20T23:59:59.999Z',
+    });
+    expect(report.recent[0]?.timestamp).toBe('2026-10-20T10:00:00.000Z');
+    expect(report.departmentUsage).toEqual([]);
+    expect(report.breakdown).toEqual({ byProvider: [], byModel: [] });
+  });
+});
+
+describe('ReportingService.usageReport', () => {
+  it('resolves the default range to the last 30 days', async () => {
+    const repository = new FakeReportingRepository();
+    await service(repository).usageReport({});
+
+    const summary = repository.summaryQueries[0];
+    expect(summary?.to).toEqual(NOW);
+    expect(summary?.from).toEqual(new Date(NOW.getTime() - 30 * 86_400_000));
   });
 
-  it('falls back to the default range when no period is given', async () => {
+  it('computes both the division and user aggregates for the window', async () => {
     const repository = new FakeReportingRepository();
-    await service(repository).usageSummary({});
+    await service(repository).usageReport({
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-31T23:59:59.999Z',
+    });
 
-    const query = repository.summaryQueries[0];
-    expect(query?.from).toEqual(new Date(NOW.getTime() - 30 * 86_400_000));
+    expect(repository.usageQueries.map((q) => q.groupBy)).toEqual(['division', 'user']);
+    expect(repository.usageQueries[0]?.from).toEqual(new Date('2026-10-01T00:00:00.000Z'));
+    expect(repository.usageQueries[0]?.to).toEqual(new Date('2026-10-31T23:59:59.999Z'));
+  });
+
+  it('forwards the division filter into every block', async () => {
+    const repository = new FakeReportingRepository();
+    await service(repository).usageReport({ divisionId: 'div-1' });
+
+    expect(repository.summaryQueries[0]?.divisionId).toBe('div-1');
+    expect(repository.recentQueries[0]?.divisionId).toBe('div-1');
+    expect(repository.usageQueries.every((q) => q.divisionId === 'div-1')).toBe(true);
+  });
+
+  it('runs only the requested sections', async () => {
+    const repository = new FakeReportingRepository();
+    const report = await service(repository).usageReport({ sections: ['byUser'] });
+
+    expect(report.byUser).toEqual([]);
+    expect(report.summary).toBeUndefined();
+    expect(report.recent).toBeUndefined();
+    expect(report.breakdown).toBeUndefined();
+    expect(report.timeseries).toBeUndefined();
+    expect(report.models).toBeUndefined();
+    expect(report.byDivision).toBeUndefined();
+    expect(repository.summaryQueries).toHaveLength(0);
+    expect(repository.recentQueries).toHaveLength(0);
+    expect(repository.usageQueries.map((q) => q.groupBy)).toEqual(['user']);
+  });
+
+  it('runs every section when none are requested', async () => {
+    const repository = new FakeReportingRepository();
+    await service(repository).usageReport({});
+
+    expect(repository.summaryQueries).toHaveLength(1);
+    expect(repository.recentQueries).toHaveLength(1);
+    expect(repository.usageQueries.map((q) => q.groupBy)).toEqual(['division', 'user']);
+  });
+
+  it('maps timeseries rows to display labels', async () => {
+    const repository = new FakeReportingRepository();
+    repository.timeseriesRows = [
+      { date: '2026-10-18', tokens: 100, requests: 2, costUsd: 0.5 },
+    ];
+
+    const report = await service(repository).usageReport({});
+    expect(report.timeseries?.[0]).toMatchObject({
+      date: '2026-10-18',
+      tokens: 100,
+      requests: 2,
+      costUsd: 0.5,
+    });
+    expect(report.timeseries?.[0]?.label).toBeTruthy();
   });
 });
 

@@ -304,6 +304,10 @@ Returns only active models the caller may use on enabled providers. Requires no 
 
 `status`: `active | disabled`.
 
+`capabilities.reasoning` is present when the model exposes selectable reasoning depths:
+`{ "availableEfforts": ["low","medium","high"], "defaultEffort": "medium" }`; it is omitted
+otherwise.
+
 ---
 
 ## 5. Conversations
@@ -464,6 +468,7 @@ Submits a new user message turn, reserves quota tokens, and queues assistant gen
 | `options.maxOutputTokens` | integer | No | Maximum token ceiling requested for output generation. |
 | `options.tools` | object | No | Built-in provider tool toggles. |
 | `options.tools.imageGeneration` | boolean | No | Request-scoped opt-in to provider-hosted image generation (default `false`). Only honoured when the model declares `capabilities.imageGeneration`; otherwise the request fails `422 unsupported_for_model`. Adds the image-generation token tariff to the quota reservation for that turn. |
+| `options.reasoningEffort` | string (`low` \| `medium` \| `high` \| `xhigh` \| `max`) | No | Reasoning depth for this turn. Must be one of `capabilities.reasoning.availableEfforts`; omitted means `capabilities.reasoning.defaultEffort`. A model without `capabilities.reasoning` rejects the field with `422 unsupported_for_model`. |
 
 > **Document generation stays registry-level; image generation is per request.** Container skills and
 > code execution are enabled on the model record (`capabilities.documentGeneration` plus
@@ -511,14 +516,19 @@ Submits a new user message turn, reserves quota tokens, and queues assistant gen
 
 ### 6.3 `POST /api/conversations/:id/messages/:mid/retry`
 
-Retries a `failed`/`cancelled` generation for the same user message. Creates a **new** generation and a
-**new** assistant message, and sets `supersededBy` on the old one.
+Retries a `failed`/`cancelled` generation for the same user message, and regenerates a `complete` one.
+Creates a **new** generation and a **new** assistant message, sets `supersededBy` on the old answer, and
+marks every message after the user turn as superseded. Regenerating is not a branch: the new answer
+replaces the old turn, the later turns disappear from §6.1, and the superseded rows are kept only for
+generation history.
+
+`409 conflict` when the paired assistant message is still streaming.
 
 **Path parameters:**
 | Parameter | Value type | Required | Description |
 |---|---|---|---|
 | `id` | string (UUIDv7) | Yes | Conversation ID. |
-| `mid` | string (UUIDv7) | Yes | Failed/cancelled user message ID to retry generation for. |
+| `mid` | string (UUIDv7) | Yes | User message ID whose assistant answer is retried or regenerated. |
 
 **Request headers:**
 | Header | Value type | Required | Description |
@@ -1346,6 +1356,7 @@ Writes an `audit_logs` row (`action: "provider.delete"`) and invalidates the reg
 | `description` | string \| null | No | Human-readable model description. |
 | `status` | string (`active` \| `disabled`) | No | Model status (default `disabled`). |
 | `capabilities` | object | Conditional | Normalized capability flags object (required on `POST`, optional on `PATCH`). |
+| `capabilities.reasoning` | object \| null | No | Reasoning support. `{ "availableEfforts": ["low","medium","high"], "defaultEffort": "medium" }`; `defaultEffort` must be one of `availableEfforts`. Send `null` to clear it. Omitted keeps the stored value. |
 | `contextWindow` | integer | Conditional | Context window token capacity (> 0) (required on `POST`, optional on `PATCH`). |
 | `maxOutputTokens` | integer | Conditional | Maximum supported output tokens (> 0) (required on `POST`, optional on `PATCH`). |
 | `defaultMaxOutputTokens` | integer | Conditional | Default max output tokens (required on `POST`, optional on `PATCH`). |

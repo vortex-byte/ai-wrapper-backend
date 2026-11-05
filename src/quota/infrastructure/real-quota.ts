@@ -304,7 +304,10 @@ export class RealQuota implements QuotaPort {
   async remainingTokens(userId: string): Promise<number | null> {
     const now = this.clock.now();
     const account = await this.accounts.findCurrentAccount(userId, now);
-    if (account === null) return null;
+    if (account === null) {
+      const policy = await this.resolvePolicyForUser(userId);
+      return policy.monthlyTokens;
+    }
     const limit = account.baseLimitTokens + account.adjustmentTokens;
     return Math.max(0, limit - account.usedTokens - account.reservedTokens);
   }

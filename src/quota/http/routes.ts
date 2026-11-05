@@ -8,7 +8,7 @@ import { ok } from '@/http/envelope.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requireCsrf } from '@/http/middleware/require-csrf.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
-import { requireSuperAdmin } from '@/http/middleware/require-role.ts';
+import { requireAdmin } from '@/http/middleware/require-role.ts';
 import { clientIp, requestMeta } from '@/http/request-meta.ts';
 import type { AppEnv } from '@/http/types.ts';
 import { parseJsonBody } from '@/http/validate.ts';
@@ -97,11 +97,35 @@ export function quotaRoutes(deps: QuotaRoutesDeps): Hono<AppEnv> {
   admin.use('/admin/*', requireCsrf(config));
   admin.use('/admin/*', requireAuth(auth, config));
   admin.use('/admin/*', requirePasswordChanged());
-  admin.use('/admin/*', requireSuperAdmin());
+  admin.use('/admin/*', requireAdmin());
 
   admin.get('/admin/quota-policies/:scope/:id?', async (c) => {
+    const current = c.get('auth');
+    if (current === undefined) throw new AppError('unauthenticated');
     const scope = parseScope(c.req.param('scope'));
     const targetId = normalizeTarget(scope, c.req.param('id'));
+
+    if (current.user.role === 'admin') {
+      if (!current.user.divisionId) {
+        throw new AppError('forbidden', 'Division administrator must belong to a division.');
+      }
+      if (scope === 'division') {
+        if (targetId !== current.user.divisionId) {
+          throw new AppError('forbidden');
+        }
+      } else if (scope === 'user') {
+        if (targetId === null) {
+          throw new AppError('invalid_request', 'user scope requires a target id.');
+        }
+        const targetUser = await quota.findUser(targetId);
+        if (targetUser === null || targetUser.divisionId !== current.user.divisionId) {
+          throw new AppError('forbidden');
+        }
+      } else if (scope === 'global') {
+        throw new AppError('forbidden');
+      }
+    }
+
     const policy = await quota.getPolicy(scope, targetId);
     if (policy === null) throw new AppError('not_found', 'No quota policy at this scope.');
     return c.json(ok(wirePolicy(policy)));
@@ -112,6 +136,26 @@ export function quotaRoutes(deps: QuotaRoutesDeps): Hono<AppEnv> {
     if (current === undefined) throw new AppError('unauthenticated');
     const scope = parseScope(c.req.param('scope'));
     const targetId = normalizeTarget(scope, c.req.param('id'));
+
+    if (scope === 'global' || scope === 'division') {
+      if (current.user.role !== 'super_admin') {
+        throw new AppError('forbidden');
+      }
+    } else if (scope === 'user') {
+      if (targetId === null) {
+        throw new AppError('invalid_request', 'user scope requires a target id.');
+      }
+      const targetUser = await quota.findUser(targetId);
+      if (targetUser === null) {
+        throw new AppError('not_found', 'User not found.');
+      }
+      if (current.user.role === 'admin') {
+        if (!current.user.divisionId || targetUser.divisionId !== current.user.divisionId) {
+          throw new AppError('forbidden');
+        }
+      }
+    }
+
     const body = await parseJsonBody(c, PolicyUpsertBodySchema);
     const saved = await quota.updatePolicy({
       scope,
@@ -137,6 +181,17 @@ export function quotaRoutes(deps: QuotaRoutesDeps): Hono<AppEnv> {
     const current = c.get('auth');
     if (current === undefined) throw new AppError('unauthenticated');
     const userId = UUID.parse(c.req.param('id'));
+
+    const targetUser = await quota.findUser(userId);
+    if (targetUser === null) {
+      throw new AppError('not_found', 'User not found.');
+    }
+    if (current.user.role === 'admin') {
+      if (!current.user.divisionId || targetUser.divisionId !== current.user.divisionId) {
+        throw new AppError('forbidden');
+      }
+    }
+
     const body = await parseJsonBody(c, AdjustmentBodySchema);
     const result = await quota.adjustQuota({
       userId,
@@ -159,7 +214,20 @@ export function quotaRoutes(deps: QuotaRoutesDeps): Hono<AppEnv> {
   });
 
   admin.get('/admin/users/:id/quota', async (c) => {
+    const current = c.get('auth');
+    if (current === undefined) throw new AppError('unauthenticated');
     const userId = UUID.parse(c.req.param('id'));
+
+    const targetUser = await quota.findUser(userId);
+    if (targetUser === null) {
+      throw new AppError('not_found', 'User not found.');
+    }
+    if (current.user.role === 'admin') {
+      if (!current.user.divisionId || targetUser.divisionId !== current.user.divisionId) {
+        throw new AppError('forbidden');
+      }
+    }
+
     const snapshot = await quota.getQuotaSnapshot(userId);
     if (snapshot === null) throw new AppError('not_found', 'No quota period found.');
     const ledger = await quota.listLedger(userId, 50);

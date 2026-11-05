@@ -7,7 +7,7 @@ import { ok } from '@/http/envelope.ts';
 import { requireCsrf } from '@/http/middleware/require-csrf.ts';
 import { requireAuth } from '@/http/middleware/require-auth.ts';
 import { requirePasswordChanged } from '@/http/middleware/require-password-changed.ts';
-import { requireSuperAdmin } from '@/http/middleware/require-role.ts';
+import { requireAdmin, requireSuperAdmin } from '@/http/middleware/require-role.ts';
 import { rateLimit } from '@/http/middleware/rate-limit.ts';
 import type { RateLimiter } from '@/http/ports/rate-limiter.ts';
 import type { AppEnv } from '@/http/types.ts';
@@ -33,7 +33,10 @@ export function reportingRoutes(deps: ReportingRoutesDeps): Hono<AppEnv> {
   routes.use('*', requireCsrf(config));
   routes.use('*', requireAuth(auth, config));
   routes.use('*', requirePasswordChanged());
-  routes.use('*', requireSuperAdmin());
+  routes.use('/dashboard', requireSuperAdmin());
+  routes.use('/errors', requireSuperAdmin());
+  routes.use('/audit-logs', requireSuperAdmin());
+  routes.use('/usage/*', requireAdmin());
   routes.use(
     '/usage/*',
     rateLimit(config, rateLimiter, {
@@ -51,15 +54,49 @@ export function reportingRoutes(deps: ReportingRoutesDeps): Hono<AppEnv> {
   });
 
   routes.get('/usage/report', async (c) => {
+    const caller = c.get('auth');
+    if (!caller) throw new AppError('unauthenticated');
     const query = parseQuery(c, UsageWindowQuerySchema);
-    const report = await reporting.usageReport(query);
+    if (caller.user.role === 'admin') {
+      if (!caller.user.divisionId) {
+        throw new AppError('forbidden', 'Division administrator must belong to a division.');
+      }
+      if (query.divisionId && query.divisionId !== caller.user.divisionId) {
+        throw new AppError('forbidden');
+      }
+    }
+    const effectiveQuery =
+      caller.user.role === 'admin'
+        ? {
+            ...query,
+            divisionId: caller.user.divisionId ?? undefined,
+          }
+        : query;
+    const report = await reporting.usageReport(effectiveQuery);
     privateCache(c, 30);
     return c.json(ok(report));
   });
 
   routes.get('/usage/export', async (c) => {
+    const caller = c.get('auth');
+    if (!caller) throw new AppError('unauthenticated');
     const query = parseQuery(c, UsageQuerySchema);
-    const csv = await reporting.usageCsv(query);
+    if (caller.user.role === 'admin') {
+      if (!caller.user.divisionId) {
+        throw new AppError('forbidden', 'Division administrator must belong to a division.');
+      }
+      if (query.divisionId && query.divisionId !== caller.user.divisionId) {
+        throw new AppError('forbidden');
+      }
+    }
+    const effectiveQuery =
+      caller.user.role === 'admin'
+        ? {
+            ...query,
+            divisionId: caller.user.divisionId ?? undefined,
+          }
+        : query;
+    const csv = await reporting.usageCsv(effectiveQuery);
     const day = new Date().toISOString().slice(0, 10);
     noStore(c);
     c.header('Content-Type', 'text/csv; charset=utf-8');

@@ -1122,7 +1122,11 @@ live rows.
 
 ## 10. Admin — quota & usage
 
-All quota and usage administration endpoints require `role=super_admin`.
+All quota and usage administration endpoints require `role=admin` or `role=super_admin`.
+A division `admin` is scoped to their own division: they may read/update `user` policies and
+adjustments for members of their division and read their own `division` policy. Only
+`super_admin` may create or update `global` and `division` policies. `super_admin` may adjust
+any user's quota.
 
 ### 10.1 `GET /api/admin/quota-policies/:scope/:id?`
 

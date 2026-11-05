@@ -1,4 +1,4 @@
-import { and, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, lt, sql } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
 import { aiModelPrices, usageEvents, users } from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
@@ -67,13 +67,21 @@ export class DrizzleUsageRepository implements UsageRepository {
     return rows;
   }
 
-  async userDivisionId(userId: string, tx?: TransactionContext): Promise<string | null> {
+  async findUser(
+    userId: string,
+    tx?: TransactionContext,
+  ): Promise<{ id: string; divisionId: string | null } | null> {
     const rows = await runDb(tx)
-      .select({ divisionId: users.divisionId })
+      .select({ id: users.id, divisionId: users.divisionId })
       .from(users)
-      .where(eq(users.id, userId))
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
       .limit(1);
-    return rows[0]?.divisionId ?? null;
+    return rows[0] ?? null;
+  }
+
+  async userDivisionId(userId: string, tx?: TransactionContext): Promise<string | null> {
+    const user = await this.findUser(userId, tx);
+    return user?.divisionId ?? null;
   }
 
   async aggregateForUser(

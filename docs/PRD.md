@@ -1150,9 +1150,9 @@ Zod schemas on every route (params, query, body, headers); reject unknown fields
 | | `PATCH /admin/users/:id` | Update profile / status (`admin` displayName/status in own division; `super_admin` role/division/status/profile) | admin, super_admin |
 | | `POST /admin/users/:id/password/reset` | Reset a user's password (`admin` own division only; `super_admin` any) | admin, super_admin |
 | **Admin – divisions** | `GET/POST /admin/divisions`, `PATCH /admin/divisions/:id` | Manage divisions | super_admin |
-| **Admin – quota** | `GET/PUT /admin/quota-policies/:scope/:id?` | Policy by `global`/`division`/`user` | super_admin |
-| | `POST /admin/users/:id/quota/adjustments` | Grant/claw back with reason | super_admin |
-| | `GET /admin/users/:id/quota` | Period state + ledger | super_admin |
+| **Admin – quota** | `GET/PUT /admin/quota-policies/:scope/:id?` | Policy by `global`/`division`/`user` (`admin` scoped to own division; `global`/`division` writes `super_admin` only) | admin, super_admin |
+| | `POST /admin/users/:id/quota/adjustments` | Grant/claw back with reason (`admin` own division only; `super_admin` any) | admin, super_admin |
+| | `GET /admin/users/:id/quota` | Period state + ledger (`admin` own division only; `super_admin` any) | admin, super_admin |
 | **Admin – models** | `GET/POST /admin/providers`, `PATCH /admin/providers/:id` | Provider config including `secretRef` (the env var name; the key itself is never accepted or returned — A-16) | super_admin |
 | | `GET/POST /admin/models`, `PATCH /admin/models/:id` | Registry, capabilities, status, pricing | super_admin |
 | | `GET /admin/providers/health` | Latest health + circuit state | super_admin |
@@ -1292,13 +1292,14 @@ Per-file failures are reported per item (`status:"rejected", error:{code:"unsupp
 { "monthlyTokens": 1000000, "maxInputTokensPerRequest": 150000, "maxOutputTokensPerRequest": 16000,
   "maxConcurrentGenerations": 3, "applyToCurrentPeriod": true, "reason": "Legal team pilot" }
 ```
-Fields set to `null` inherit from division/global. Requires `role = 'super_admin'`.
+Fields set to `null` inherit from division/global. Requires `role = 'admin'` scoped to their own
+division, or `role = 'super_admin'` (any user).
 
 `POST /api/admin/users/:id/quota/adjustments`
 ```json
 { "tokens": 200000, "reason": "Incident follow-up", "expiresAtPeriodEnd": true }
 ```
-Requires `role = 'super_admin'`.
+Requires `role = 'admin'` scoped to their own division, or `role = 'super_admin'` (any user).
 
 `GET /api/admin/usage?from=2026-10-01&to=2026-10-08&groupBy=model` →
 ```json

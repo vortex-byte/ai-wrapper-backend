@@ -67,4 +67,10 @@ export interface UsageRepository {
 
   /** Division of a user (for usage_events.division_id at settlement time). */
   userDivisionId(userId: string, tx?: TransactionContext): Promise<string | null>;
+
+  /** Finds a non-deleted user with their division ID. */
+  findUser(
+    userId: string,
+    tx?: TransactionContext,
+  ): Promise<{ readonly id: string; readonly divisionId: string | null } | null>;
 }

@@ -136,6 +136,12 @@ export class QuotaService {
     return this.accounts.listLedger(userId, limit);
   }
 
+  async findUser(
+    userId: string,
+  ): Promise<{ readonly id: string; readonly divisionId: string | null } | null> {
+    return this.usage !== undefined ? this.usage.findUser(userId) : null;
+  }
+
   async getPolicy(scope: PolicyScope, targetId: string | null): Promise<QuotaPolicyRow | null> {
     return this.policies.findPolicy(scope, targetId);
   }

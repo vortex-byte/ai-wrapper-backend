@@ -558,4 +558,203 @@ describe('AnthropicAdapter (Unit)', () => {
       { role: 'user', content: 'Part 1\n\nPart 2' },
     ]);
   });
+
+  it('replays a stored compaction block as the first assistant block', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeChatRequest({
+      messages: [
+        {
+          role: 'assistant',
+          parts: [
+            {
+              type: 'compaction',
+              provider: 'anthropic',
+              payload: { type: 'compaction', content: 'summary' },
+            },
+            { type: 'text', text: 'answer after compaction' },
+          ],
+        },
+        { role: 'user', parts: [{ type: 'text', text: 'next question' }] },
+      ],
+    });
+
+    const providerReq = adapter.toProviderRequest(req) as {
+      messages: Array<{ role: string; content: unknown }>;
+      context_management?: unknown;
+    };
+
+    expect(providerReq.messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        { type: 'compaction', content: 'summary' },
+        { type: 'text', text: 'answer after compaction' },
+      ],
+    });
+    // The default test model declares no compaction capability, so no edit is requested.
+    expect(providerReq.context_management).toBeUndefined();
+  });
+
+  it('requests compaction with the beta header when the model supports it', async () => {
+    let capturedParams: Record<string, unknown> | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
+
+    const adapter = new AnthropicAdapter(() => ({
+      models: {
+        async list() {
+          return { data: [] };
+        },
+      },
+      messages: {
+        async create(params: unknown, options?: { headers?: Record<string, string> }) {
+          capturedParams = params as Record<string, unknown>;
+          capturedHeaders = options?.headers;
+          return (async function* () {
+            yield {
+              type: 'message_delta',
+              delta: { stop_reason: 'end_turn' },
+              usage: { output_tokens: 1 },
+            };
+          })();
+        },
+      },
+    }));
+
+    const req = makeAnthropicRequest({
+      model: {
+        ...makeAnthropicRequest().model,
+        capabilities: {
+          ...makeAnthropicRequest().model.capabilities,
+          compaction: {},
+        },
+      },
+    });
+
+    for await (const event of adapter.execute(req, {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      void event;
+    }
+
+    expect(capturedParams?.['context_management']).toEqual({
+      edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 160_000 } }],
+    });
+    expect(capturedHeaders?.['anthropic-beta']).toBe('compact-2026-01-12');
+  });
+
+  it('emits a compaction event and keeps generating after it', async () => {
+    const mockEvents = [
+      {
+        type: 'message_start',
+        message: { id: 'msg-compaction', usage: { input_tokens: 100 } },
+      },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'compaction', content: null },
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'compaction_delta', content: 'summary' },
+      },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'After' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 } },
+    ];
+
+    const adapter = new AnthropicAdapter(() => createMockAnthropicClient(mockEvents));
+    const events: GenerationEvent[] = [];
+    for await (const event of adapter.execute(makeAnthropicRequest(), {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      events.push(event);
+    }
+
+    expect(events.find((e) => e.type === 'compaction')).toEqual({
+      type: 'compaction',
+      provider: 'anthropic',
+      payload: { type: 'compaction', content: 'summary' },
+    });
+    expect(
+      events.filter((e) => e.type === 'text_delta').map((e) => (e as { text: string }).text),
+    ).toEqual(['After']);
+  });
+
+  it('ignores a compaction block whose summary was not generated', async () => {
+    const mockEvents = [
+      { type: 'message_start', message: { id: 'msg-null', usage: { input_tokens: 10 } } },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'compaction', content: null },
+      },
+      { type: 'content_block_delta', index: 0, delta: { type: 'compaction_delta', content: null } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+    ];
+
+    const adapter = new AnthropicAdapter(() => createMockAnthropicClient(mockEvents));
+    const events: GenerationEvent[] = [];
+    for await (const event of adapter.execute(makeAnthropicRequest(), {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      events.push(event);
+    }
+
+    expect(events.find((e) => e.type === 'compaction')).toBeUndefined();
+  });
+
+  it('attaches the beta header when replaying a historical compaction block even without model compaction capability', async () => {
+    let capturedHeaders: Record<string, string> | undefined;
+
+    const adapter = new AnthropicAdapter(() => ({
+      models: {
+        async list() {
+          return { data: [] };
+        },
+      },
+      messages: {
+        async create(_params: unknown, options?: { headers?: Record<string, string> }) {
+          capturedHeaders = options?.headers;
+          return (async function* () {
+            yield {
+              type: 'message_delta',
+              delta: { stop_reason: 'end_turn' },
+              usage: { output_tokens: 1 },
+            };
+          })();
+        },
+      },
+    }));
+
+    const req = makeAnthropicRequest({
+      messages: [
+        {
+          role: 'assistant',
+          parts: [
+            {
+              type: 'compaction',
+              provider: 'anthropic',
+              payload: { type: 'compaction', content: 'prior summary' },
+            },
+          ],
+        },
+        { role: 'user', parts: [{ type: 'text', text: 'follow up' }] },
+      ],
+    });
+
+    for await (const event of adapter.execute(req, {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      void event;
+    }
+
+    expect(capturedHeaders?.['anthropic-beta']).toContain('compact-2026-01-12');
+  });
 });

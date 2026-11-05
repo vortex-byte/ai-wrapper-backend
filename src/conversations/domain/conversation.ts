@@ -36,7 +36,8 @@ export type PartType =
   | 'structured'
   | 'tool_call'
   | 'tool_result'
-  | 'reasoning';
+  | 'reasoning'
+  | 'compaction';
 
 export type PartStatus = 'streaming' | 'complete' | 'incomplete' | 'failed';
 

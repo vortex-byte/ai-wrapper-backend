@@ -151,6 +151,10 @@ export class Finalizer {
         // CHECK forbids `complete` without a `file_id`. Settle them here so a cancel, a failure
         // or a missing artifact cannot leave a part streaming forever.
         for (const part of messageWithParts.parts) {
+          if (part.type === 'compaction' && input.status !== 'completed') {
+            await this.conversations.updatePart(part.id, { status: 'failed' }, tx);
+            continue;
+          }
           if (part.type === 'text' || part.status !== 'streaming') continue;
           await this.conversations.updatePart(
             part.id,

@@ -4,11 +4,13 @@ export type {
   ResolvedFile,
   GenerationEvent,
   TokenUsage,
+  CompactionPart,
 } from './domain/pal.ts';
 export type { AppErrorCategory, ProviderError } from './domain/errors.ts';
 export { providerError } from './domain/errors.ts';
 export type {
   DocumentCapabilities,
+  CompactionCapability,
   ModelCapabilities,
   ModelRuntimeConfig,
   PartialReasoningCapability,

@@ -9,6 +9,8 @@ export interface EnqueueGenerationInput {
   readonly contextInfo: {
     readonly truncated: boolean;
     readonly droppedMessageCount?: number | undefined;
+    readonly compactedMessageCount?: number | undefined;
+    readonly reason?: 'context_window' | 'quota' | undefined;
   };
   readonly timeoutMs?: number | undefined;
 }

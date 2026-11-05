@@ -7,7 +7,7 @@ import type {
   ProviderRuntimeConfig,
   ReasoningEffort,
 } from '@/providers/index.ts';
-import type { MessageWithParts } from '@/conversations/domain/conversation.ts';
+import type { MessagePart, MessageWithParts } from '@/conversations/domain/conversation.ts';
 import { estimateMediaTokens, estimateTextTokens } from '@/estimation.ts';
 import { AppError } from '@/errors.ts';
 
@@ -27,13 +27,23 @@ export interface ContextBuilderInput {
   readonly imageGeneration?: boolean;
   /** Reasoning depth for this turn; the caller has already checked it against the model. */
   readonly reasoningEffort?: ReasoningEffort | undefined;
+  /**
+   * Raw model tokens the user can still afford this period. When it is smaller than the model
+   * window, history is trimmed to fit it (sliding-window fallback).
+   */
+  readonly userRemainingQuota?: number | null | undefined;
 }
 
 export interface TruncationInfo {
   readonly truncated: boolean;
   readonly droppedMessageCount: number;
+  readonly compactedMessageCount: number;
   readonly totalHistoryCount: number;
+  /** Why history was dropped: the model window or the user's remaining quota. */
+  readonly reason: TruncationReason;
 }
+
+export type TruncationReason = 'none' | 'context_window' | 'quota';
 
 export interface BuildContextResult {
   readonly request: NormalizedChatRequest;
@@ -47,14 +57,22 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
 
   const maxOutputTokens = input.maxOutputTokensOverride ?? model.defaultMaxOutputTokens;
   const safetyMargin = Math.max(1000, Math.floor(capabilities.contextWindow * 0.03));
-  const availableInputTokens = capabilities.contextWindow - maxOutputTokens - safetyMargin;
+  const modelInputBudget = capabilities.contextWindow - maxOutputTokens - safetyMargin;
 
-  if (availableInputTokens <= 0) {
+  if (modelInputBudget <= 0) {
     throw new AppError(
       'context_too_large',
       'Context window too small for requested output and safety margin.',
     );
   }
+
+  // Sliding-window fallback: when the user cannot afford the full transcript, history is trimmed
+  // to the affordable size instead of failing the request outright.
+  const quotaInputBudget =
+    input.userRemainingQuota === undefined || input.userRemainingQuota === null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, input.userRemainingQuota - maxOutputTokens);
+  const historyBudget = Math.min(modelInputBudget, quotaInputBudget);
 
   const systemAddendum =
     typeof model.config['systemAddendum'] === 'string' ? model.config['systemAddendum'] : undefined;
@@ -78,14 +96,16 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     }
   }
 
-  if (systemTokens + newUserTokens > availableInputTokens) {
+  if (systemTokens + newUserTokens > modelInputBudget) {
     throw new AppError('context_too_large', 'Prompt and new message exceed model context window.');
   }
 
-  let budgetRemaining = availableInputTokens - systemTokens - newUserTokens;
+  let budgetRemaining = historyBudget - systemTokens - newUserTokens;
+  const compactionEnabled = capabilities.compaction !== undefined;
 
   const selectedHistory: NormalizedMessage[] = [];
   let droppedMessageCount = 0;
+  let compactedMessageCount = 0;
   const totalHistoryCount = history.length;
   let expectedRole: 'user' | 'assistant' = 'assistant';
 
@@ -105,6 +125,11 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
       droppedMessageCount++;
       continue;
     }
+
+    const compactionPart = compactionEnabled
+      ? item.parts.find((part) => part.type === 'compaction')
+      : undefined;
+    const isCompactionAnchor = compactionPart !== undefined;
 
     const historyParts: NormalizedPart[] = [];
     for (const p of item.parts) {
@@ -141,14 +166,59 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
       }
     }
     const messageText = extractPartsText(historyParts);
-    const msgTokens = estimateTextTokens(messageText) + 8;
+    const compactionTokens = isCompactionAnchor ? estimateCompactionTokens(compactionPart) : 0;
+    const msgTokens = estimateTextTokens(messageText) + 8 + compactionTokens;
 
+    // The compaction block anchors the transcript: everything older is already summarized, so
+    // the walk stops here.
+    // If the compaction anchor cannot fit in the model's context window, fail cleanly with context_too_large.
+    // When quota is the binding limit, keeping it could make the request unaffordable, so the
+    // sliding window wins and the block is dropped like any other turn.
+    const anchorRequired = isCompactionAnchor && quotaInputBudget >= modelInputBudget;
+    if (anchorRequired && budgetRemaining < msgTokens) {
+      throw new AppError(
+        'context_too_large',
+        'Prompt, new message, and compacted history exceed model context window.',
+      );
+    }
     if (budgetRemaining >= msgTokens) {
       budgetRemaining -= msgTokens;
+      const normalizedParts: NormalizedPart[] = [];
+      if (isCompactionAnchor) {
+        const partProvider = String(compactionPart.data['provider'] ?? provider.key);
+        if (partProvider === provider.key) {
+          normalizedParts.push({
+            type: 'compaction',
+            provider: partProvider,
+            payload: compactionPart.data['payload'],
+          });
+        } else {
+          // Cross-provider conversion: if the summary is readable text (Anthropic), provide it as text;
+          // if it is an opaque provider token (OpenAI), it cannot be replayed on a different provider.
+          const payload = compactionPart.data['payload'];
+          const summary =
+            typeof payload === 'object' && payload !== null && 'content' in payload
+              ? String((payload as { content: unknown }).content)
+              : '';
+          if (summary.length > 0) {
+            normalizedParts.push({
+              type: 'text',
+              text: `[Previous conversation summary]:\n${summary}`,
+            });
+          }
+        }
+      }
+      if (messageText.length > 0) {
+        normalizedParts.push({ type: 'text', text: messageText });
+      }
       selectedHistory.unshift({
         role: item.message.role,
-        parts: [{ type: 'text', text: messageText }],
+        parts: normalizedParts.length > 0 ? normalizedParts : [{ type: 'text', text: ' ' }],
       });
+      if (isCompactionAnchor) {
+        compactedMessageCount += i;
+        break;
+      }
       expectedRole = expectedRole === 'assistant' ? 'user' : 'assistant';
     } else {
       droppedMessageCount += i + 1;
@@ -156,7 +226,16 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     }
   }
 
-  if (selectedHistory.length > 0 && selectedHistory[0]?.role === 'assistant') {
+  const firstSelected = selectedHistory[0];
+  const isCompactionFirst =
+    firstSelected?.parts[0]?.type === 'compaction' ||
+    (firstSelected?.parts[0]?.type === 'text' &&
+      firstSelected.parts[0].text.startsWith('[Previous conversation summary]'));
+  if (
+    firstSelected !== undefined &&
+    firstSelected.role === 'assistant' &&
+    !isCompactionFirst
+  ) {
     selectedHistory.shift();
     droppedMessageCount++;
   }
@@ -166,7 +245,7 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     { role: 'user', parts: newParts },
   ];
 
-  const estimatedTokens = availableInputTokens - budgetRemaining;
+  const estimatedTokens = historyBudget - budgetRemaining;
 
   const request: NormalizedChatRequest = {
     requestId: input.requestId,
@@ -187,10 +266,30 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     truncation: {
       truncated: droppedMessageCount > 0,
       droppedMessageCount,
+      compactedMessageCount,
       totalHistoryCount,
+      reason: truncationReason(droppedMessageCount, quotaInputBudget, modelInputBudget),
     },
     estimatedTokens,
   };
+}
+
+function truncationReason(
+  droppedMessageCount: number,
+  quotaInputBudget: number,
+  modelInputBudget: number,
+): TruncationReason {
+  if (droppedMessageCount === 0) return 'none';
+  return quotaInputBudget < modelInputBudget ? 'quota' : 'context_window';
+}
+
+/** Compaction payloads are opaque; their length is the only portable signal available. */
+function estimateCompactionTokens(part: MessagePart): number {
+  try {
+    return estimateTextTokens(JSON.stringify(part.data['payload'] ?? ''));
+  } catch {
+    return 2000;
+  }
 }
 
 function extractPartsText(parts: readonly NormalizedPart[]): string {

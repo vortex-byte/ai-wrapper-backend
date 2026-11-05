@@ -22,6 +22,12 @@ export interface DocumentCapabilities {
   readonly maxPages?: number;
 }
 
+/** Provider-side compaction: older turns are summarized by the provider once the trigger fires. */
+export interface CompactionCapability {
+  /** Tokens of input at which the provider compacts. Defaults to 80% of the context window. */
+  readonly triggerTokens?: number;
+}
+
 export interface PartialDocumentCapabilities {
   readonly pdf?: boolean;
   readonly maxPages?: number;
@@ -38,6 +44,8 @@ export interface ModelCapabilities {
   readonly maxImagesPerRequest?: number;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
+  /** Omitted when the provider cannot compact this model's history server-side. */
+  readonly compaction?: CompactionCapability;
   /** Omitted when the model is not configurable as a reasoning model. */
   readonly reasoning?: ReasoningCapability;
 }
@@ -54,6 +62,8 @@ export interface PartialModelCapabilities {
   readonly maxImagesPerRequest?: number;
   readonly contextWindow?: number;
   readonly maxOutputTokens?: number;
+  /** `null` clears the stored capability; omission keeps it. */
+  readonly compaction?: CompactionCapability | null;
   /** `null` clears the stored capability; omission keeps it. */
   readonly reasoning?: PartialReasoningCapability | null;
 }

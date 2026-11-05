@@ -66,6 +66,13 @@ const DocumentCapabilitiesSchema = z
   })
   .strict();
 
+/** Compaction is opt-in per model: the adapter only requests it when this object is present. */
+const CompactionCapabilitySchema = z
+  .object({
+    triggerTokens: z.number().int().min(1_000).optional(),
+  })
+  .strict();
+
 /** Schema for normalized model capabilities. */
 export const ModelCapabilitiesSchema = z
   .object({
@@ -80,9 +87,16 @@ export const ModelCapabilitiesSchema = z
     maxImagesPerRequest: z.number().int().positive().optional(),
     contextWindow: z.number().int().positive(),
     maxOutputTokens: z.number().int().positive(),
+    compaction: CompactionCapabilitySchema.nullish(),
     reasoning: ReasoningCapabilitySchema.nullish(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (cap) =>
+      cap.compaction?.triggerTokens === undefined ||
+      cap.compaction.triggerTokens < cap.contextWindow,
+    { message: 'compaction triggerTokens must be less than contextWindow' },
+  );
 
 const PartialDocumentCapabilitiesSchema = z
   .object({
@@ -104,6 +118,7 @@ export const PartialModelCapabilitiesSchema = z
     maxImagesPerRequest: z.number().int().positive().optional(),
     contextWindow: z.number().int().positive().optional(),
     maxOutputTokens: z.number().int().positive().optional(),
+    compaction: CompactionCapabilitySchema.nullable().optional(),
     reasoning: PartialReasoningCapabilitySchema.nullable().optional(),
   })
   .strict();
@@ -150,6 +165,15 @@ export function parseCapabilities(
       : {}),
     contextWindow: parsed.contextWindow,
     maxOutputTokens: parsed.maxOutputTokens,
+    ...(parsed.compaction !== undefined && parsed.compaction !== null
+      ? {
+          compaction: {
+            ...(parsed.compaction.triggerTokens !== undefined
+              ? { triggerTokens: parsed.compaction.triggerTokens }
+              : {}),
+          },
+        }
+      : {}),
     ...(parsed.reasoning !== undefined && parsed.reasoning !== null
       ? {
           reasoning: {
@@ -188,6 +212,17 @@ export function parsePartialCapabilities(value: unknown): PartialModelCapabiliti
       : {}),
     ...(parsed.contextWindow !== undefined ? { contextWindow: parsed.contextWindow } : {}),
     ...(parsed.maxOutputTokens !== undefined ? { maxOutputTokens: parsed.maxOutputTokens } : {}),
+    ...(parsed.compaction !== undefined
+      ? parsed.compaction === null
+        ? { compaction: null }
+        : {
+            compaction: {
+              ...(parsed.compaction.triggerTokens !== undefined
+                ? { triggerTokens: parsed.compaction.triggerTokens }
+                : {}),
+            },
+          }
+      : {}),
     ...(parsed.reasoning !== undefined
       ? parsed.reasoning === null
         ? { reasoning: null }

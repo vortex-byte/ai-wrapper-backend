@@ -41,7 +41,10 @@ export interface AnthropicClientLike {
     ): Promise<{ data: readonly { id: string }[] }>;
   };
   messages: {
-    create(params: unknown, options?: { signal?: AbortSignal }): Promise<AsyncIterable<unknown>>;
+    create(
+      params: unknown,
+      options?: { signal?: AbortSignal; headers?: Record<string, string> },
+    ): Promise<AsyncIterable<unknown>>;
   };
 }
 
@@ -80,6 +83,13 @@ const THINKING_BUDGETS: Readonly<Record<ReasoningEffort, number>> = {
 
 const DEFAULT_OUTPUT_DIR_ENV = 'OUTPUT_DIR';
 
+/** Provider-side compaction: the beta header and edit type are both provider-owned constants. */
+const COMPACTION_BETA = 'compact-2026-01-12';
+const COMPACTION_EDIT_TYPE = 'compact_20260112';
+
+/** Anthropic rejects a compaction trigger below this value. */
+const MIN_COMPACTION_TRIGGER = 50_000;
+
 /** Output directory instruction appended to system prompt when a container is active. */
 function outputDirAddendum(envVar: string): string {
   return (
@@ -117,11 +127,22 @@ interface DocumentBlock {
     readonly data: string;
   };
 }
+/** A summary that replaces the turns it covers. Replayed verbatim. */
+interface CompactionBlock {
+  readonly type: 'compaction';
+  readonly content: string;
+}
 /** Provider block replayed verbatim on a pause_turn continuation. */
 type ReplayBlock = { readonly type: string } & Record<string, unknown>;
 
 type OutgoingBlock =
-  TextBlock | ContainerUploadBlock | ToolUseBlock | ImageBlock | DocumentBlock | ReplayBlock;
+  | TextBlock
+  | ContainerUploadBlock
+  | ToolUseBlock
+  | ImageBlock
+  | DocumentBlock
+  | CompactionBlock
+  | ReplayBlock;
 
 interface OutgoingMessage {
   role: 'user' | 'assistant';
@@ -137,6 +158,18 @@ function mergeContent(
   const asBlocks = (content: OutgoingMessage['content']): OutgoingBlock[] =>
     typeof content === 'string' ? [{ type: 'text', text: content }] : [...content];
   return [...asBlocks(left), ...asBlocks(right)];
+}
+
+/** Rebuilds a compaction block from a stored part payload. */
+function compactionBlock(part: { readonly payload: unknown }): CompactionBlock {
+  const payload =
+    typeof part.payload === 'object' && part.payload !== null
+      ? (part.payload as Record<string, unknown>)
+      : {};
+  return {
+    type: 'compaction',
+    content: typeof payload['content'] === 'string' ? payload['content'] : '',
+  };
 }
 
 /** Replays paused response content verbatim on continuation. */
@@ -253,6 +286,8 @@ interface RawAnthropicStreamEvent {
     readonly partial_json?: string;
     readonly thinking?: string;
     readonly signature?: string;
+    /** `compaction_delta` only: the complete summary, delivered in one event. */
+    readonly content?: string | null;
     readonly stop_reason?: string | null;
   };
   readonly usage?: {
@@ -274,6 +309,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     const system = this.buildSystem(req);
     const container = this.buildContainer(req);
     const thinking = this.buildThinking(req);
+    const compaction = this.compactionEdit(req);
     // Extended thinking rejects sampling overrides, so they are dropped while it is enabled.
     const sampling = thinking === undefined;
 
@@ -288,6 +324,24 @@ export class AnthropicAdapter implements ProviderAdapter {
       ...(container.tools !== undefined ? { tools: container.tools } : {}),
       ...(container.container !== undefined ? { container: container.container } : {}),
       ...(thinking !== undefined ? { thinking } : {}),
+      ...(compaction !== undefined ? { context_management: compaction } : {}),
+    };
+  }
+
+  /** Compaction edits for this request; the block is passed alongside them on later turns. */
+  private compactionEdit(
+    req: NormalizedChatRequest,
+  ): { readonly edits: readonly unknown[] } | undefined {
+    if (req.model.capabilities.compaction === undefined) return undefined;
+    const window = req.model.capabilities.contextWindow;
+    if (window < MIN_COMPACTION_TRIGGER * 2) return undefined;
+    const configured = req.model.capabilities.compaction.triggerTokens;
+    const trigger = Math.min(
+      window - 1,
+      Math.max(MIN_COMPACTION_TRIGGER, configured ?? Math.floor(window * 0.8)),
+    );
+    return {
+      edits: [{ type: COMPACTION_EDIT_TYPE, trigger: { type: 'input_tokens', value: trigger } }],
     };
   }
 
@@ -379,9 +433,16 @@ export class AnthropicAdapter implements ProviderAdapter {
           ? (req.inputFiles ?? [])
           : [];
       const inline = media[index] ?? [];
+      const compaction = message.parts.find((part) => part.type === 'compaction');
 
       let content: string | OutgoingBlock[];
-      if (inline.length > 0 || mounts.length > 0) {
+      if (compaction !== undefined) {
+        // The compaction block stands in for the turns it summarizes and must come first.
+        content = [
+          compactionBlock(compaction),
+          ...(text.length > 0 ? [{ type: 'text' as const, text }] : []),
+        ];
+      } else if (inline.length > 0 || mounts.length > 0) {
         // Inline media first (the docs' recommended order for vision), then the prompt, then the
         // container mounts.
         content = [
@@ -406,8 +467,17 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     if (messages.length === 0) {
       messages.push({ role: 'user', content: ' ' });
-    } else if (messages[0]?.role === 'assistant') {
-      messages.unshift({ role: 'user', content: ' ' });
+    } else {
+      const first = messages[0];
+      // A compaction block must be the first block in the array; scaffolding before it would
+      // break the provider's prefix check.
+      const startsWithCompaction =
+        first !== undefined &&
+        Array.isArray(first.content) &&
+        first.content[0]?.type === 'compaction';
+      if (first?.role === 'assistant' && !startsWithCompaction) {
+        messages.unshift({ role: 'user', content: ' ' });
+      }
     }
 
     return messages;
@@ -506,7 +576,10 @@ export class AnthropicAdapter implements ProviderAdapter {
 
       let stream: AsyncIterable<unknown>;
       try {
-        stream = await client.messages.create({ ...baseParams, messages }, { signal: ctx.signal });
+        stream = await client.messages.create(
+          { ...baseParams, messages },
+          { signal: ctx.signal, headers: this.requestHeaders(req) },
+        );
       } catch (err) {
         yield { type: 'error', error: this.translateError(err) };
         return;
@@ -673,6 +746,11 @@ export class AnthropicAdapter implements ProviderAdapter {
       return;
     }
 
+    // A compaction block opens here; its summary arrives in a single `compaction_delta`.
+    if (blockType === 'compaction') {
+      return;
+    }
+
     // A server tool result arrives whole (no deltas) — mine it for generated files.
     if (blockType.endsWith('_tool_result')) {
       yield* this.handleToolResult(ev, blockType);
@@ -712,6 +790,22 @@ export class AnthropicAdapter implements ProviderAdapter {
         runState.blockText.set(index, '');
         yield { type: 'part_started', index, partType: 'text' };
       }
+    }
+
+    // The complete summary arrives in one delta. A null summary means nothing was compacted,
+    // so the original messages must be kept.
+    if (ev.delta?.type === 'compaction_delta') {
+      const content = typeof ev.delta.content === 'string' ? ev.delta.content : '';
+      const block = runState.turnBlocks.get(index);
+      if (block !== undefined) block['content'] = content;
+      if (content.length > 0) {
+        yield {
+          type: 'compaction',
+          provider: 'anthropic',
+          payload: { type: 'compaction', content },
+        };
+      }
+      return;
     }
 
     if (ev.delta?.type === 'input_json_delta' && ev.delta.partial_json !== undefined) {
@@ -1155,6 +1249,26 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
 
     return { providerFileId: payload.id };
+  }
+
+  /** Provider betas for this request: configured betas plus compaction when it is in use. */
+  private requestHeaders(req: NormalizedChatRequest): Record<string, string> {
+    const configured = req.provider.config['anthropicBeta'];
+    const betas: string[] = Array.isArray(configured)
+      ? configured.filter((value): value is string => typeof value === 'string')
+      : typeof configured === 'string' && configured !== ''
+        ? [configured]
+        : [];
+    const hasCompactionMessage = req.messages.some((m) =>
+      m.parts.some((p) => p.type === 'compaction'),
+    );
+    if (
+      (this.compactionEdit(req) !== undefined || hasCompactionMessage) &&
+      !betas.includes(COMPACTION_BETA)
+    ) {
+      betas.push(COMPACTION_BETA);
+    }
+    return betas.length > 0 ? { 'anthropic-beta': betas.join(',') } : {};
   }
 
   private apiBase(provider: ProviderRuntimeConfig): string {

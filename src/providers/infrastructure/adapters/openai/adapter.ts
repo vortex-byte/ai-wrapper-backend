@@ -252,6 +252,8 @@ interface RawResponsesItem {
   /** `image_generation_call` only: the generated image as base64 (no file id exists). */
   readonly result?: string | null;
   readonly revised_prompt?: string | null;
+  /** `compaction` items only: the opaque, encrypted replacement for older turns. */
+  readonly encrypted_content?: string | null;
 }
 
 interface RawResponsesUsage {
@@ -430,10 +432,22 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     req.messages.forEach((msg, index) => {
-      const text = msg.parts
+      const textPieces = msg.parts
         .filter((p) => p.type === 'text')
-        .map((p) => (p as { text: string }).text)
-        .join('');
+        .map((p) => (p as { text: string }).text);
+      for (const p of msg.parts) {
+        if (p.type === 'compaction') {
+          const payload = p.payload;
+          const summary =
+            typeof payload === 'object' && payload !== null && 'content' in payload
+              ? String((payload as { content: unknown }).content)
+              : '';
+          if (summary.length > 0) {
+            textPieces.unshift(`[Previous conversation summary]: ${summary}`);
+          }
+        }
+      }
+      const text = textPieces.join('\n\n');
       const inline = media[index] ?? [];
 
       let content: OpenAIMessage['content'];
@@ -532,6 +546,9 @@ export class OpenAIAdapter implements ProviderAdapter {
       ...(tools.some((tool) => (tool as { type?: string }).type === 'code_interpreter')
         ? { include: ['code_interpreter_call.outputs'] }
         : {}),
+      ...(this.compactionConfig(req) !== undefined
+        ? { context_management: this.compactionConfig(req) }
+        : {}),
     };
   }
 
@@ -544,6 +561,11 @@ export class OpenAIAdapter implements ProviderAdapter {
     );
 
     for (const [index, message] of req.messages.entries()) {
+      // A stored compaction item stands in for the turns it covers and is replayed verbatim.
+      for (const part of message.parts) {
+        if (part.type === 'compaction') items.push(part.payload);
+      }
+
       const text = message.parts
         .filter((part) => part.type === 'text')
         .map((part) => (part as { text: string }).text)
@@ -854,9 +876,26 @@ export class OpenAIAdapter implements ProviderAdapter {
     return req.model.config['imageGeneration'] !== false;
   }
 
-  /** The Responses API is required for cloud containers and for the hosted image tool. */
+  /** The Responses API is required for cloud containers, hosted images, and compaction. */
   private responsesEnabled(req: NormalizedChatRequest): boolean {
-    return this.containerEnabled(req) || this.imageGenerationEnabled(req);
+    return (
+      this.containerEnabled(req) ||
+      this.imageGenerationEnabled(req) ||
+      req.model.capabilities.compaction !== undefined ||
+      req.messages.some((message) => message.parts.some((part) => part.type === 'compaction'))
+    );
+  }
+
+  /** Compaction settings for a Responses request; sent every turn so a new item can stack. */
+  private compactionConfig(req: NormalizedChatRequest): readonly unknown[] | undefined {
+    const capability = req.model.capabilities.compaction;
+    if (capability === undefined) return undefined;
+    const window = req.model.capabilities.contextWindow;
+    const threshold = Math.min(
+      window - 1,
+      capability.triggerTokens ?? Math.max(1000, Math.floor(window * 0.8)),
+    );
+    return [{ type: 'compaction', compact_threshold: threshold }];
   }
 
   /** Runs a Responses API turn, mapping events and harvesting generated files before finish. */
@@ -1114,6 +1153,11 @@ export class OpenAIAdapter implements ProviderAdapter {
       const failed = item.status === 'failed' || item.status === 'incomplete';
       if (!failed) yield* this.imageArtifact(item, state, req);
       yield* this.completeTool(item.id ?? 'image_generation', failed ? 'error' : 'success', state);
+      return;
+    }
+
+    if (item.type === 'compaction') {
+      yield { type: 'compaction', provider: 'openai', payload: item };
     }
   }
 

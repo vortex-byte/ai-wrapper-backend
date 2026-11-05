@@ -50,8 +50,24 @@ export interface ToolResultPart {
   readonly isError?: boolean;
 }
 
+/**
+ * A provider-side compaction block that stands in for the turns it summarizes. The payload is
+ * provider-owned and must be replayed verbatim (Anthropic's summary text, OpenAI's encrypted item).
+ */
+export interface CompactionPart {
+  readonly type: 'compaction';
+  readonly provider: string;
+  readonly payload: unknown;
+}
+
 export type NormalizedPart =
-  TextPart | ImagePart | DocumentPart | GeneratedFilePart | ToolCallPart | ToolResultPart;
+  | TextPart
+  | ImagePart
+  | DocumentPart
+  | GeneratedFilePart
+  | ToolCallPart
+  | ToolResultPart
+  | CompactionPart;
 
 export interface NormalizedMessage {
   readonly role: 'user' | 'assistant';
@@ -109,6 +125,12 @@ export type GenerationEvent =
       readonly bytes?: Uint8Array;
       /** Index of the `part_started` this artifact belongs to, when the provider gives one. */
       readonly index?: number;
+    }
+  | {
+      /** A provider-side compaction block was emitted; it replaces the turns it summarizes. */
+      readonly type: 'compaction';
+      readonly provider: string;
+      readonly payload: unknown;
     }
   | { readonly type: 'part_done'; readonly index: number; readonly fileId?: string }
   | { readonly type: 'progress'; readonly stage: string; readonly percent?: number }

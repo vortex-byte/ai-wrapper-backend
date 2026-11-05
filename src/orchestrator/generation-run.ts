@@ -25,6 +25,14 @@ export interface GenerationRunPartStartedInput {
   readonly mimeType?: string | undefined;
 }
 
+/** A provider compaction block, already assigned its part row identity. */
+export interface GenerationRunCompactionInput {
+  readonly partId: string;
+  readonly position: number;
+  readonly provider: string;
+  readonly payload: unknown;
+}
+
 /** Provider-emitted binary artifact awaiting hydration. */
 export interface GenerationRunArtifactInput {
   readonly partId: string;
@@ -40,6 +48,7 @@ export interface GenerationRunHooks {
   readonly onStart?: ((generationId: string) => Promise<void>) | undefined;
   readonly onPartStarted?: ((input: GenerationRunPartStartedInput) => Promise<void>) | undefined;
   readonly onPartDone?: ((partId: string, text: string) => Promise<void>) | undefined;
+  readonly onCompaction?: ((input: GenerationRunCompactionInput) => Promise<void>) | undefined;
   readonly onArtifact?:
     ((input: GenerationRunArtifactInput) => Promise<{ attachmentId: string } | null>) | undefined;
   readonly onTextChunk?:
@@ -73,6 +82,8 @@ export interface GenerationRunInput {
   readonly contextInfo: {
     readonly truncated: boolean;
     readonly droppedMessageCount?: number | undefined;
+    readonly compactedMessageCount?: number | undefined;
+    readonly reason?: 'context_window' | 'quota' | undefined;
   };
   readonly clock: Clock;
   readonly idGen: IdGenerator;
@@ -212,6 +223,7 @@ export class GenerationRun {
     if (input.contextInfo.truncated) {
       this.ringBuffer.push('context.truncated', {
         droppedMessages: input.contextInfo.droppedMessageCount ?? 0,
+        ...(input.contextInfo.reason !== undefined ? { reason: input.contextInfo.reason } : {}),
       });
     }
 
@@ -498,6 +510,21 @@ export class GenerationRun {
       case 'artifact_emitted':
         await this.hydrateArtifact(event);
         break;
+
+      case 'compaction': {
+        const partId = this.idGen.uuidv7();
+        const position = this.nextPartPosition++;
+        if (this.hooks?.onCompaction !== undefined) {
+          await this.hooks.onCompaction({
+            partId,
+            position,
+            provider: event.provider,
+            payload: event.payload,
+          });
+        }
+        this.emitFrame('context.compacted', { provider: event.provider });
+        break;
+      }
 
       case 'part_done':
         this.textCoalescer.flush();

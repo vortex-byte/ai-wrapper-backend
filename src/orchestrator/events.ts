@@ -6,6 +6,7 @@ export type SSEEventType =
   | 'generation.state'
   | 'message.created'
   | 'context.truncated'
+  | 'context.compacted'
   | 'part.started'
   | 'text.delta'
   | 'part.completed'
@@ -30,6 +31,13 @@ export interface MessageCreatedPayload {
 export interface ContextTruncatedPayload {
   readonly droppedMessages: number;
   readonly droppedAttachments?: number;
+  /** Why history was dropped: the model window or the user's remaining quota. */
+  readonly reason?: 'context_window' | 'quota';
+}
+
+/** Emitted when the provider replaced older turns with a compaction block. */
+export interface ContextCompactedPayload {
+  readonly provider: string;
 }
 
 export interface PartStartedPayload {

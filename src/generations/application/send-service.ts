@@ -134,6 +134,16 @@ export function createSendService(deps: SendMessageDeps): SendService {
     }
   };
 
+  /** Converts a quota allowance back into raw model tokens (the unit the context builder uses). */
+  const remainingRawInputTokens = async (
+    userId: string,
+    quotaWeight: number,
+  ): Promise<number | null> => {
+    const remaining = await deps.quota.remainingTokens(userId);
+    if (remaining === null) return null;
+    return Math.floor(remaining / quotaWeight);
+  };
+
   return {
     async send(input) {
       const conversation = await deps.conversations.findByIdForUser(
@@ -233,6 +243,10 @@ export function createSendService(deps: SendMessageDeps): SendService {
 
       const generationId = deps.idGen.uuidv7();
       const userIdHash = createHash('sha256').update(input.userId).digest('hex').slice(0, 32);
+      const remainingQuotaTokens = await remainingRawInputTokens(
+        input.userId,
+        runtime.model.quotaWeight,
+      );
       let enqueuePayload: EnqueueGenerationInput | null = null;
 
       const outcome = await withTransaction(async (tx) => {
@@ -285,6 +299,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           userIdHash,
           ...(wantsImageOutput ? { imageGeneration: true } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+          userRemainingQuota: remainingQuotaTokens,
         });
 
         const seqs = await deps.conversations.allocateSeqPair(conversation.id, tx);
@@ -377,6 +392,8 @@ export function createSendService(deps: SendMessageDeps): SendService {
               contextInfo: {
                 truncated: built.truncation.truncated,
                 droppedMessageCount: built.truncation.droppedMessageCount,
+                compactedMessageCount: built.truncation.compactedMessageCount,
+                reason: built.truncation.reason,
               },
             },
             tx,
@@ -470,6 +487,8 @@ export function createSendService(deps: SendMessageDeps): SendService {
           contextInfo: {
             truncated: built.truncation.truncated,
             droppedMessageCount: built.truncation.droppedMessageCount,
+            compactedMessageCount: built.truncation.compactedMessageCount,
+            ...(built.truncation.reason !== 'none' ? { reason: built.truncation.reason } : {}),
           },
           ...(modelTimeoutMs !== undefined ? { timeoutMs: modelTimeoutMs } : {}),
         };
@@ -622,6 +641,10 @@ export function createSendService(deps: SendMessageDeps): SendService {
 
       const generationId = deps.idGen.uuidv7();
       const userIdHash = createHash('sha256').update(input.userId).digest('hex').slice(0, 32);
+      const remainingQuotaTokens = await remainingRawInputTokens(
+        input.userId,
+        runtime.model.quotaWeight,
+      );
       let enqueuePayload: EnqueueGenerationInput | null = null;
 
       const outcome = await withTransaction(async (tx) => {
@@ -677,6 +700,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           userIdHash,
           ...(wantsImageOutput ? { imageGeneration: true } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+          userRemainingQuota: remainingQuotaTokens,
         });
 
         const newAssistantSeq = await deps.conversations.allocateSeq(conversation.id, 1, tx);
@@ -730,6 +754,8 @@ export function createSendService(deps: SendMessageDeps): SendService {
               contextInfo: {
                 truncated: built.truncation.truncated,
                 droppedMessageCount: built.truncation.droppedMessageCount,
+                compactedMessageCount: built.truncation.compactedMessageCount,
+                reason: built.truncation.reason,
               },
             },
             tx,
@@ -813,6 +839,8 @@ export function createSendService(deps: SendMessageDeps): SendService {
           contextInfo: {
             truncated: built.truncation.truncated,
             droppedMessageCount: built.truncation.droppedMessageCount,
+            compactedMessageCount: built.truncation.compactedMessageCount,
+            ...(built.truncation.reason !== 'none' ? { reason: built.truncation.reason } : {}),
           },
           ...(modelTimeoutMs !== undefined ? { timeoutMs: modelTimeoutMs } : {}),
         };

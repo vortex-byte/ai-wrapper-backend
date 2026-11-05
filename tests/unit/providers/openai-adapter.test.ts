@@ -643,3 +643,127 @@ describe('OpenAIAdapter — multimodal input and reasoning config', () => {
     ).rejects.toThrow('secret_not_configured');
   });
 });
+
+describe('OpenAIAdapter — provider-native compaction', () => {
+  const compactingRequest = (overrides: Partial<NormalizedChatRequest> = {}) => {
+    const base = makeOpenAIRequest();
+    return makeOpenAIRequest({
+      model: {
+        ...base.model,
+        capabilities: { ...base.model.capabilities, compaction: {} },
+      },
+      ...overrides,
+    });
+  };
+
+  const capturingClient = (calls: Array<Record<string, unknown>>): OpenAIClientLike => ({
+    models: { list: async () => ({ data: [] }) },
+    chat: {
+      completions: {
+        create: async () => {
+          throw new Error('the Chat Completions path must not be used for compaction');
+        },
+      },
+    },
+    responses: {
+      create: async (params: unknown) => {
+        calls.push(params as Record<string, unknown>);
+        return (async function* () {
+          yield { type: 'response.created', response: { id: 'resp-1' } };
+          yield {
+            type: 'response.output_item.done',
+            item: { type: 'compaction', id: 'cmp-1', encrypted_content: 'opaque' },
+          };
+          yield { type: 'response.output_text.delta', delta: 'Hello' };
+          yield {
+            type: 'response.completed',
+            response: {
+              id: 'resp-1',
+              usage: { input_tokens: 10, output_tokens: 2 },
+            },
+          };
+        })();
+      },
+    },
+  });
+
+  it('requests compaction through the Responses API and emits the block', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIAdapter(() => capturingClient(calls));
+
+    const events = await collect(adapter, compactingRequest());
+
+    expect(calls[0]?.['context_management']).toEqual([
+      { type: 'compaction', compact_threshold: 102_400 },
+    ]);
+    expect(events.find((e) => e.type === 'compaction')).toEqual({
+      type: 'compaction',
+      provider: 'openai',
+      payload: { type: 'compaction', id: 'cmp-1', encrypted_content: 'opaque' },
+    });
+  });
+
+  it('replays a stored compaction item and keeps requesting compaction', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIAdapter(() => capturingClient(calls));
+
+    await collect(
+      adapter,
+      compactingRequest({
+        messages: [
+          {
+            role: 'assistant',
+            parts: [
+              {
+                type: 'compaction',
+                provider: 'openai',
+                payload: { type: 'compaction', id: 'cmp-1', encrypted_content: 'opaque' },
+              },
+              { type: 'text', text: 'previous answer' },
+            ],
+          },
+          { role: 'user', parts: [{ type: 'text', text: 'next question' }] },
+        ],
+      }),
+    );
+
+    // A new compaction item may stack on the replayed one as the context grows again.
+    expect(calls[0]?.['context_management']).toEqual([
+      { type: 'compaction', compact_threshold: 102_400 },
+    ]);
+    expect(calls[0]?.['input']).toEqual([
+      { type: 'compaction', id: 'cmp-1', encrypted_content: 'opaque' },
+      { role: 'assistant', content: 'previous answer' },
+      { role: 'user', content: [{ type: 'input_text', text: 'next question' }] },
+    ]);
+  });
+
+  it('routes to the Responses API when replaying a historical compaction item even without model compaction capability', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIAdapter(() => capturingClient(calls));
+
+    await collect(
+      adapter,
+      makeOpenAIRequest({
+        messages: [
+          {
+            role: 'assistant',
+            parts: [
+              {
+                type: 'compaction',
+                provider: 'openai',
+                payload: { type: 'compaction', id: 'cmp-2', encrypted_content: 'opaque-2' },
+              },
+            ],
+          },
+          { role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+        ],
+      }),
+    );
+
+    expect(calls[0]?.['input']).toEqual([
+      { type: 'compaction', id: 'cmp-2', encrypted_content: 'opaque-2' },
+      { role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+    ]);
+  });
+});

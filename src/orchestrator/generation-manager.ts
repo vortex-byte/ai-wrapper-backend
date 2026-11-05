@@ -25,6 +25,8 @@ export interface EnqueueInput {
   readonly contextInfo: {
     readonly truncated: boolean;
     readonly droppedMessageCount?: number | undefined;
+    readonly compactedMessageCount?: number | undefined;
+    readonly reason?: 'context_window' | 'quota' | undefined;
   };
   readonly timeoutMs?: number | undefined;
   readonly hooks?: GenerationRunHooks | undefined;
@@ -174,6 +176,28 @@ export class GenerationManager {
           }
           if (input.hooks?.onPartStarted !== undefined) {
             await input.hooks.onPartStarted(part);
+          }
+        },
+        onCompaction: async (compaction) => {
+          if (this.conversationRepo !== undefined) {
+            await this.conversationRepo.insertParts([
+              {
+                id: compaction.partId,
+                messageId: input.assistantMessageId,
+                position: compaction.position,
+                type: 'compaction',
+                // Replayed verbatim on later turns, so it is terminal the moment it arrives.
+                status: 'complete',
+                textContent: null,
+                data: { provider: compaction.provider, payload: compaction.payload },
+                fileId: null,
+                createdAt: this.clock.now(),
+                updatedAt: this.clock.now(),
+              },
+            ]);
+          }
+          if (input.hooks?.onCompaction !== undefined) {
+            await input.hooks.onCompaction(compaction);
           }
         },
         onArtifact: async (artifact) => {

@@ -439,6 +439,7 @@ File `status`: `available | processing | expired | missing` (`expired`/`missing`
 | `image` | `origin` (`user`\|`assistant`), `file` |
 | `document` | `file` (extracted text is never returned inline) |
 | `generated_file` | `origin`, `file` |
+| `compaction` | `provider`, `compacted: true` — a subtle "context compacted" divider; the provider payload is never sent |
 | `structured` (P2) | `data` |
 | reserved: `tool_call`, `tool_result`, `reasoning` | ignored by clients that don't know them |
 
@@ -617,7 +618,8 @@ data: {"finishReason":"stop","usage":{"inputTokens":18250,"outputTokens":1190,"q
 |---|---|---|
 | `generation.state` | `{state}` | `pending \| generating \| …` |
 | `message.created` | `{userMessageId, assistantMessageId}` | first frame |
-| `context.truncated` | `{droppedMessages, droppedAttachments}` | UI notice |
+| `context.truncated` | `{droppedMessages, droppedAttachments?, reason?}` | UI notice; `reason` is `context_window` or `quota` |
+| `context.compacted` | `{provider}` | provider replaced older turns with a compaction block; render a subtle divider and keep older messages visible |
 | `part.started` | `{partId, position, type, mimeType?, name?}` | new part (`text \| image \| document \| generated_file`); `position` is monotonic across all part types in the message |
 | `text.delta` | `{partId, delta}` | text chunk (coalesced ≤ 20/s) |
 | `tool.started` | `{partId, toolCallId, tool, command?}` | tool execution starting (e.g. `bash_code_execution`, `web_search`); `command` is present when the tool input carries one |
@@ -1361,6 +1363,7 @@ Writes an `audit_logs` row (`action: "provider.delete"`) and invalidates the reg
 | `status` | string (`active` \| `disabled`) | No | Model status (default `disabled`). |
 | `capabilities` | object | Conditional | Normalized capability flags object (required on `POST`, optional on `PATCH`). |
 | `capabilities.reasoning` | object \| null | No | Reasoning support. `{ "availableEfforts": ["low","medium","high"], "defaultEffort": "medium" }`; `defaultEffort` must be one of `availableEfforts`. Send `null` to clear it. Omitted keeps the stored value. |
+| `capabilities.compaction` | object \| null | No | Provider-native context compaction. `{ "triggerTokens"?: integer }` sets the token threshold at which the provider summarizes older turns; omit `triggerTokens` to let the adapter pick a default. Present ⇒ the model compacts server-side instead of using the sliding window. Send `null` to clear it. Omitted keeps the stored value. |
 | `contextWindow` | integer | Conditional | Context window token capacity (> 0) (required on `POST`, optional on `PATCH`). |
 | `maxOutputTokens` | integer | Conditional | Maximum supported output tokens (> 0) (required on `POST`, optional on `PATCH`). |
 | `defaultMaxOutputTokens` | integer | Conditional | Default max output tokens (required on `POST`, optional on `PATCH`). |
@@ -1703,7 +1706,7 @@ Errors after a stream has started cannot change the HTTP status: they arrive as 
 | Message role | `user`, `assistant` |
 | Message status | `streaming`, `complete`, `incomplete`, `failed` |
 | Finish reason | `stop`, `length`, `content_filter`, `cancelled`, `error`, `timeout`, `interrupted` |
-| Part type | `text`, `image`, `document`, `generated_file`, `structured` (reserved: `tool_call`, `tool_result`, `reasoning`) |
+| Part type | `text`, `image`, `document`, `generated_file`, `compaction`, `structured` (reserved: `tool_call`, `tool_result`, `reasoning`) |
 | Generation status | `pending`, `generating`, `completed`, `cancelled`, `failed` |
 | Attachment status | `uploading`, `validating`, `processing`, `ready`, `rejected`, `failed`, `missing`, `expired`, `deleted` |
 | File availability (wire) | `available`, `processing`, `expired`, `missing` |

@@ -103,4 +103,38 @@ describe('capabilities schema', () => {
   it('rejects an unknown effort value in a partial patch', () => {
     expect(() => parsePartialCapabilities({ reasoning: { defaultEffort: 'extreme' } })).toThrow();
   });
+
+  it('parses valid compaction capability with triggerTokens', () => {
+    const parsed = parseCapabilities({
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      compaction: { triggerTokens: 100_000 },
+    });
+    expect(parsed.compaction).toEqual({ triggerTokens: 100_000 });
+  });
+
+  it('rejects compaction triggerTokens under 1,000', () => {
+    const result = ModelCapabilitiesSchema.safeParse({
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      compaction: { triggerTokens: 500 },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects compaction triggerTokens equal to or greater than contextWindow', () => {
+    const resultEqual = ModelCapabilitiesSchema.safeParse({
+      contextWindow: 100_000,
+      maxOutputTokens: 4_096,
+      compaction: { triggerTokens: 100_000 },
+    });
+    expect(resultEqual.success).toBe(false);
+
+    const resultGreater = ModelCapabilitiesSchema.safeParse({
+      contextWindow: 100_000,
+      maxOutputTokens: 4_096,
+      compaction: { triggerTokens: 120_000 },
+    });
+    expect(resultGreater.success).toBe(false);
+  });
 });

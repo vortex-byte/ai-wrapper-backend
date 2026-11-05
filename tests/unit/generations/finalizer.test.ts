@@ -605,4 +605,27 @@ describe('Finalizer — non-text part reconciliation', () => {
 
     expect(updates.get('file-1')?.['status']).toBe('failed');
   });
+
+  it('marks compaction part failed if generation fails or is cancelled', async () => {
+    const updatesFailed = await run('failed', [
+      part({ id: 'text-1' }),
+      part({ id: 'comp-1', type: 'compaction', position: 1, status: 'complete' }),
+    ]);
+    expect(updatesFailed.get('comp-1')?.['status']).toBe('failed');
+
+    const updatesCancelled = await run('cancelled', [
+      part({ id: 'text-1' }),
+      part({ id: 'comp-2', type: 'compaction', position: 1, status: 'complete' }),
+    ]);
+    expect(updatesCancelled.get('comp-2')?.['status']).toBe('failed');
+  });
+
+  it('preserves compaction part status when generation completes successfully', async () => {
+    const updatesCompleted = await run('completed', [
+      part({ id: 'text-1' }),
+      part({ id: 'comp-1', type: 'compaction', position: 1, status: 'complete' }),
+    ]);
+    // Compaction was complete and generation completed; no failure update on comp-1
+    expect(updatesCompleted.get('comp-1')).toBeUndefined();
+  });
 });

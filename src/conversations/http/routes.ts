@@ -268,6 +268,14 @@ function toWirePart(
       file: summary === undefined ? null : toWireFile(summary),
     };
   }
+  if (part.type === 'compaction') {
+    // The payload is provider-owned (summary text or an encrypted blob) and is never sent to clients.
+    return {
+      ...base,
+      provider: typeof part.data['provider'] === 'string' ? part.data['provider'] : 'unknown',
+      compacted: true,
+    };
+  }
   return { ...base, data: part.data };
 }
 

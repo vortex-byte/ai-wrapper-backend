@@ -607,6 +607,13 @@ export class GeminiAdapter implements ProviderAdapter {
         { retryable: false },
       );
     }
+    if (part.type === 'compaction') {
+      throw providerError(
+        'unsupported_for_model',
+        'This model does not support provider-side compaction.',
+        { retryable: false },
+      );
+    }
 
     // A document the context builder already extracted stays cheap text unless native is required.
     if (

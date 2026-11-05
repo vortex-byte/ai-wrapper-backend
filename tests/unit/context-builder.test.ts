@@ -327,4 +327,354 @@ describe('Context Builder', () => {
     const firstMsgText = (result.request.messages[0]?.parts[0] as { text: string }).text;
     expect(firstMsgText).toContain('Annual revenue was 5M.');
   });
+
+  it('anchors history at a stored compaction block and drops everything older', () => {
+    const compactingModel: ModelRuntimeConfig = {
+      ...mockModel,
+      capabilities: { ...mockModel.capabilities, compaction: {} },
+    };
+
+    const history = [
+      userItem(1, 'ancient question'),
+      assistantTextItem(2, 'ancient answer'),
+      {
+        message: {
+          id: 'msg-c-3',
+          conversationId: 'c-1',
+          seq: 3,
+          role: 'assistant' as const,
+          status: 'complete' as const,
+          finishReason: 'stop' as const,
+          supersededBy: null,
+          metadata: {},
+          createdAt: new Date(),
+          completedAt: new Date(),
+        },
+        parts: [
+          {
+            id: 'p-c-3',
+            messageId: 'msg-c-3',
+            position: 0,
+            type: 'compaction' as const,
+            status: 'complete' as const,
+            textContent: null,
+            data: {
+              provider: 'anthropic',
+              payload: { type: 'compaction', content: 'summary of turns' },
+            },
+            fileId: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          {
+            id: 'p-c-3b',
+            messageId: 'msg-c-3',
+            position: 1,
+            type: 'text' as const,
+            status: 'complete' as const,
+            textContent: 'answer after compaction',
+            data: {},
+            fileId: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      },
+    ];
+
+    const result = buildContext({
+      requestId: 'req-compact',
+      generationId: 'gen-compact',
+      model: compactingModel,
+      provider: { ...mockProvider, key: 'anthropic', adapter: 'anthropic' },
+      newParts: [{ type: 'text', text: 'next question' }],
+      history,
+      userIdHash: 'hash-1',
+    });
+
+    expect(result.request.messages).toHaveLength(2);
+    expect(result.request.messages[0]?.role).toBe('assistant');
+    expect(result.request.messages[0]?.parts[0]).toEqual({
+      type: 'compaction',
+      provider: 'anthropic',
+      payload: { type: 'compaction', content: 'summary of turns' },
+    });
+    expect(result.request.messages[1]?.role).toBe('user');
+    expect(result.truncation.reason).toBe('none');
+    expect(result.truncation.truncated).toBe(false);
+    expect(result.truncation.droppedMessageCount).toBe(0);
+    expect(result.truncation.compactedMessageCount).toBe(2);
+  });
+
+  it('throws context_too_large when the compaction anchor cannot fit in model context window', () => {
+    const compactingModel: ModelRuntimeConfig = {
+      ...mockModel,
+      capabilities: { ...mockModel.capabilities, compaction: {}, contextWindow: 2000, maxOutputTokens: 200 },
+      defaultMaxOutputTokens: 200,
+    };
+
+    const history = [
+      {
+        message: {
+          id: 'msg-huge-c',
+          conversationId: 'c-1',
+          seq: 1,
+          role: 'assistant' as const,
+          status: 'complete' as const,
+          finishReason: 'stop' as const,
+          supersededBy: null,
+          metadata: {},
+          createdAt: new Date(),
+          completedAt: new Date(),
+        },
+        parts: [
+          {
+            id: 'p-huge',
+            messageId: 'msg-huge-c',
+            position: 0,
+            type: 'compaction' as const,
+            status: 'complete' as const,
+            textContent: null,
+            data: {
+              provider: 'anthropic',
+              payload: { type: 'compaction', content: 'w'.repeat(10_000) },
+            },
+            fileId: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      },
+    ];
+
+    expect(() =>
+      buildContext({
+        requestId: 'req-huge-compact',
+        generationId: 'gen-huge-compact',
+        model: compactingModel,
+        provider: mockProvider,
+        newParts: [{ type: 'text', text: 'new prompt' }],
+        history,
+        userIdHash: 'hash-1',
+      }),
+    ).toThrowError(/exceed model context window/);
+  });
+
+  it('converts readable Anthropic compaction summary to text on cross-provider replay', () => {
+    const openaiProvider: ProviderRuntimeConfig = {
+      providerId: 'p-openai',
+      key: 'openai',
+      adapter: 'openai',
+      config: {},
+      secrets: {},
+    };
+
+    const history = [
+      {
+        message: {
+          id: 'msg-anthro-c',
+          conversationId: 'c-1',
+          seq: 1,
+          role: 'assistant' as const,
+          status: 'complete' as const,
+          finishReason: 'stop' as const,
+          supersededBy: null,
+          metadata: {},
+          createdAt: new Date(),
+          completedAt: new Date(),
+        },
+        parts: [
+          {
+            id: 'p-anthro',
+            messageId: 'msg-anthro-c',
+            position: 0,
+            type: 'compaction' as const,
+            status: 'complete' as const,
+            textContent: null,
+            data: {
+              provider: 'anthropic',
+              payload: { type: 'compaction', content: 'summary of old conversation' },
+            },
+            fileId: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      },
+    ];
+
+    const result = buildContext({
+      requestId: 'req-cross',
+      generationId: 'gen-cross',
+      model: { ...mockModel, capabilities: { ...mockModel.capabilities, compaction: {} } },
+      provider: openaiProvider,
+      newParts: [{ type: 'text', text: 'new turn' }],
+      history,
+      userIdHash: 'hash-1',
+    });
+
+    expect(result.request.messages[0]?.parts[0]?.type).toBe('text');
+    expect((result.request.messages[0]?.parts[0] as { text: string }).text).toContain(
+      'summary of old conversation',
+    );
+  });
+
+  it('drops the compaction anchor when quota is too small to afford it', () => {
+    const compactingModel: ModelRuntimeConfig = {
+      ...mockModel,
+      capabilities: { ...mockModel.capabilities, compaction: {} },
+    };
+
+    const history = [
+      userItem(1, 'ancient question'),
+      {
+        message: {
+          id: 'msg-c-3',
+          conversationId: 'c-1',
+          seq: 3,
+          role: 'assistant' as const,
+          status: 'complete' as const,
+          finishReason: 'stop' as const,
+          supersededBy: null,
+          metadata: {},
+          createdAt: new Date(),
+          completedAt: new Date(),
+        },
+        parts: [
+          {
+            id: 'p-c-3',
+            messageId: 'msg-c-3',
+            position: 0,
+            type: 'compaction' as const,
+            status: 'complete' as const,
+            textContent: null,
+            data: {
+              provider: 'anthropic',
+              payload: { type: 'compaction', content: 's'.repeat(40_000) },
+            },
+            fileId: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      },
+      userItem(4, 'recent question'),
+      assistantTextItem(5, 'recent answer'),
+    ];
+
+    const result = buildContext({
+      requestId: 'req-compact-quota',
+      generationId: 'gen-compact-quota',
+      model: compactingModel,
+      provider: mockProvider,
+      newParts: [{ type: 'text', text: 'next question' }],
+      history,
+      userIdHash: 'hash-1',
+      userRemainingQuota: 5_000,
+    });
+
+    // The summary no longer fits, so only the turns after it are sent.
+    expect(result.request.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(result.request.messages[0]?.parts[0]?.type).toBe('text');
+    expect(result.truncation.reason).toBe('quota');
+  });
+
+  it('trims history to the remaining quota instead of failing', () => {
+    const history = [
+      userItem(1, 'x'.repeat(10_000)),
+      assistantTextItem(2, 'y'.repeat(10_000)),
+      userItem(3, 'z'.repeat(10_000)),
+      assistantTextItem(4, 'w'.repeat(10_000)),
+    ];
+
+    const result = buildContext({
+      requestId: 'req-quota',
+      generationId: 'gen-quota',
+      model: mockModel,
+      provider: mockProvider,
+      newParts: [{ type: 'text', text: 'still answer me' }],
+      history,
+      userIdHash: 'hash-1',
+      userRemainingQuota: 1_500,
+    });
+
+    expect(result.request.messages).toHaveLength(1);
+    expect(result.truncation.truncated).toBe(true);
+    expect(result.truncation.reason).toBe('quota');
+  });
+
+  it('reports context_window when the model window is the binding constraint', () => {
+    const history = [
+      userItem(1, 'x'.repeat(25_000)),
+      assistantTextItem(2, 'y'.repeat(25_000)),
+    ];
+
+    const result = buildContext({
+      requestId: 'req-window',
+      generationId: 'gen-window',
+      model: mockModel,
+      provider: mockProvider,
+      newParts: [{ type: 'text', text: 'New prompt' }],
+      history,
+      userIdHash: 'hash-1',
+    });
+
+    expect(result.truncation.truncated).toBe(true);
+    expect(result.truncation.reason).toBe('context_window');
+  });
 });
+
+function historyMessage(seq: number, role: 'user' | 'assistant') {
+  return {
+    id: `msg-${seq}`,
+    conversationId: 'c-1',
+    seq,
+    role,
+    status: 'complete' as const,
+    finishReason: role === 'assistant' ? ('stop' as const) : null,
+    supersededBy: null,
+    metadata: {},
+    createdAt: new Date(),
+    completedAt: new Date(),
+  };
+}
+
+function userItem(seq: number, text: string) {
+  return {
+    message: historyMessage(seq, 'user'),
+    parts: [
+      {
+        id: `p-${seq}`,
+        messageId: `msg-${seq}`,
+        position: 0,
+        type: 'text' as const,
+        status: 'complete' as const,
+        textContent: text,
+        data: {},
+        fileId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ],
+  };
+}
+
+function assistantTextItem(seq: number, text: string) {
+  return {
+    message: historyMessage(seq, 'assistant'),
+    parts: [
+      {
+        id: `p-${seq}`,
+        messageId: `msg-${seq}`,
+        position: 0,
+        type: 'text' as const,
+        status: 'complete' as const,
+        textContent: text,
+        data: {},
+        fileId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ],
+  };
+}

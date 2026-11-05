@@ -408,13 +408,21 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       const mergedCapabilities: ModelCapabilities | undefined =
         input.capabilities !== undefined || input.contextWindow !== undefined || input.maxOutputTokens !== undefined
           ? (() => {
-              const { reasoning: reasoningPatch, ...capabilityPatch } = input.capabilities ?? {};
-              const { reasoning: _existingReasoning, ...existingCapabilities } =
-                existing.capabilities;
+              const { reasoning: reasoningPatch, compaction: compactionPatch, ...capabilityPatch } =
+                input.capabilities ?? {};
+              const {
+                reasoning: _existingReasoning,
+                compaction: _existingCompaction,
+                ...existingCapabilities
+              } = existing.capabilities;
               const reasoning = mergeReasoningCapability(
                 existing.capabilities.reasoning,
                 reasoningPatch,
               );
+              const compaction =
+                compactionPatch === null
+                  ? undefined
+                  : (compactionPatch ?? existing.capabilities.compaction);
               return {
                 ...existingCapabilities,
                 ...capabilityPatch,
@@ -424,6 +432,7 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
                 },
                 contextWindow: input.contextWindow ?? input.capabilities?.contextWindow ?? existing.capabilities.contextWindow,
                 maxOutputTokens: input.maxOutputTokens ?? input.capabilities?.maxOutputTokens ?? existing.capabilities.maxOutputTokens,
+                ...(compaction !== undefined ? { compaction } : {}),
                 ...(reasoning !== undefined ? { reasoning } : {}),
               };
             })()

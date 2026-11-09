@@ -23,6 +23,7 @@ import {
 } from '../domain/attachment.ts';
 import type { AttachmentRepository } from '../ports/attachment-repository.ts';
 import { extractTextForKind } from './text-extraction.ts';
+import { readAttachmentRetention, type SettingsLookup } from './retention.ts';
 
 export interface UploadInput {
   readonly userId: string;
@@ -114,6 +115,7 @@ export class AttachmentService implements MessageFileLookup {
     private readonly conversations: ConversationRepository,
     private readonly clock: Clock,
     private readonly idGen: IdGenerator,
+    private readonly settings?: SettingsLookup | undefined,
   ) {}
 
   /**
@@ -175,6 +177,8 @@ export class AttachmentService implements MessageFileLookup {
       throw new AppError('invalid_request', 'Upload size mismatch.');
     }
 
+    const retention = await readAttachmentRetention(this.settings);
+
     const attachment: Attachment = {
       id,
       ownerUserId: input.userId,
@@ -197,9 +201,7 @@ export class AttachmentService implements MessageFileLookup {
       height: validation.height,
       pageCount: validation.pageCount,
       metadata: {},
-      expiresAt: new Date(
-        this.clock.now().getTime() + this.config.FILE_RETENTION_HOURS * 3_600_000,
-      ),
+      expiresAt: new Date(this.clock.now().getTime() + retention.retentionHours * 3_600_000),
       createdAt: this.clock.now(),
       deletedAt: null,
     };

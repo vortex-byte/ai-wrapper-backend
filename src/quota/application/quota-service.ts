@@ -5,6 +5,7 @@ import { periodEndFor, periodStartFor } from '../domain/timezone.ts';
 import { resolvePolicy, type QuotaPolicyRow, type ResolvedPolicy } from '../domain/policy.ts';
 import type { QuotaAccountRepository } from '../ports/quota-account-repository.ts';
 import type { UsageRepository } from '../ports/usage-repository.ts';
+import type { QuotaTimezoneProvider } from '../ports/quota-timezone.ts';
 import type {
   PolicyScope,
   QuotaPolicyRepository,
@@ -35,7 +36,7 @@ export interface QuotaServiceDeps {
   readonly usage?: UsageRepository | undefined;
   readonly audit?: AuditLogRepository | undefined;
   readonly idGen: () => string;
-  readonly quotaTimezone: string;
+  readonly quotaTimezone: QuotaTimezoneProvider;
 }
 
 export interface PolicyUpdateInput {
@@ -62,7 +63,7 @@ export class QuotaService {
   private readonly usage?: UsageRepository | undefined;
   private readonly audit?: AuditLogRepository | undefined;
   private readonly idGen: () => string;
-  private readonly quotaTimezone: string;
+  private readonly quotaTimezone: QuotaTimezoneProvider;
 
   constructor(deps: QuotaServiceDeps) {
     this.accounts = deps.accounts;
@@ -75,13 +76,14 @@ export class QuotaService {
 
   async getQuotaSnapshot(userId: string): Promise<QuotaSnapshot | null> {
     const now = new Date();
+    const timezone = await this.quotaTimezone();
     const account = await this.accounts.findCurrentAccount(userId, now);
     const policy = await this.resolvePolicyFor(userId);
     if (account === null) {
       return {
         period: {
-          start: periodStartFor(now, this.quotaTimezone).toISOString(),
-          end: periodEndFor(now, this.quotaTimezone).toISOString(),
+          start: periodStartFor(now, timezone).toISOString(),
+          end: periodEndFor(now, timezone).toISOString(),
         },
         limitTokens: policy.monthlyTokens,
         usedTokens: 0,
@@ -317,8 +319,9 @@ export class QuotaService {
       let account = await this.accounts.findCurrentAccount(input.userId, now, tx);
       if (account === null) {
         const policy = await this.resolvePolicyFor(input.userId);
-        const periodStart = periodStartFor(now, this.quotaTimezone);
-        const periodEnd = periodEndFor(now, this.quotaTimezone);
+        const timezone = await this.quotaTimezone();
+        const periodStart = periodStartFor(now, timezone);
+        const periodEnd = periodEndFor(now, timezone);
         account = await this.accounts.getOrCreateAccount(
           {
             id: this.idGen(),

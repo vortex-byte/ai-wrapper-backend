@@ -329,8 +329,10 @@ export function createHarness(options: { now?: Date } = {}): TestHarness {
     hasher,
     audit,
     clock,
-    lockout: { maxFailures: 8, lockoutMinutes: 15 },
-    sessionPolicy: { idleMinutes: 480, absoluteMinutes: 1440 },
+    policies: async () => ({
+      lockout: { maxFailures: 8, lockoutMinutes: 15 },
+      sessionPolicy: { idleMinutes: 480, absoluteMinutes: 1440 },
+    }),
     passwordPolicy: { minLength: 12 },
   };
 

@@ -25,7 +25,7 @@ const quota = new RealQuota({
   usage,
   clock: systemClock,
   idGen: uuidv7Generator,
-  quotaTimezone: 'Asia/Jakarta',
+  quotaTimezone: async () => 'Asia/Jakarta',
 });
 const reconciliationHandler = createReconciliationHandler({ accounts, clock: systemClock });
 const quotaService = new QuotaService({
@@ -33,7 +33,7 @@ const quotaService = new QuotaService({
   policies,
   usage,
   idGen: () => uuidv7Generator.uuidv7(),
-  quotaTimezone: 'Asia/Jakarta',
+  quotaTimezone: async () => 'Asia/Jakarta',
 });
 
 async function seedUserAndModel(): Promise<{ userId: string; modelId: string; providerId: string }> {
@@ -514,7 +514,7 @@ describe('quota reservation concurrency', () => {
       userIds: async () => [userId],
       clock: systemClock,
       idGen: uuidv7Generator,
-      quotaTimezone: 'Asia/Jakarta',
+      quotaTimezone: async () => 'Asia/Jakarta',
       resolvePolicyForUser: (uid, tx) => quota.resolvePolicyForUser(uid, tx),
     });
 

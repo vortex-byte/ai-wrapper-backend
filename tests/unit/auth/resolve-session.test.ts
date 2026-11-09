@@ -93,7 +93,10 @@ describe('resolveSession', () => {
     const stored = harness.sessions.rows.get(id);
     expect(stored?.lastSeenAt.getTime()).toBe(now.getTime());
     expect(stored?.expiresAt.getTime()).toBe(
-      computeExpiry(createdAt, now, harness.deps.sessionPolicy).getTime(),
+      computeExpiry(createdAt, now, {
+        idleMinutes: 480,
+        absoluteMinutes: 1440,
+      }).getTime(),
     );
     expect(stored?.expiresAt.toISOString()).toBe('2026-05-01T18:00:00.000Z');
   });

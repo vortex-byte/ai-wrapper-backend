@@ -180,6 +180,7 @@ describe('admin settings HTTP surface (real PostgreSQL)', () => {
             maxBytesPerFile: 20 * 1024 * 1024,
             maxFilesPerRequest: 4,
             retentionHours: 48,
+            providerFileRetentionDays: 14,
           },
           security: {
             sessionIdleMinutes: 240,
@@ -199,7 +200,10 @@ describe('admin settings HTTP surface (real PostgreSQL)', () => {
           updatedBy: { id: string; displayName: string; email: string };
         };
         quotaTimezone: { value: string; version: number };
-        attachments: { value: { maxFilesPerRequest: number }; version: number };
+        attachments: {
+          value: { maxFilesPerRequest: number; providerFileRetentionDays: number };
+          version: number;
+        };
         security: { value: { sessionIdleMinutes: number }; version: number };
       };
     };
@@ -213,6 +217,7 @@ describe('admin settings HTTP surface (real PostgreSQL)', () => {
     });
     expect(patchBody.data.quotaTimezone.value).toBe('Asia/Makassar');
     expect(patchBody.data.attachments.value.maxFilesPerRequest).toBe(4);
+    expect(patchBody.data.attachments.value.providerFileRetentionDays).toBe(14);
     expect(patchBody.data.security.value.sessionIdleMinutes).toBe(240);
 
     // Verify audit log has settings.update events

@@ -25,7 +25,8 @@ export async function resolveSession(
   }
 
   if (shouldTouch(found.session, now)) {
-    const expiresAt = computeExpiry(found.session.createdAt, now, deps.sessionPolicy);
+    const { sessionPolicy } = await deps.policies();
+    const expiresAt = computeExpiry(found.session.createdAt, now, sessionPolicy);
     await deps.sessions.touch(sessionId, now, expiresAt);
     return { user: found.user, session: { ...found.session, lastSeenAt: now, expiresAt } };
   }

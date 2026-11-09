@@ -46,7 +46,7 @@ describe('RealQuota.remainingTokens', () => {
       usage: mockUsage as UsageRepository,
       clock: mockClock,
       idGen: mockIdGen,
-      quotaTimezone: 'Asia/Jakarta',
+      quotaTimezone: async () => 'Asia/Jakarta',
     });
 
     const remaining = await quota.remainingTokens('user-1');
@@ -70,7 +70,7 @@ describe('RealQuota.remainingTokens', () => {
       usage: mockUsage as UsageRepository,
       clock: mockClock,
       idGen: mockIdGen,
-      quotaTimezone: 'Asia/Jakarta',
+      quotaTimezone: async () => 'Asia/Jakarta',
     });
 
     const remaining = await quota.remainingTokens('user-1');
@@ -107,7 +107,7 @@ describe('RealQuota.remainingTokens', () => {
       usage: mockUsage as UsageRepository,
       clock: mockClock,
       idGen: mockIdGen,
-      quotaTimezone: 'Asia/Jakarta',
+      quotaTimezone: async () => 'Asia/Jakarta',
     });
 
     // 100k + 10k - 40k - 20k = 50k

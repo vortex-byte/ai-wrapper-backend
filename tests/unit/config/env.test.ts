@@ -13,11 +13,8 @@ describe('loadConfig', () => {
     expect(config.PORT).toBe(8080);
     expect(config.HOST).toBe('127.0.0.1');
     expect(config.ROLE).toBe('all');
-    expect(config.QUOTA_TIMEZONE).toBe('Asia/Jakarta');
-    expect(config.SESSION_IDLE_MINUTES).toBe(480);
     expect(config.SESSION_ABSOLUTE_MINUTES).toBe(1440);
     expect(config.PASSWORD_MIN_LENGTH).toBe(8);
-    expect(config.LOGIN_MAX_FAILURES).toBe(8);
     expect(config.ALLOWED_ORIGINS).toEqual([]);
     expect(config.SHUTDOWN_DRAIN_SECONDS).toBe(120);
     expect(config.MIGRATION_DATABASE_URL).toBeUndefined();
@@ -64,12 +61,6 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...validEnv, SESSION_SECRET: 'too-short' })).toThrowError(
       ConfigError,
     );
-  });
-
-  it('rejects an absolute session timeout shorter than the idle timeout', () => {
-    expect(() =>
-      loadConfig({ ...validEnv, SESSION_IDLE_MINUTES: '600', SESSION_ABSOLUTE_MINUTES: '60' }),
-    ).toThrowError(ConfigError);
   });
 
   it('bounds the shutdown drain window', () => {

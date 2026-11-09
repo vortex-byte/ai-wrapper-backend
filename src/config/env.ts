@@ -31,34 +31,16 @@ export const EnvSchema = z
     SHUTDOWN_DRAIN_SECONDS: z.coerce.number().int().min(0).max(600).default(120),
 
     SESSION_COOKIE_NAME: z.literal('__Host-session').default('__Host-session'),
-    SESSION_IDLE_MINUTES: z.coerce.number().int().min(1).default(480),
     SESSION_ABSOLUTE_MINUTES: z.coerce.number().int().min(1).default(1440),
     SESSION_SECRET: z.string().min(32),
 
     STORAGE_LOCAL_ROOT: z.string().min(1).default('./.var/files'),
     STORAGE_MIN_FREE_MIB: z.coerce.number().int().min(0).default(512),
 
-    QUOTA_TIMEZONE: z
-      .string()
-      .min(1)
-      .default('Asia/Jakarta')
-      .refine((tz) => {
-        try {
-          Intl.DateTimeFormat(undefined, { timeZone: tz });
-          return true;
-        } catch {
-          return false;
-        }
-      }, 'Invalid IANA time zone'),
-
     MAX_ACTIVE_GENERATIONS: z.coerce.number().int().min(1).default(200),
     GENERATION_DETACH_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(900).default(60),
 
     PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).max(256).default(8),
-    LOGIN_MAX_FAILURES: z.coerce.number().int().min(1).default(8),
-    LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).default(15),
-
-    FILE_RETENTION_HOURS: z.coerce.number().int().min(1).default(24),
 
     LOG_LEVEL: z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
@@ -95,15 +77,6 @@ export const EnvSchema = z
 
     JOB_POLL_INTERVAL_MS: z.coerce.number().int().min(50).default(1000),
     JOB_POLL_INTERVAL_IDLE_MS: z.coerce.number().int().min(100).default(5000),
-  })
-  .superRefine((env, ctx) => {
-    if (env.SESSION_ABSOLUTE_MINUTES < env.SESSION_IDLE_MINUTES) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['SESSION_ABSOLUTE_MINUTES'],
-        message: 'SESSION_ABSOLUTE_MINUTES must be >= SESSION_IDLE_MINUTES.',
-      });
-    }
   });
 
 export type Config = z.infer<typeof EnvSchema>;

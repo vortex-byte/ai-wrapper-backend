@@ -973,7 +973,7 @@ CREATE UNIQUE INDEX quota_policy_scope_uq
 - **Important columns:**
   - `user_id uuid NOT NULL`.
   - `scope_type text NOT NULL DEFAULT 'total'` (`total | provider | model` — future), `scope_id uuid`.
-  - `period_start timestamptz`, `period_end timestamptz` — computed from `QUOTA_TIMEZONE` (default UTC+7), stored UTC.
+  - `period_start timestamptz`, `period_end timestamptz` — computed from the quota timezone (admin setting `quota.timezone`, default Asia/Jakarta), stored UTC.
   - `base_limit_tokens bigint NOT NULL`, `adjustment_tokens bigint NOT NULL DEFAULT 0`.
   - `used_tokens bigint NOT NULL DEFAULT 0`, `reserved_tokens bigint NOT NULL DEFAULT 0`.
   - `limits jsonb NOT NULL DEFAULT '{}'` — snapshot of resolved max input/output + concurrency.

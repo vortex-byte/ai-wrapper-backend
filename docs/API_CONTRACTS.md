@@ -297,7 +297,7 @@ Returns only active models the caller may use on enabled providers. Requires no 
     { "id": "0192…", "displayName": "Claude (Sonnet class)", "providerLabel": "Anthropic",
       "status": "active",
       "capabilities": { "streaming": true, "vision": true, "documents": { "pdf": true },
-                        "imageGeneration": false, "documentGeneration": false,
+                        "imageGeneration": null, "documentGeneration": false,
                         "contextWindow": 200000, "maxOutputTokens": 8192 },
       "limits": { "maxFilesPerMessage": 5, "maxImagesPerMessage": 10 } } ] } }
 ```
@@ -1423,7 +1423,8 @@ Writes an `audit_logs` row (`action: "provider.delete"`) and invalidates the reg
 | `container` | model | Force the provider container path on even when `capabilities.documentGeneration` is `false`. |
 | `containerSkills` | model | Skills to declare on the container (`["pdf","docx","xlsx","pptx"]`); defaults to all four. |
 | `imageGeneration` | model | `false` opts a model out of the `image_generation` tool even when the capability declares `mode: "tool"`. |
-| `imageGenerationOptions` | model | Forwarded provider knobs for the image tool (`size`, `quality`, `background`, `output_format`, `moderation`, `action`, `output_compression`). Sizes must be `auto` or `WxH` with edges on a 16px grid, each edge ≤ 3840, an aspect ratio within 1:3–3:1 and 655,360–8,294,400 pixels. `partial_images` is clamped to `0..3`; `output_compression` is clamped to `0..100` and only sent for `jpeg`/`webp`. Values that fail validation are dropped and logged rather than sent. |
+| `imageModel` | provider | Global default image model identifier forwarded on the `image_generation` tool (e.g. `"dall-e-3"`). Applied to every model of the provider that enables the image tool; a model's `capabilities.imageGeneration.model` overrides it. When neither is set, the provider default is used. |
+| `imageGenerationOptions` | model / provider | Forwarded provider knobs for the image tool (`size`, `quality`, `background`, `output_format`, `moderation`, `action`, `output_compression`). Sizes must be `auto` or `WxH` with edges on a 16px grid, each edge ≤ 3840, an aspect ratio within 1:3–3:1 and 655,360–8,294,400 pixels. `partial_images` is clamped to `0..3`; `output_compression` is clamped to `0..100` and only sent for `jpeg`/`webp`. Values that fail validation are dropped and logged rather than sent. A model-level object overrides the provider-level one entirely. |
 | `storeResponses` | model | `true` asks OpenAI to retain the Responses object (default `false`). |
 | `useChatCompletions` | provider | `true` forces Chat Completions, disabling containers and hosted image generation for that provider. |
 | `sortOrder` | integer | No | Display sorting priority index (default `0`). |
@@ -1656,7 +1657,8 @@ Returns current settings with metadata (`version`, `updatedAt`, `updatedBy`).
       "value": {
         "maxBytesPerFile": 31457280,
         "maxFilesPerRequest": 5,
-        "retentionHours": 24
+        "retentionHours": 24,
+        "providerFileRetentionDays": 30
       },
       "version": 1,
       "updatedAt": "2026-10-29T08:00:00.000Z",
@@ -1684,7 +1686,7 @@ Updates one or more settings fields. Each modified field writes an audit log (`a
 |---|---|---|---|
 | `systemPrompt` | string (max 10,000) | No | Global system prompt prepended to conversation messages. |
 | `quotaTimezone` | string | No | Valid IANA time zone identifier (e.g. `Asia/Jakarta`). |
-| `attachments` | object | No | Object with `maxBytesPerFile`, `maxFilesPerRequest`, `retentionHours`. |
+| `attachments` | object | No | Object with `maxBytesPerFile`, `maxFilesPerRequest`, `retentionHours`, `providerFileRetentionDays` (1–365, default 30 — lifetime of provider-hosted file copies; OpenAI persists `user_data` until deleted, Anthropic until deleted or expired, Gemini is fixed at 48 h). |
 | `security` | object | No | Object with `sessionIdleMinutes`, `loginMaxFailures`, `loginLockoutMinutes`. |
 
 `200`: Returns updated settings payload formatted as above.

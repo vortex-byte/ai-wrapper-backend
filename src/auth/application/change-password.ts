@@ -60,7 +60,8 @@ export async function changePassword(
 
   const token = generateSessionToken();
   const sessionId = hashSessionToken(token);
-  const expiresAt = computeExpiry(now, now, deps.sessionPolicy);
+  const { sessionPolicy } = await deps.policies();
+  const expiresAt = computeExpiry(now, now, sessionPolicy);
   await deps.sessions.revoke(input.sessionId, now);
   await deps.sessions.insert({
     id: sessionId,

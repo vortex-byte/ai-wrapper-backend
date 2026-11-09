@@ -56,7 +56,8 @@ export async function login(deps: AuthDeps, input: LoginInput): Promise<LoginSuc
 
   const passwordOk = await deps.hasher.verify(input.password, user.passwordHash);
   if (!passwordOk) {
-    const outcome = nextFailureState(user.failedLoginAttempts, deps.lockout, now);
+    const { lockout } = await deps.policies();
+    const outcome = nextFailureState(user.failedLoginAttempts, lockout, now);
     await deps.users.recordLoginFailure(user.id, {
       failedLoginAttempts: outcome.failedLoginAttempts,
       lockedUntil: outcome.lockedUntil,
@@ -76,7 +77,8 @@ export async function login(deps: AuthDeps, input: LoginInput): Promise<LoginSuc
 
   const token = generateSessionToken();
   const sessionId = hashSessionToken(token);
-  const expiresAt = computeExpiry(now, now, deps.sessionPolicy);
+  const { sessionPolicy } = await deps.policies();
+  const expiresAt = computeExpiry(now, now, sessionPolicy);
 
   await deps.sessions.insert({
     id: sessionId,

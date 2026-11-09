@@ -22,6 +22,8 @@ import { DrizzleRegistryRepository } from './providers/infrastructure/drizzle-re
 import { CachedModelRegistry } from './providers/infrastructure/cached-registry.ts';
 import { EnvSecretResolver } from './providers/ports/secret-resolver.ts';
 import type { ModelRegistry } from './providers/ports/model-registry.ts';
+import { AdapterProviderFileCleaner } from './providers/infrastructure/adapter-provider-file-cleaner.ts';
+import type { ProviderFileCleaner } from '@/provider-file-cleaner.ts';
 import type { RegistryAdminService } from './providers/application/registry-admin-service.ts';
 import { createRegistryAdminService } from './providers/application/registry-admin-service.ts';
 
@@ -32,6 +34,9 @@ import { DrizzleConversationRepository } from './conversations/infrastructure/dr
 import type { SettingsService } from './settings/application/settings-service.ts';
 import { createSettingsService } from './settings/application/settings-service.ts';
 import { DrizzleSettingsRepository } from './settings/infrastructure/drizzle-settings-repository.ts';
+import { createCachedSettingsReader } from './settings/application/cached-settings-reader.ts';
+import { createSessionPoliciesProvider } from './auth/application/security-settings.ts';
+import { DEFAULT_SETTINGS, KNOWN_SETTINGS } from './settings/domain/settings.ts';
 
 import type { SendService } from './generations/application/send-service.ts';
 import { createSendService } from './generations/application/send-service.ts';
@@ -132,6 +137,26 @@ export function createServices(config: Config): Services {
     secrets,
     clock: systemClock,
   });
+  const providerFiles: ProviderFileCleaner = new AdapterProviderFileCleaner({
+    adapters: providers,
+    providers: registry,
+  });
+
+  const settingsRepository = new DrizzleSettingsRepository();
+  const settings = createSettingsService({
+    repository: settingsRepository,
+    audit,
+  });
+  // TTL-cached reads for hot paths (session resolution, quota periods); writes go through
+  // `settings` itself so the audit row and version bump stay transactional.
+  const settingsLookup = createCachedSettingsReader({
+    source: settings,
+    clock: systemClock,
+    ttlMs: 30_000,
+  });
+  const quotaTimezoneProvider = async (): Promise<string> =>
+    (await settingsLookup.get<string>(KNOWN_SETTINGS.quotaTimezone))?.value ??
+    DEFAULT_SETTINGS.quotaTimezone;
 
   const auth = createAuthService({
     users,
@@ -139,14 +164,7 @@ export function createServices(config: Config): Services {
     hasher,
     audit,
     clock: systemClock,
-    lockout: {
-      maxFailures: config.LOGIN_MAX_FAILURES,
-      lockoutMinutes: config.LOGIN_LOCKOUT_MINUTES,
-    },
-    sessionPolicy: {
-      idleMinutes: config.SESSION_IDLE_MINUTES,
-      absoluteMinutes: config.SESSION_ABSOLUTE_MINUTES,
-    },
+    policies: createSessionPoliciesProvider(settingsLookup, config.SESSION_ABSOLUTE_MINUTES),
     passwordPolicy: { minLength: config.PASSWORD_MIN_LENGTH },
   });
 
@@ -179,12 +197,6 @@ export function createServices(config: Config): Services {
     idGen: uuidv7Generator,
   });
 
-  const settingsRepository = new DrizzleSettingsRepository();
-  const settings = createSettingsService({
-    repository: settingsRepository,
-    audit,
-  });
-
   const errorEvents = new DrizzleErrorEventWriter();
   const generationRepository = new DrizzleGenerationRepository();
 
@@ -197,6 +209,7 @@ export function createServices(config: Config): Services {
     conversationRepository,
     systemClock,
     uuidv7Generator,
+    settings,
   );
   const artifactSink = new ArtifactSink({
     storage,
@@ -206,6 +219,7 @@ export function createServices(config: Config): Services {
     idGen: uuidv7Generator,
     retentionDays: GENERATED_FILE_RETENTION_DAYS,
     maxBytes: MAX_GENERATED_ARTIFACT_BYTES,
+    providerFiles,
   });
 
   const quotaAccountsRepo = new DrizzleQuotaAccountRepository();
@@ -217,7 +231,7 @@ export function createServices(config: Config): Services {
     usage: usageRepo,
     clock: systemClock,
     idGen: uuidv7Generator,
-    quotaTimezone: config.QUOTA_TIMEZONE,
+    quotaTimezone: quotaTimezoneProvider,
     reservationTtlMs: config.GENERATION_DETACH_TIMEOUT_SECONDS * 1000 + 15 * 60 * 1000,
   });
   const quota: QuotaPort = realQuota;
@@ -227,7 +241,7 @@ export function createServices(config: Config): Services {
     usage: usageRepo,
     audit,
     idGen: () => uuidv7Generator.uuidv7(),
-    quotaTimezone: config.QUOTA_TIMEZONE,
+    quotaTimezone: quotaTimezoneProvider,
   });
   const usageService: UsageServiceType = new UsageService({ usage: usageRepo });
 
@@ -270,11 +284,13 @@ export function createServices(config: Config): Services {
   const attachmentsExpiryHandler = createAttachmentsExpiryHandler({
     attachments: attachmentRepository,
     storage,
+    providerFiles,
     clock: systemClock,
   });
   const attachmentsOrphanHandler = createAttachmentsOrphanHandler({
     attachments: attachmentRepository,
     storage,
+    providerFiles,
     clock: systemClock,
   });
   const storageReconcileHandler = createStorageReconcileHandler({
@@ -294,6 +310,7 @@ export function createServices(config: Config): Services {
   const conversationPurgeHandler = createConversationPurgeHandler({
     conversations: conversationRepository,
     storage,
+    providerFiles,
     clock: systemClock,
     retentionDays: config.CONVERSATION_RETENTION_DAYS,
   });
@@ -319,7 +336,7 @@ export function createServices(config: Config): Services {
     },
     clock: systemClock,
     idGen: uuidv7Generator,
-    quotaTimezone: config.QUOTA_TIMEZONE,
+    quotaTimezone: quotaTimezoneProvider,
     resolvePolicyForUser: (userId, tx) => realQuota.resolvePolicyForUser(userId, tx),
   });
 

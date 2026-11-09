@@ -82,11 +82,9 @@ cp .env.example .env
 | `MIGRATION_DATABASE_URL` | Dedicated connection string for migrations (optional) | Unset |
 | `SESSION_SECRET` | 32-character secret for sessions and CSRF signing | Required |
 | `SESSION_COOKIE_NAME` | Name of the session cookie | `__Host-session` |
-| `SESSION_IDLE_MINUTES` | Inactivity window before session invalidation | `480` |
-| `SESSION_ABSOLUTE_MINUTES` | Maximum lifetime of a session | `1440` |
+| `SESSION_ABSOLUTE_MINUTES` | Maximum lifetime of a session (idle timeout is admin Settings → `security.config`) | `1440` |
 | `STORAGE_LOCAL_ROOT` | Directory for file uploads and hydrated artifacts | `./.var/files` |
 | `STORAGE_MIN_FREE_MIB` | Minimum free disk space before rejecting uploads | `512` |
-| `QUOTA_TIMEZONE` | Timezone identifier for quota period boundaries | `Asia/Jakarta` |
 | `MAX_ACTIVE_GENERATIONS` | Maximum concurrent streaming generations per process | `2` |
 | `ALLOWED_ORIGINS` | Comma-separated allowlist of allowed CORS origins | `""` |
 | `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |

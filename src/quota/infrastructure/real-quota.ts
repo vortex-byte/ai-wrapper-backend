@@ -19,6 +19,7 @@ import type {
   ReservationHandle,
   Settlement,
 } from '@/generations/ports/quota-port.ts';
+import type { QuotaTimezoneProvider } from '../ports/quota-timezone.ts';
 
 /**
  * Quota accounting service implementation.
@@ -32,7 +33,7 @@ export interface RealQuotaDeps {
   readonly usage: UsageRepository;
   readonly clock: Clock;
   readonly idGen: IdGenerator;
-  readonly quotaTimezone: string;
+  readonly quotaTimezone: QuotaTimezoneProvider;
   readonly reservationTtlMs?: number | undefined;
 }
 
@@ -42,7 +43,7 @@ export class RealQuota implements QuotaPort {
   private readonly usage: UsageRepository;
   private readonly clock: Clock;
   private readonly idGen: IdGenerator;
-  private readonly quotaTimezone: string;
+  private readonly quotaTimezone: QuotaTimezoneProvider;
   private readonly reservationTtlMs: number;
 
   constructor(deps: RealQuotaDeps) {
@@ -73,6 +74,7 @@ export class RealQuota implements QuotaPort {
 
   async reserve(ctx: ReserveContext, tx: TransactionContext): Promise<ReservationHandle> {
     const now = this.clock.now();
+    const timezone = await this.quotaTimezone();
 
     const policy = await this.resolvePolicyForUser(ctx.userId, tx);
 
@@ -91,8 +93,8 @@ export class RealQuota implements QuotaPort {
       {
         id: this.idGen.uuidv7(),
         userId: ctx.userId,
-        periodStart: periodStartFor(now, this.quotaTimezone),
-        periodEnd: periodEndFor(now, this.quotaTimezone),
+        periodStart: periodStartFor(now, timezone),
+        periodEnd: periodEndFor(now, timezone),
         baseLimitTokens: policy.monthlyTokens,
         limits: {
           maxInputTokensPerRequest: policy.maxInputTokensPerRequest,
@@ -128,7 +130,7 @@ export class RealQuota implements QuotaPort {
       throw new AppError('quota_exceeded', 'Your monthly token quota is exhausted.', {
         details: {
           remainingTokens: decision.remainingTokens,
-          resetAt: resetAtFor(now, this.quotaTimezone),
+          resetAt: resetAtFor(now, timezone),
         },
       });
     }
@@ -138,7 +140,7 @@ export class RealQuota implements QuotaPort {
       throw new AppError('quota_exceeded', 'Your monthly token quota is exhausted.', {
         details: {
           remainingTokens: Math.max(0, limitTokens - account.usedTokens - account.reservedTokens),
-          resetAt: resetAtFor(now, this.quotaTimezone),
+          resetAt: resetAtFor(now, timezone),
         },
       });
     }

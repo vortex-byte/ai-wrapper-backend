@@ -4,21 +4,23 @@ import type { Clock, IdGenerator } from '@/clock/index.ts';
 import { periodEndFor, periodStartFor } from '@/quota/domain/timezone.ts';
 import { PLATFORM_DEFAULT_POLICY, type ResolvedPolicy } from '@/quota/domain/policy.ts';
 import type { QuotaAccountRepository } from '@/quota/ports/quota-account-repository.ts';
+import type { QuotaTimezoneProvider } from '@/quota/ports/quota-timezone.ts';
 
 export interface PrecreatePeriodsHandlerDeps {
   readonly accounts: QuotaAccountRepository;
   readonly userIds: () => Promise<readonly string[]>;
   readonly clock: Clock;
   readonly idGen: IdGenerator;
-  readonly quotaTimezone: string;
+  readonly quotaTimezone: QuotaTimezoneProvider;
   readonly resolvePolicyForUser?: ((userId: string, tx?: TransactionContext) => Promise<ResolvedPolicy>) | undefined;
 }
 
 export function createPrecreatePeriodsHandler(deps: PrecreatePeriodsHandlerDeps) {
   return async (): Promise<{ created: number; skipped: number }> => {
     const now = deps.clock.now();
-    const periodStart = periodStartFor(now, deps.quotaTimezone);
-    const periodEnd = periodEndFor(now, deps.quotaTimezone);
+    const timezone = await deps.quotaTimezone();
+    const periodStart = periodStartFor(now, timezone);
+    const periodEnd = periodEndFor(now, timezone);
     const userIds = await deps.userIds();
 
     let created = 0;

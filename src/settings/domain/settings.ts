@@ -40,6 +40,7 @@ export const AttachmentsConfigSchema = z.object({
   maxBytesPerFile: z.number().int().min(1024 * 1024).max(100 * 1024 * 1024),
   maxFilesPerRequest: z.number().int().min(1).max(20),
   retentionHours: z.number().int().min(1).max(720),
+  providerFileRetentionDays: z.number().int().min(1).max(365).default(30),
 });
 
 export const SecurityConfigSchema = z.object({
@@ -58,6 +59,7 @@ export const DEFAULT_SETTINGS = {
     maxBytesPerFile: 30 * 1024 * 1024,
     maxFilesPerRequest: 5,
     retentionHours: 24,
+    providerFileRetentionDays: 30,
   },
   security: {
     sessionIdleMinutes: 480,

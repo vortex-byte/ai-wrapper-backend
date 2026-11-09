@@ -50,7 +50,7 @@ Copied from `AGENTS.md` — these are not revisited during the build.
 - **No secret in code, DB, or logs.** Provider keys come from the environment/`.env`; `ai_providers.secret_ref` holds the **env var name**. `LOG_CONTENT=false`.
 - **Repositories take an `AuthContext`**; cross-user access returns **404**. Admins are not exempt for content.
 - **No `SELECT *`**; **no `OFFSET` pagination**; **streams hold no DB connection**.
-- **UUIDv7** app-generated IDs; money in **integer micros**; all timestamps **`timestamptz` UTC**; quota periods are calendar months in `QUOTA_TIMEZONE` (default `Asia/Jakarta`).
+- **UUIDv7** app-generated IDs; money in **integer micros**; all timestamps **`timestamptz` UTC**; quota periods are calendar months in the quota timezone configured via admin Settings (`quota.timezone`, default `Asia/Jakarta`).
 - **Tokenizer per provider (FR-QUOTA-7):** `tiktoken` for OpenAI adapter, local port `dhamaniasad/claude-tokenizer` repo for Anthropic, local/BPE tokenizer + margin other providers. All tokenizer dependencies live inside adapters folder (provider-import rule) and must be *lazy-init*, do NOT start at boot.
 - **Migrations are forward-only**, expand/contract, run as a **pre-deploy job under an advisory lock** — never on app boot.
 - **Append-only** `quota_ledger` / `audit_logs` enforced by grants (`REVOKE UPDATE, DELETE`).
@@ -388,7 +388,7 @@ Conversation forking has been permanently excluded from the post-MVP plan. All p
 
 - [ ] Create a non-root sudo user; disable password SSH, **keys only**; `PermitRootLogin no`.
 - [ ] `sudo apt update && sudo apt -y upgrade`; enable `unattended-upgrades`.
-- [ ] Set hostname/timezone; **keep the OS clock on UTC** (the app stores UTC; quota months are computed in `QUOTA_TIMEZONE` in code, not from the system zone).
+- [ ] Set hostname/timezone; **keep the OS clock on UTC** (the app stores UTC; quota months are computed in the `quota.timezone` admin setting, not from the system zone).
 - [ ] Firewall (see B12). Do this before exposing anything.
 - [ ] Create the service user and directories:
 ```bash
@@ -487,7 +487,6 @@ DATABASE_URL=postgres://aichat_app:CHANGE_ME_app@127.0.0.1:5432/aichat
 DB_POOL_MAX=20
 STORAGE_LOCAL_ROOT=/var/lib/ai-chat/files
 STORAGE_WRITE_PROVIDER=local
-QUOTA_TIMEZONE=Asia/Jakarta
 SESSION_SECRET=CHANGE_ME_32_bytes_min_or_longer
 ALLOWED_ORIGINS=https://ai.corp.example
 MAX_ACTIVE_GENERATIONS=150
@@ -496,8 +495,8 @@ LOG_LEVEL=info
 LOG_CONTENT=false
 RETAIN_EXTRACTIONS=true
 PASSWORD_MIN_LENGTH=12
-LOGIN_MAX_FAILURES=8
-LOGIN_LOCKOUT_MINUTES=15
+# Login lockout / session idle policy and quota timezone live in admin Settings
+# (security.config, quota.timezone) — not here.
 # Provider keys (referenced by ai_providers.secret_ref; never stored in the DB)
 OPENAI_API_KEY=CHANGE_ME
 ANTHROPIC_API_KEY=CHANGE_ME
@@ -806,7 +805,6 @@ blobs are marked `missing` and the UI shows "unavailable"). Back up the **databa
 | `REDIS_URL` | no | — | optional; never required for correctness |
 | `STORAGE_LOCAL_ROOT` | yes | — | e.g. `/var/lib/ai-chat/files` |
 | `STORAGE_WRITE_PROVIDER` | yes | `local` | |
-| `QUOTA_TIMEZONE` | yes | `Asia/Jakarta` | IANA name (A-5) |
 | `SESSION_SECRET` | recommended | — | ≥32 bytes; CSRF token signing (PRD marks it optional; set it in prod) |
 | `ALLOWED_ORIGINS` | yes | — | CSV of SPA origins |
 | `MAX_ACTIVE_GENERATIONS` | yes | `2` dev / `150` prod | per node capacity; the dev/default is deliberately low — set `150` on the VPS (B4) |
@@ -816,9 +814,6 @@ blobs are marked `missing` and the UI shows "unavailable"). Back up the **databa
 | `TOKENIZER_CACHE_DIR` | no | `./.cache/tokenizer` | BPE/WASM file cache directory; must be writable by non-root processes |
 | `RETAIN_EXTRACTIONS` | no | `true` | A-14 |
 | `PASSWORD_MIN_LENGTH` | no | `12` | |
-| `LOGIN_MAX_FAILURES` | no | `8` | |
-| `LOGIN_LOCKOUT_MINUTES` | no | `15` | |
-| `SESSION_IDLE_HOURS` | no | `8` | |
 | `SESSION_ABSOLUTE_HOURS` | no | `24` | |
 | `OPENAI_API_KEY` | per provider | — | referenced by `secret_ref` |
 | `ANTHROPIC_API_KEY` | per provider | — | |

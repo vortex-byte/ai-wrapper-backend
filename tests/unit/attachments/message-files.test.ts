@@ -39,7 +39,7 @@ class FakeAttachmentRepo implements AttachmentRepository {
   async markDeleted(): Promise<void> {}
 }
 
-const dummyConfig = { FILE_RETENTION_HOURS: 48, STORAGE_MIN_FREE_MIB: 100 } as unknown as Config;
+const dummyConfig = { STORAGE_MIN_FREE_MIB: 100 } as unknown as Config;
 
 function makeAttachment(overrides: Partial<Attachment> = {}): Attachment {
   return {

@@ -20,8 +20,10 @@ const auth: AuthService = createAuthService({
   hasher,
   audit,
   clock: systemClock,
-  lockout: { maxFailures: 8, lockoutMinutes: 15 },
-  sessionPolicy: { idleMinutes: 480, absoluteMinutes: 1440 },
+  policies: async () => ({
+    lockout: { maxFailures: 8, lockoutMinutes: 15 },
+    sessionPolicy: { idleMinutes: 480, absoluteMinutes: 1440 },
+  }),
   passwordPolicy: { minLength: 12 },
 });
 

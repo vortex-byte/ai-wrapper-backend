@@ -3,6 +3,7 @@ import type { ConversationRepository } from '@/conversations/ports/conversation-
 import { withTransaction, type TransactionContext } from '@/db/tx.ts';
 import { getLogger } from '@/observability/logger.ts';
 import type { StorageProviderPort } from '@/storage/ports/storage-provider.ts';
+import type { ProviderFileCleaner } from '@/provider-file-cleaner.ts';
 
 const BATCH = 50;
 const DAY_MS = 86_400_000;
@@ -13,6 +14,8 @@ export interface ConversationPurgeDeps {
     'findPurgeableIds' | 'attachmentStorageKeysFor' | 'hardDelete'
   >;
   readonly storage: Pick<StorageProviderPort, 'delete'>;
+  /** Reclaims provider-hosted copies; absent ⇒ local blobs only. */
+  readonly providerFiles?: Pick<ProviderFileCleaner, 'deleteFile'> | undefined;
   readonly clock: Clock;
   readonly retentionDays: number;
   readonly runInTransaction?:
@@ -44,6 +47,19 @@ export function createConversationPurgeHandler(deps: ConversationPurgeDeps) {
           getLogger().warn(
             { err, conversationId: attachment.conversationId },
             'failed to delete blob for purged conversation (reconciliation will retry)',
+          );
+        }
+
+        if (attachment.providerFileId === null) continue;
+        try {
+          await deps.providerFiles?.deleteFile({
+            providerFileId: attachment.providerFileId,
+            providerKey: attachment.providerKey,
+          });
+        } catch (err) {
+          getLogger().warn(
+            { err, conversationId: attachment.conversationId },
+            'failed to delete provider copy for purged conversation',
           );
         }
       }

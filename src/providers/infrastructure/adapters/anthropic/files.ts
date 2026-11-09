@@ -168,6 +168,9 @@ export async function uploadInputFile(
 
   const form = new FormData();
   form.append('file', new Blob([file.bytes], { type: file.mimeType }), file.filename);
+  if (ctx.fileRetentionDays !== undefined && ctx.fileRetentionDays > 0) {
+    form.append('expires_in_seconds', String(ctx.fileRetentionDays * 86_400));
+  }
 
   const response = await fetch(`${apiBase(ctx.provider)}/v1/files`, {
     method: 'POST',
@@ -191,4 +194,33 @@ export async function uploadInputFile(
   }
 
   return { providerFileId: payload.id };
+}
+
+export async function deleteProviderFile(
+  providerFileId: string,
+  ctx: FilesApiContext,
+): Promise<void> {
+  const apiKey = ctx.provider.secrets['apiKey'];
+  if (apiKey === undefined || apiKey === '') {
+    throw providerError('provider_unavailable', 'Anthropic API key is not configured.', {
+      retryable: false,
+    });
+  }
+
+  const response = await fetch(
+    `${apiBase(ctx.provider)}/v1/files/${encodeURIComponent(providerFileId)}`,
+    {
+      method: 'DELETE',
+      headers: filesHeaders(ctx.provider, apiKey),
+      signal: ctx.signal,
+    },
+  );
+
+  // Already gone is a success: deletion is idempotent.
+  if (!response.ok && response.status !== 404) {
+    throw providerError('provider_unavailable', 'Could not delete the provider file.', {
+      retryable: response.status >= 500 || response.status === 429,
+      providerStatus: response.status,
+    });
+  }
 }

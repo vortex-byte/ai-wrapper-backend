@@ -9,6 +9,7 @@ import {
 } from '@/attachments/domain/attachment.ts';
 import type { AttachmentRepository } from '@/attachments/ports/attachment-repository.ts';
 import type { ProviderArtifact } from '@/providers/ports/provider-adapter.ts';
+import type { ProviderFileCleaner } from '@/provider-file-cleaner.ts';
 
 /** Hydrates provider-generated binaries into local storage before exposing to clients. */
 
@@ -32,6 +33,8 @@ export interface ArtifactHydrationInput {
   readonly bytes?: Uint8Array | undefined;
   /** Provider-rewritten prompt that produced the image, when the provider returns one. */
   readonly revisedPrompt?: string | undefined;
+  /** Provider registry key that owns `providerFileId`, for post-download cleanup. */
+  readonly providerKey?: string | undefined;
 }
 
 /** Fetches provider-side bytes for a generated file. */
@@ -49,10 +52,12 @@ export interface ArtifactSinkDeps {
   readonly conversations: ArtifactPartLinker;
   readonly clock: Clock;
   readonly idGen: IdGenerator;
-  /** Retention for generated files, in days (Anthropic containers live 30 days). */
+  /** Retention for generated files, in days. */
   readonly retentionDays: number;
   /** Hard cap on a single hydrated artifact; guards against a runaway provider response. */
   readonly maxBytes: number;
+  /** Deletes the provider copy once the bytes are safely local; best-effort. */
+  readonly providerFiles?: ProviderFileCleaner | undefined;
   /** Retry backoff between download attempts; overridable for tests. */
   readonly backoffMs?: readonly number[] | undefined;
 }
@@ -241,6 +246,7 @@ export class ArtifactSink {
       pageCount: null,
       metadata: {
         providerFileId: input.providerFileId,
+        ...(input.providerKey !== undefined ? { providerKey: input.providerKey } : {}),
         filename: displayName,
         ...(input.revisedPrompt !== undefined ? { revisedPrompt: input.revisedPrompt } : {}),
       },
@@ -267,7 +273,22 @@ export class ArtifactSink {
       return null;
     }
 
+    await this.deleteProviderCopy(input);
+
     return { attachmentId: id };
+  }
+
+  /**
+   * Drops the provider-side copy after the bytes are safely local. Runs only after the row is
+   * committed: every later turn is rebuilt from local storage, so nothing reads it again.
+   */
+  private async deleteProviderCopy(input: ArtifactHydrationInput): Promise<void> {
+    if (this.deps.providerFiles === undefined) return;
+    if (input.providerFileId === '') return;
+    await this.deps.providerFiles.deleteFile({
+      providerFileId: input.providerFileId,
+      providerKey: input.providerKey ?? null,
+    });
   }
 
   /** Best-effort: a part whose artifact never arrived is marked failed so the UI stops waiting. */

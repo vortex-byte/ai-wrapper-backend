@@ -44,6 +44,8 @@ export interface ProviderArtifact {
 export interface FilesApiContext {
   readonly provider: ProviderRuntimeConfig;
   readonly signal: AbortSignal;
+  /** Provider-hosted file lifetime, so uploads expire instead of accumulating. */
+  readonly fileRetentionDays?: number | undefined;
 }
 
 /** An input binary the platform wants the provider to mount into its cloud container. */
@@ -86,4 +88,7 @@ export interface ProviderAdapter {
     file: InputFileUpload,
     ctx: FilesApiContext,
   ): Promise<UploadedInputFile>;
+
+  /** Deletes a provider-hosted file. Absent ⇒ the adapter has no deletable file storage. */
+  deleteProviderFile?(providerFileId: string, ctx: FilesApiContext): Promise<void>;
 }

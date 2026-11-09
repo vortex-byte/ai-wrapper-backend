@@ -114,6 +114,12 @@ export class GeminiAdapter implements ProviderAdapter {
     return uploadInputFile(file, ctx, this.clientFactory);
   }
 
+  /**
+   * Gemini Files API uploads expire automatically (48 h, not configurable) and expose no delete
+   * endpoint, so there is nothing to clean up on our side.
+   */
+  async deleteProviderFile(): Promise<void> {}
+
   async listModels(ctx: HealthCheckContext): Promise<readonly ProviderModelInfo[]> {
     const { provider, signal } = ctx;
     const apiKey = requireApiKey(provider.secrets);

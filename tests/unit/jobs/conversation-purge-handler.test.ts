@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/observability/logger.ts', () => ({
+  getLogger: () => ({
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  }),
+}));
+
 import { createConversationPurgeHandler } from '@/jobs/application/handlers/conversation-purge-handler.ts';
 
 const NOW = new Date('2026-10-20T12:00:00.000Z');
@@ -7,6 +17,7 @@ interface StoredConversation {
   readonly id: string;
   readonly deletedAt: Date;
   readonly storageKeys: readonly string[];
+  readonly providerFiles?: readonly { providerFileId: string; providerKey: string | null }[];
 }
 
 class FakeRepo {
@@ -23,13 +34,26 @@ class FakeRepo {
       .map((row) => row.id);
   }
 
-  async attachmentStorageKeysFor(
-    ids: readonly string[],
-  ): Promise<readonly { conversationId: string; storageKey: string }[]> {
+  async attachmentStorageKeysFor(ids: readonly string[]): Promise<
+    readonly {
+      conversationId: string;
+      storageKey: string;
+      providerFileId: string | null;
+      providerKey: string | null;
+    }[]
+  > {
     return this.rows
       .filter((row) => ids.includes(row.id))
       .flatMap((row) =>
-        row.storageKeys.map((storageKey) => ({ conversationId: row.id, storageKey })),
+        row.storageKeys.map((storageKey, index) => {
+          const providerFile = row.providerFiles?.[index];
+          return {
+            conversationId: row.id,
+            storageKey,
+            providerFileId: providerFile?.providerFileId ?? null,
+            providerKey: providerFile?.providerKey ?? null,
+          };
+        }),
       );
   }
 
@@ -137,5 +161,70 @@ describe('conversation purge job', () => {
     });
 
     await expect(handler()).resolves.toEqual({ purgedCount: 0 });
+  });
+
+  it('deletes the provider copy alongside the local blob', async () => {
+    const repo = new FakeRepo([
+      {
+        id: 'old',
+        deletedAt: new Date('2026-08-01T00:00:00Z'),
+        storageKeys: ['files/generated/2026/08/a', 'files/2026/08/b'],
+        providerFiles: [{ providerFileId: 'file-abc', providerKey: 'openai-main' }],
+      },
+    ]);
+    const cleaned: { providerFileId: string; providerKey: string | null }[] = [];
+
+    const handler = createConversationPurgeHandler({
+      conversations: repo,
+      storage: { delete: async () => {} },
+      providerFiles: {
+        deleteFile: async (file) => {
+          cleaned.push(file);
+          return true;
+        },
+      },
+      clock: { now: () => NOW },
+      retentionDays: 30,
+      runInTransaction: (fn) => fn({} as never),
+    });
+
+    await handler();
+
+    expect(cleaned).toEqual([{ providerFileId: 'file-abc', providerKey: 'openai-main' }]);
+  });
+
+  it('keeps purging when the provider delete fails', async () => {
+    const repo = new FakeRepo([
+      {
+        id: 'old',
+        deletedAt: new Date('2026-08-01T00:00:00Z'),
+        storageKeys: ['files/2026/08/a', 'files/2026/08/b'],
+        providerFiles: [
+          { providerFileId: 'file-fail', providerKey: 'anthropic-main' },
+          { providerFileId: 'file-ok', providerKey: 'anthropic-main' },
+        ],
+      },
+    ]);
+    const attempted: string[] = [];
+
+    const handler = createConversationPurgeHandler({
+      conversations: repo,
+      storage: { delete: async () => {} },
+      providerFiles: {
+        deleteFile: async (file) => {
+          attempted.push(file.providerFileId);
+          if (file.providerFileId === 'file-fail') throw new Error('provider down');
+          return true;
+        },
+      },
+      clock: { now: () => NOW },
+      retentionDays: 30,
+      runInTransaction: (fn) => fn({} as never),
+    });
+
+    const result = await handler();
+
+    expect(result.purgedCount).toBe(1);
+    expect(attempted).toEqual(['file-fail', 'file-ok']);
   });
 });

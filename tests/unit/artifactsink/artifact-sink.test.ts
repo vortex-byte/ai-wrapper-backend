@@ -10,6 +10,10 @@ vi.mock('@/observability/logger.ts', () => ({
   }),
 }));
 
+vi.mock('@/db/tx.ts', () => ({
+  withTransaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({}),
+}));
+
 import { ArtifactSink } from '@/artifactsink/artifact-sink.ts';
 import type { Attachment, FileExtraction } from '@/attachments/domain/attachment.ts';
 import type { AttachmentRepository } from '@/attachments/ports/attachment-repository.ts';
@@ -126,6 +130,7 @@ function sinkWith(deps: {
   storage: FakeStorage;
   attachments: FakeAttachmentRepo;
   conversations: FakeConversationRepo;
+  providerFiles?: { deleteFile: (file: { providerFileId: string; providerKey: string | null }) => Promise<boolean> };
 }) {
   return new ArtifactSink({
     storage: deps.storage,
@@ -135,6 +140,7 @@ function sinkWith(deps: {
     idGen: { uuidv7: () => 'att-uuid' },
     retentionDays: 30,
     maxBytes: 10 * 1024 * 1024,
+    ...(deps.providerFiles !== undefined ? { providerFiles: deps.providerFiles } : {}),
     backoffMs: [0, 0, 0],
   });
 }
@@ -367,5 +373,79 @@ describe('ArtifactSink', () => {
     }));
 
     expect(attachments.inserted[0]?.metadata).not.toHaveProperty('revisedPrompt');
+  });
+
+  it('deletes the provider copy after the bytes are committed locally', async () => {
+    const storage = new FakeStorage();
+    const attachments = new FakeAttachmentRepo();
+    const conversations = new FakeConversationRepo();
+    const cleaned: Array<{ providerFileId: string; providerKey: string | null }> = [];
+    const sink = sinkWith({
+      storage,
+      attachments,
+      conversations,
+      providerFiles: {
+        deleteFile: async (file) => {
+          expect(attachments.inserted).toHaveLength(1);
+          cleaned.push(file);
+          return true;
+        },
+      },
+    });
+
+    await sink.hydrate({ ...input, providerKey: 'openai-main' }, async () => ({
+      stream: new Blob([bytes('xlsx-content')]).stream(),
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
+
+    expect(cleaned).toEqual([{ providerFileId: 'file_abc', providerKey: 'openai-main' }]);
+    expect(attachments.inserted[0]?.metadata).toMatchObject({ providerKey: 'openai-main' });
+  });
+
+  it('never deletes the provider copy when the local write failed', async () => {
+    const storage = new FakeStorage();
+    storage.failPut = true;
+    const attachments = new FakeAttachmentRepo();
+    const conversations = new FakeConversationRepo();
+    const cleaned: string[] = [];
+    const sink = sinkWith({
+      storage,
+      attachments,
+      conversations,
+      providerFiles: {
+        deleteFile: async (file) => {
+          cleaned.push(file.providerFileId);
+          return true;
+        },
+      },
+    });
+
+    const result = await sink.hydrate(input, async () => ({
+      stream: new Blob([bytes('payload')]).stream(),
+      mimeType: 'image/png',
+    }));
+
+    expect(result).toBeNull();
+    expect(cleaned).toEqual([]);
+  });
+
+  it('keeps the attachment when the provider delete fails', async () => {
+    const storage = new FakeStorage();
+    const attachments = new FakeAttachmentRepo();
+    const conversations = new FakeConversationRepo();
+    const sink = sinkWith({
+      storage,
+      attachments,
+      conversations,
+      providerFiles: { deleteFile: async () => false },
+    });
+
+    const result = await sink.hydrate({ ...input, providerKey: 'anthropic-main' }, async () => ({
+      stream: new Blob([bytes('payload')]).stream(),
+      mimeType: 'application/pdf',
+    }));
+
+    expect(result).not.toBeNull();
+    expect(attachments.inserted).toHaveLength(1);
   });
 });

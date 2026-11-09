@@ -18,6 +18,7 @@ import type {
   CreateConversationInput,
   ListConversationsQuery,
   ListMessagesQuery,
+  PurgeableAttachmentRef,
 } from '../ports/conversation-repository.ts';
 
 const conversationColumns = {
@@ -97,8 +98,14 @@ interface PartRow {
   updatedAt: Date;
 }
 
-function toConversation(row: ConversationRow): Conversation {
-  return {
+/** String field from an attachment `metadata` blob, or `null` when absent/typed otherwise. */
+function metadataString(metadata: unknown, key: string): string | null {
+  if (typeof metadata !== 'object' || metadata === null) return null;
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+function toConversation(row: ConversationRow): Conversation {  return {
     id: row.id,
     userId: row.userId,
     modelId: row.modelId,
@@ -619,16 +626,22 @@ export class DrizzleConversationRepository implements ConversationRepository {
   async attachmentStorageKeysFor(
     conversationIds: readonly string[],
     tx?: TransactionContext,
-  ): Promise<readonly { readonly conversationId: string; readonly storageKey: string }[]> {
+  ): Promise<readonly PurgeableAttachmentRef[]> {
     if (conversationIds.length === 0) return [];
     const rows = await runDb(tx)
       .select({
         conversationId: attachments.conversationId,
         storageKey: attachments.storageKey,
+        metadata: attachments.metadata,
       })
       .from(attachments)
       .where(inArray(attachments.conversationId, [...conversationIds]));
-    return rows;
+    return rows.map((row) => ({
+      conversationId: row.conversationId,
+      storageKey: row.storageKey,
+      providerFileId: metadataString(row.metadata, 'providerFileId'),
+      providerKey: metadataString(row.metadata, 'providerKey'),
+    }));
   }
 
   async hardDelete(ids: readonly string[], tx?: TransactionContext): Promise<number> {

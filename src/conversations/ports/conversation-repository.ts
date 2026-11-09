@@ -31,6 +31,14 @@ export interface ListMessagesQuery {
   readonly before: { readonly seq: number } | null;
 }
 
+/** One attachment blob owned by a purged conversation, with its provider copy. */
+export interface PurgeableAttachmentRef {
+  readonly conversationId: string;
+  readonly storageKey: string;
+  readonly providerFileId: string | null;
+  readonly providerKey: string | null;
+}
+
 export interface ConversationRepository {
   listByUser(
     query: ListConversationsQuery,
@@ -152,7 +160,7 @@ export interface ConversationRepository {
   attachmentStorageKeysFor(
     conversationIds: readonly string[],
     tx?: TransactionContext,
-  ): Promise<readonly { readonly conversationId: string; readonly storageKey: string }[]>;
+  ): Promise<readonly PurgeableAttachmentRef[]>;
 
   hardDelete(ids: readonly string[], tx?: TransactionContext): Promise<number>;
 }

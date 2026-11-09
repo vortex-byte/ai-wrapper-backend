@@ -22,7 +22,7 @@ import {
 import { buildClient, defaultFactory } from './client.ts';
 import { translateError } from './errors.ts';
 import { estimateInputTokens } from './estimate.ts';
-import { fetchArtifactStream, uploadInputFile } from './files.ts';
+import { fetchArtifactStream, uploadInputFile, deleteProviderFile } from './files.ts';
 import { resolveMediaBlocks } from './media.ts';
 import { buildMessages, toProviderRequest } from './request.ts';
 import { executeStream } from './stream.ts';
@@ -117,5 +117,9 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   async uploadInputFile(file: InputFileUpload, ctx: FilesApiContext): Promise<UploadedInputFile> {
     return uploadInputFile(file, ctx);
+  }
+
+  async deleteProviderFile(providerFileId: string, ctx: FilesApiContext): Promise<void> {
+    return deleteProviderFile(providerFileId, ctx);
   }
 }

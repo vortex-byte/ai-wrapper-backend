@@ -77,6 +77,7 @@ export { InMemoryProviderRegistry } from './infrastructure/registry.ts';
 export { createDefaultProviderRegistry } from './infrastructure/register-adapters.ts';
 export { DrizzleRegistryRepository } from './infrastructure/drizzle-registry-repository.ts';
 export { CachedModelRegistry } from './infrastructure/cached-registry.ts';
+export { AdapterProviderFileCleaner } from './infrastructure/adapter-provider-file-cleaner.ts';
 export { EnvSecretResolver } from './ports/secret-resolver.ts';
 export { OpenAIAdapter } from './infrastructure/adapters/openai/adapter.ts';
 export { AnthropicAdapter } from './infrastructure/adapters/anthropic/adapter.ts';

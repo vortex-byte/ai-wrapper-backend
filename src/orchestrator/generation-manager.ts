@@ -219,6 +219,7 @@ export class GenerationManager {
               ...(artifact.revisedPrompt !== undefined
                 ? { revisedPrompt: artifact.revisedPrompt }
                 : {}),
+              providerKey: provider.key,
             },
             async (providerFileId) => {
               if (fetchArtifactStream === undefined) {

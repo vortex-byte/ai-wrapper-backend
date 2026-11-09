@@ -170,6 +170,11 @@ export class OpenAIAdapter implements ProviderAdapter {
     const form = new FormData();
     form.append('purpose', 'user_data');
     form.append('file', new Blob([file.bytes], { type: file.mimeType }), file.filename);
+    // Without an explicit policy, `user_data` files persist until deleted manually.
+    if (ctx.fileRetentionDays !== undefined && ctx.fileRetentionDays > 0) {
+      form.append('expires_after[anchor]', 'created_at');
+      form.append('expires_after[seconds]', String(ctx.fileRetentionDays * 86_400));
+    }
 
     const response = await fetch(`${apiBase(ctx.provider)}/files`, {
       method: 'POST',
@@ -193,6 +198,30 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     return { providerFileId: payload.id };
+  }
+
+  async deleteProviderFile(providerFileId: string, ctx: FilesApiContext): Promise<void> {
+    const apiKey = requireProviderApiKey(ctx.provider);
+
+    const containerFile = parseContainerFileHandle(providerFileId);
+    const url =
+      containerFile !== null
+        ? `${apiBase(ctx.provider)}/containers/${encodeURIComponent(containerFile.containerId)}/files/${encodeURIComponent(containerFile.fileId)}`
+        : `${apiBase(ctx.provider)}/files/${encodeURIComponent(providerFileId)}`;
+
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: ctx.signal,
+    });
+
+    // Already gone is a success: deletion is idempotent.
+    if (!response.ok && response.status !== 404) {
+      throw providerError('provider_unavailable', 'Could not delete the provider file.', {
+        retryable: response.status >= 500 || response.status === 429,
+        providerStatus: response.status,
+      });
+    }
   }
 
   private client(provider: ProviderRuntimeConfig, apiKey: string): OpenAIClientLike {

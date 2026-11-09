@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   OpenAIAdapter,
   type OpenAIClientLike,
 } from '@/providers/infrastructure/adapters/openai/adapter.ts';
+import { getLogger } from '@/observability/logger.ts';
 import { makeChatRequest } from '@/providers/infrastructure/fake/fake-provider.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
 import type { GenerationEvent } from '@/providers/domain/pal.ts';
@@ -30,7 +31,7 @@ function makeRequest(overrides: Partial<NormalizedChatRequest> = {}): Normalized
         streaming: true,
         vision: true,
         documents: { pdf: true },
-        imageGeneration: true,
+        imageGeneration: { mode: 'tool' },
         documentGeneration: false,
         systemPrompt: true,
         tools: true,
@@ -168,7 +169,19 @@ describe('OpenAIAdapter — hosted image generation', () => {
     const req = makeRequest();
     const withoutCapability: NormalizedChatRequest = {
       ...req,
-      model: { ...req.model, capabilities: { ...req.model.capabilities, imageGeneration: false } },
+      model: {
+        ...req.model,
+        capabilities: {
+          streaming: req.model.capabilities.streaming,
+          vision: req.model.capabilities.vision,
+          documents: req.model.capabilities.documents,
+          documentGeneration: req.model.capabilities.documentGeneration,
+          systemPrompt: req.model.capabilities.systemPrompt,
+          tools: req.model.capabilities.tools,
+          contextWindow: req.model.capabilities.contextWindow,
+          maxOutputTokens: req.model.capabilities.maxOutputTokens,
+        },
+      },
     };
 
     const events = await collect(adapter, withoutCapability);
@@ -362,6 +375,255 @@ describe('OpenAIAdapter — hosted image generation', () => {
         background: 'opaque',
       },
     ]);
+  });
+
+  it('drops option values the provider would reject and says so', async () => {
+    const warn = vi.spyOn(getLogger(), 'warn').mockImplementation(() => {});
+    const fake = fakeClient(imageTurn());
+    try {
+      await collect(
+        new OpenAIAdapter(() => fake.client),
+        withModelConfig(makeRequest(), {
+          imageGenerationOptions: { size: '9999x9999', quality: 'ultra', output_format: 'tiff' },
+        }),
+      );
+
+      expect(fake.responsesCalls[0]!['tools']).toEqual([{ type: 'image_generation' }]);
+      expect(warn).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ component: 'provider.openai', option: 'size' }),
+        expect.any(String),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('forwards a custom size, xhigh quality and explicit action', async () => {
+    const fake = fakeClient(imageTurn());
+    await collect(
+      new OpenAIAdapter(() => fake.client),
+      withModelConfig(makeRequest(), {
+        imageGenerationOptions: { size: '1536x864', quality: 'xhigh', action: 'generate' },
+      }),
+    );
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', size: '1536x864', quality: 'xhigh', action: 'generate' },
+    ]);
+  });
+
+  it('rejects sizes that violate the documented constraints', async () => {
+    const cases = ['1535x1024', '100x100', '8000x1000', '4096x4096'];
+    for (const size of cases) {
+      const fake = fakeClient(imageTurn());
+      await collect(
+        new OpenAIAdapter(() => fake.client),
+        withModelConfig(makeRequest(), { imageGenerationOptions: { size } }),
+      );
+      expect(fake.responsesCalls[0]!['tools'], size).toEqual([{ type: 'image_generation' }]);
+    }
+  });
+
+  it('forwards output_compression only for jpeg and webp', async () => {
+    const jpeg = fakeClient(imageTurn());
+    await collect(
+      new OpenAIAdapter(() => jpeg.client),
+      withModelConfig(makeRequest(), {
+        imageGenerationOptions: { output_format: 'jpeg', output_compression: 80 },
+      }),
+    );
+    expect(jpeg.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', output_format: 'jpeg', output_compression: 80 },
+    ]);
+
+    const warn = vi.spyOn(getLogger(), 'warn').mockImplementation(() => {});
+    try {
+      const png = fakeClient(imageTurn());
+      await collect(
+        new OpenAIAdapter(() => png.client),
+        withModelConfig(makeRequest(), {
+          imageGenerationOptions: { output_format: 'png', output_compression: 80 },
+        }),
+      );
+      expect(png.responsesCalls[0]!['tools']).toEqual([
+        { type: 'image_generation', output_format: 'png' },
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ option: 'output_compression' }),
+        expect.any(String),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('never forwards gif or svg as a tool output_format', async () => {
+    for (const format of ['gif', 'svg']) {
+      const fake = fakeClient(imageTurn());
+      await collect(
+        new OpenAIAdapter(() => fake.client),
+        withModelConfig(makeRequest(), { imageGenerationOptions: { output_format: format } }),
+      );
+      expect(fake.responsesCalls[0]!['tools']).toEqual([{ type: 'image_generation' }]);
+    }
+  });
+
+  it('pins the image model named by the capability', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = makeRequest();
+    await collect(
+      new OpenAIAdapter(() => fake.client),
+      {
+        ...req,
+        model: {
+          ...req.model,
+          capabilities: {
+            ...req.model.capabilities,
+            imageGeneration: { mode: 'tool', model: 'gpt-image-2.5-flare' },
+          },
+        },
+      },
+    );
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', model: 'gpt-image-2.5-flare' },
+    ]);
+  });
+
+  it('sends safety_identifier from the request metadata', async () => {
+    const fake = fakeClient(imageTurn());
+    await collect(new OpenAIAdapter(() => fake.client), makeRequest());
+
+    expect(fake.responsesCalls[0]!['safety_identifier']).toBe(
+      makeRequest().metadata.userIdHash,
+    );
+  });
+
+  it('surfaces revised_prompt on the artifact', async () => {
+    const fake = fakeClient([
+      { type: 'response.created', response: { id: 'resp_img' } },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: {
+          id: 'ig_1',
+          type: 'image_generation_call',
+          status: 'completed',
+          result: IMAGE_BASE64,
+          revised_prompt: 'a watercolour cat on a windowsill',
+        },
+      },
+      {
+        type: 'response.completed',
+        response: { id: 'resp_img', status: 'completed', output: [] },
+      },
+    ]);
+
+    const [artifact] = artifacts(await collect(new OpenAIAdapter(() => fake.client), makeRequest()));
+
+    expect(artifact!.revisedPrompt).toBe('a watercolour cat on a windowsill');
+  });
+
+  it('forwards partial_images and emits each preview', async () => {
+    const fake = fakeClient([
+      { type: 'response.created', response: { id: 'resp_img' } },
+      {
+        type: 'response.image_generation_call.partial_image',
+        item_id: 'ig_1',
+        partial_image_index: 0,
+        partial_image_b64: IMAGE_BASE64,
+      },
+    ]);
+    const adapter = new OpenAIAdapter(() => fake.client);
+
+    const events = await collect(
+      adapter,
+      withModelConfig(makeRequest(), { imageGenerationOptions: { partial_images: 2 } }),
+    );
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', partial_images: 2 },
+    ]);
+    const [partial] = artifacts(events);
+    expect(partial!.providerFileId).toBe('image-partial:ig_1:0');
+    expect(partial!.filename).toBe('image-partial-1.png');
+  });
+
+  it('keeps previews distinct across image calls in one turn', async () => {
+    const fake = fakeClient([
+      { type: 'response.created', response: { id: 'resp_img' } },
+      {
+        type: 'response.image_generation_call.partial_image',
+        item_id: 'ig_1',
+        partial_image_index: 0,
+        partial_image_b64: IMAGE_BASE64,
+      },
+      {
+        type: 'response.image_generation_call.partial_image',
+        item_id: 'ig_2',
+        partial_image_index: 0,
+        partial_image_b64: IMAGE_BASE64,
+      },
+    ]);
+
+    const events = await collect(
+      new OpenAIAdapter(() => fake.client),
+      withModelConfig(makeRequest(), { imageGenerationOptions: { partial_images: 2 } }),
+    );
+
+    expect(artifacts(events).map((a) => a.providerFileId)).toEqual([
+      'image-partial:ig_1:0',
+      'image-partial:ig_2:0',
+    ]);
+  });
+
+  it('clamps partial_images to the provider maximum', async () => {
+    const fake = fakeClient(imageTurn());
+    await collect(
+      new OpenAIAdapter(() => fake.client),
+      withModelConfig(makeRequest(), { imageGenerationOptions: { partial_images: 9 } }),
+    );
+
+    expect((fake.responsesCalls[0]!['tools'] as Array<Record<string, unknown>>)[0]).toEqual({
+      type: 'image_generation',
+      partial_images: 3,
+    });
+  });
+
+  it('stops emitting images once maxImagesPerRequest is reached', async () => {
+    const twoImages = [
+      {
+        id: 'ig_1',
+        type: 'image_generation_call',
+        status: 'completed',
+        result: IMAGE_BASE64,
+      },
+      {
+        id: 'ig_2',
+        type: 'image_generation_call',
+        status: 'completed',
+        result: IMAGE_BASE64,
+      },
+    ];
+    const fake = fakeClient([
+      { type: 'response.created', response: { id: 'resp_img' } },
+      {
+        type: 'response.completed',
+        response: { id: 'resp_img', status: 'completed', output: twoImages },
+      },
+    ]);
+    const req = makeRequest();
+
+    const events = await collect(new OpenAIAdapter(() => fake.client), {
+      ...req,
+      model: {
+        ...req.model,
+        capabilities: { ...req.model.capabilities, maxImagesPerRequest: 1 },
+      },
+    });
+
+    expect(artifacts(events)).toHaveLength(1);
   });
 
   it('declares both the image tool and the sandbox when a container turn also allows images', async () => {

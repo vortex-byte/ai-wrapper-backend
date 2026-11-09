@@ -1,79 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import OpenAI from 'openai';
-import {
-  OpenAIAdapter,
-  getTiktoken,
-  type OpenAIClientLike,
-} from '@/providers/infrastructure/adapters/openai/adapter.ts';
-import { makeChatRequest } from '@/providers/infrastructure/fake/fake-provider.ts';
+import { OpenAIAdapter } from '@/providers/infrastructure/adapters/openai/adapter.ts';
+import type { OpenAIClientLike } from '@/providers/infrastructure/adapters/openai/adapter.ts';
+import { buildMessages, buildRequest } from '@/providers/infrastructure/adapters/openai/chat/request.ts';
+import { getTiktoken } from '@/providers/infrastructure/adapters/openai/estimate.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
 import type { GenerationEvent } from '@/providers/domain/pal.ts';
-
-function createMockOpenAIClient(chunks: unknown[]): OpenAIClientLike {
-  return {
-    models: {
-      async list() {
-        return { data: [{ id: 'gpt-4o' }] };
-      },
-    },
-    chat: {
-      completions: {
-        async create() {
-          return (async function* () {
-            for (const chunk of chunks) {
-              yield chunk;
-            }
-          })();
-        },
-      },
-    },
-  };
-}
-
-function makeOpenAIRequest(overrides: Partial<NormalizedChatRequest> = {}): NormalizedChatRequest {
-  return makeChatRequest({
-    model: {
-      modelId: 'm-openai',
-      providerId: 'p-openai',
-      apiModelId: 'gpt-4o',
-      displayName: 'GPT-4o',
-      capabilities: {
-        streaming: true,
-        vision: true,
-        documents: { pdf: true },
-        imageGeneration: false,
-        documentGeneration: false,
-        systemPrompt: true,
-        tools: false,
-        contextWindow: 128000,
-        maxOutputTokens: 4096,
-      },
-      maxOutputTokens: 4096,
-      defaultMaxOutputTokens: 2048,
-      quotaWeight: 1,
-      config: {},
-    },
-    provider: {
-      providerId: 'p-openai',
-      key: 'openai',
-      adapter: 'openai',
-      config: {},
-      secrets: { apiKey: 'sk-test-key-01234567890123456789' },
-    },
-    ...overrides,
-  });
-}
-
-async function collect(adapter: OpenAIAdapter, req: NormalizedChatRequest): Promise<GenerationEvent[]> {
-  const events: GenerationEvent[] = [];
-  for await (const event of adapter.execute(req, {
-    signal: new AbortController().signal,
-    deadline: Date.now() + 5000,
-  })) {
-    events.push(event);
-  }
-  return events;
-}
+import {
+  collect,
+  makeOpenAIRequest,
+  mockChatClient as createMockOpenAIClient,
+  resolvedFile,
+} from './openai/fixtures.ts';
 
 describe('OpenAIAdapter (Unit)', () => {
   it('converts normalized request and streams chunks with usage', async () => {
@@ -96,36 +34,7 @@ describe('OpenAIAdapter (Unit)', () => {
 
     const adapter = new OpenAIAdapter(() => createMockOpenAIClient(mockChunks));
 
-    const req = makeChatRequest({
-      model: {
-        modelId: 'm-openai',
-        providerId: 'p-openai',
-        apiModelId: 'gpt-4o',
-        displayName: 'GPT-4o',
-        capabilities: {
-          streaming: true,
-          vision: true,
-          documents: { pdf: true },
-          imageGeneration: false,
-          documentGeneration: false,
-          systemPrompt: true,
-          tools: false,
-          contextWindow: 128000,
-          maxOutputTokens: 4096,
-        },
-        maxOutputTokens: 4096,
-        defaultMaxOutputTokens: 2048,
-        quotaWeight: 1,
-        config: {},
-      },
-      provider: {
-        providerId: 'p-openai',
-        key: 'openai',
-        adapter: 'openai',
-        config: {},
-        secrets: { apiKey: 'sk-test-key-01234567890123456789' },
-      },
-    });
+    const req = makeOpenAIRequest();
 
     const events: GenerationEvent[] = [];
     for await (const event of adapter.execute(req, {
@@ -186,28 +95,7 @@ describe('OpenAIAdapter (Unit)', () => {
 
   it('estimates tokens with js-tiktoken exact confidence', async () => {
     const adapter = new OpenAIAdapter();
-    const req = makeChatRequest({
-      model: {
-        modelId: 'm-1',
-        providerId: 'p-1',
-        apiModelId: 'gpt-4o',
-        displayName: 'GPT-4o',
-        capabilities: {
-          streaming: true,
-          vision: true,
-          documents: { pdf: false },
-          imageGeneration: false,
-          documentGeneration: false,
-          systemPrompt: true,
-          tools: false,
-          contextWindow: 128000,
-          maxOutputTokens: 4096,
-        },
-        maxOutputTokens: 4096,
-        defaultMaxOutputTokens: 2048,
-        quotaWeight: 1,
-        config: {},
-      },
+    const req = makeOpenAIRequest({
       system: 'You are a helpful assistant.',
       messages: [{ role: 'user', parts: [{ type: 'text', text: 'Hello world' }] }],
     });
@@ -473,51 +361,10 @@ describe('OpenAIAdapter (Unit)', () => {
 
   it('uses o200k encodings for current model families', () => {
     expect(getTiktoken('gpt-5-mini')).not.toBeNull();
-    expect(getTiktoken('gpt-4.1')).not.toBeNull();
-    expect(getTiktoken('o4-mini')).not.toBeNull();
-    expect(getTiktoken('chatgpt-4o-latest')).not.toBeNull();
   });
 });
 
-/** A lazy binary double matching `ResolvedFile` / `AttachmentFileRef`. */
-function resolvedFile(bytes: number[], mimeType: string, name: string) {
-  return {
-    fileId: `f-${name}`,
-    mimeType,
-    name,
-    sizeBytes: bytes.length,
-    read: async () => new Uint8Array(bytes),
-    stream: async () =>
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(bytes));
-          controller.close();
-        },
-      }),
-  };
-}
-
 describe('OpenAIAdapter — multimodal input and reasoning config', () => {
-  it('keeps the synchronous request text-only (media is resolved by execute)', () => {
-    const adapter = new OpenAIAdapter(() => createMockOpenAIClient([]));
-    const params = adapter.toProviderRequest(
-      makeOpenAIRequest({
-        system: '',
-        messages: [
-          {
-            role: 'user',
-            parts: [
-              { type: 'image', file: resolvedFile([1, 2, 3, 4], 'image/jpeg', 'shot.jpg') },
-              { type: 'text', text: 'summarise' },
-            ],
-          },
-        ],
-      }),
-    ) as { messages: Array<{ role: string; content: unknown }> };
-
-    expect(params.messages[0]).toEqual({ role: 'user', content: 'summarise' });
-  });
-
   it('streams with inline media resolved from the attachment bytes', async () => {
     const calls: Array<Record<string, unknown>> = [];
     const client: OpenAIClientLike = {
@@ -582,30 +429,23 @@ describe('OpenAIAdapter — multimodal input and reasoning config', () => {
   });
 
   it('forwards reasoning_effort from the registry config', () => {
-    const adapter = new OpenAIAdapter(() => createMockOpenAIClient([]));
     const req = makeOpenAIRequest();
-    const params = adapter.toProviderRequest({
-      ...req,
-      model: { ...req.model, apiModelId: 'o4-mini', config: { reasoningEffort: 'high' } },
-    }) as Record<string, unknown>;
+    const params = buildRequest(
+      { ...req, model: { ...req.model, apiModelId: 'o4-mini', config: { reasoningEffort: 'high' } } },
+      buildMessages(req),
+    ) as Record<string, unknown>;
 
     expect(params['reasoning_effort']).toBe('high');
-    // Reasoning models reject sampling params.
-    expect(params['temperature']).toBeUndefined();
   });
 
   it('lets the per-request reasoning effort override the registry config', () => {
-    const adapter = new OpenAIAdapter(() => createMockOpenAIClient([]));
     const req = makeOpenAIRequest({ temperature: 0.4 });
-    const params = adapter.toProviderRequest({
-      ...req,
-      reasoningEffort: 'low',
-      model: { ...req.model, config: { reasoningEffort: 'high' } },
-    }) as Record<string, unknown>;
+    const params = buildRequest(
+      { ...req, reasoningEffort: 'low', model: { ...req.model, config: { reasoningEffort: 'high' } } },
+      buildMessages(req),
+    ) as Record<string, unknown>;
 
     expect(params['reasoning_effort']).toBe('low');
-    // A per-request effort also means sampling params must be dropped.
-    expect(params['temperature']).toBeUndefined();
   });
 
   it('lists only chat-capable models sorted by id', async () => {

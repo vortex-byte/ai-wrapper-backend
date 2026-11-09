@@ -244,6 +244,31 @@ describe('createLogger file transports', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('emits "ts" as the first JSON key on every file log line', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aichat-logs-'));
+    setConfigForTests(configWith({ NODE_ENV: 'development', LOG_DIR: dir, LOG_TO_FILES: 'true' }));
+
+    try {
+      const logger = createLogger({ fileLogging: true });
+      logger.info({ generationId: 'gen-1' }, 'ordering check');
+
+      const day = new Date().toISOString().slice(0, 10);
+      const contents = await waitForFile(path.join(dir, `app-${day}.log`), 'ordering check');
+
+      const jsonLines = contents
+        .split('\n')
+        .filter((line) => line.startsWith('{'))
+        .map((line) => JSON.parse(line) as { ts: string });
+      expect(jsonLines.length).toBeGreaterThan(0);
+      for (const line of contents.split('\n').filter((l) => l.startsWith('{'))) {
+        expect(line).toMatch(/^\{"ts":"/);
+      }
+      expect(jsonLines.every((line) => typeof line.ts === 'string')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 async function waitForFile(file: string, needle: string): Promise<string> {

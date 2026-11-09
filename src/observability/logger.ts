@@ -103,17 +103,15 @@ function isContentKey(key: string): boolean {
 }
 
 export function scrubString(input: string): string {
-  return (
-    input
-      .replace(/\b(postgres(?:ql)?:\/\/)[^/\s@]+:(?!\[redacted\])[^@\s]+@/gi, `$1${REDACTED}@`)
-      .replace(/\b(Bearer\s+)(?!\[redacted\])[A-Za-z0-9._~+/=-]{8,}/gi, `$1${REDACTED}`)
-      .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, REDACTED)
-      .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, REDACTED)
-      .replace(
-        /\b(password|passwd|pwd|token|secret|api[_-]?key|authorization)\b\s*[=:]\s*(?!\[redacted\])("[^"]*"|'[^']*'|[^\s,;&}\]]+)/gi,
-        `$1=${REDACTED}`,
-      )
-  );
+  return input
+    .replace(/\b(postgres(?:ql)?:\/\/)[^/\s@]+:(?!\[redacted\])[^@\s]+@/gi, `$1${REDACTED}@`)
+    .replace(/\b(Bearer\s+)(?!\[redacted\])[A-Za-z0-9._~+/=-]{8,}/gi, `$1${REDACTED}`)
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, REDACTED)
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, REDACTED)
+    .replace(
+      /\b(password|passwd|pwd|token|secret|api[_-]?key|authorization)\b\s*[=:]\s*(?!\[redacted\])("[^"]*"|'[^']*'|[^\s,;&}\]]+)/gi,
+      `$1=${REDACTED}`,
+    );
 }
 
 interface SerializedError {
@@ -191,9 +189,7 @@ function serializeValue(value: unknown, seen: WeakSet<object>, depth: number): u
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(source)) {
       if (isContentKey(key)) continue;
-      out[key] = isSensitiveKey(key)
-        ? REDACTED
-        : serializeValue(source[key], seen, depth + 1);
+      out[key] = isSensitiveKey(key) ? REDACTED : serializeValue(source[key], seen, depth + 1);
     }
     return out;
   }
@@ -270,7 +266,10 @@ const NAME = '\u001B[36m';
 const LEVEL_WIDTH = 5;
 
 function formatTimestamp(ts: string): string {
-  return ts.replace('T', ' ').replace(/(\.\d{3})\d*/, '$1').replace('Z', '');
+  return ts
+    .replace('T', ' ')
+    .replace(/(\.\d{3})\d*/, '$1')
+    .replace('Z', '');
 }
 
 export interface RenderTextOptions {
@@ -309,7 +308,7 @@ export function renderTextLine(
     if (isError) errors.push(field);
     else (TRACE_KEYS.has(key) ? traces : contextFields).push(field);
   }
-  
+
   const context = contextFields.length > 0 ? ` - ${contextFields.join(' ')}` : '';
 
   const head = `${paint(DIM, timestamp)} ${paint(NAME, options.name)} - ${level} - ${record.msg}`;
@@ -328,7 +327,9 @@ function formatField(key: string, value: unknown): string | null {
     const error = value as SerializedError;
     const head = `${key}="${error.name}: ${error.message}"`;
     const stack = typeof error.stack === 'string' ? error.stack : undefined;
-    return stack === undefined ? head : `${head}\n${stack.replace(/\r\n/g, '\n').replace(/^/gm, '    ')}`;
+    return stack === undefined
+      ? head
+      : `${head}\n${stack.replace(/\r\n/g, '\n').replace(/^/gm, '    ')}`;
   }
   if (typeof value === 'string') return isBare(value) ? `${key}=${value}` : `${key}="${value}"`;
   if (typeof value === 'object') return `${key}=${JSON.stringify(value)}`;
@@ -336,7 +337,9 @@ function formatField(key: string, value: unknown): string | null {
 }
 
 function isSerializedError(value: object): boolean {
-  return 'name' in value && 'message' in value && typeof (value as { name: unknown }).name === 'string';
+  return (
+    'name' in value && 'message' in value && typeof (value as { name: unknown }).name === 'string'
+  );
 }
 
 function isBare(value: string): boolean {
@@ -390,7 +393,9 @@ function buildFileTransports(): winston.transport[] {
     maxFiles: `${config.LOG_FILE_RETENTION_DAYS}d`,
     zippedArchive: true,
     auditFile: path.join(dir, '.rotation-audit.json'),
-    format: winston.format.json(),
+    // deterministic: false keeps insertion order so `ts` is the first JSON key;
+    // the default (alphabetical sort) would push it to the end of every line.
+    format: winston.format.json({ deterministic: false }),
   } as const;
 
   return [
@@ -442,7 +447,7 @@ function buildLogger(options: LoggerOptions = {}): { logger: Logger; raw: winsto
   const raw = winston.createLogger({
     level: config.LOG_LEVEL,
     silent: config.LOG_LEVEL === 'silent',
-    defaultMeta: { app: 'ai-chat-api', env: config.NODE_ENV, role: config.ROLE },
+    defaultMeta: { app: 'ai-wrapper-api', env: config.NODE_ENV, role: config.ROLE },
     format: loggerFormat,
     transports,
     exitOnError: false,

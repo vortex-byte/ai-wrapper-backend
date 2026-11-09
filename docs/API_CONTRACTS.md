@@ -468,7 +468,7 @@ Submits a new user message turn, reserves quota tokens, and queues assistant gen
 | `options` | object | No | Generation execution options. |
 | `options.maxOutputTokens` | integer | No | Maximum token ceiling requested for output generation. |
 | `options.tools` | object | No | Built-in provider tool toggles. |
-| `options.tools.imageGeneration` | boolean | No | Request-scoped opt-in to provider-hosted image generation (default `false`). Only honoured when the model declares `capabilities.imageGeneration`; otherwise the request fails `422 unsupported_for_model`. Adds the image-generation token tariff to the quota reservation for that turn. |
+| `options.tools.imageGeneration` | boolean | No | Request-scoped opt-in to provider-hosted image generation (default `false`). Only honoured when the model declares `capabilities.imageGeneration` with `mode: "tool"`; a model without the capability, or an image endpoint (`mode: "provider"`), fails `422 unsupported_for_model`. Adds the image-generation token tariff to the quota reservation for that turn. |
 | `options.reasoningEffort` | string (`low` \| `medium` \| `high` \| `xhigh` \| `max`) | No | Reasoning depth for this turn. Must be one of `capabilities.reasoning.availableEfforts`; omitted means `capabilities.reasoning.defaultEffort`. A model without `capabilities.reasoning` rejects the field with `422 unsupported_for_model`. |
 
 > **Document generation stays registry-level; image generation is per request.** Container skills and
@@ -1266,18 +1266,64 @@ sorted ascending by their key.
 `usageSource` is the share of settled generations whose token counts came from the provider
 (`provider`) versus a local estimate (`estimated`); the two add up to `1`.
 
-### 10.6 `GET /api/admin/usage/export`
+### 10.6 `GET /api/admin/usage/report`
 
-The same aggregate as §10.5, as a downloadable file. Accepts the identical query parameters —
-including `divisionId` — and the same `super_admin` requirement.
+The dashboard report: summary, recent requests, breakdown, timeseries, models, and the paged
+department/user tables, in a single response. Requires `role=super_admin` (a `department_admin` may
+only read its own division).
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `from` | string (ISO-8601 date / timestamp) | No | Window start (default: 30 days before `to`). |
+| `to` | string (ISO-8601 date / timestamp) | No | Window end (default: now). |
+| `divisionId` | string (UUIDv7) | No | Scope every section to one division. |
+| `sections` | string (comma-separated) | No | Any of `summary`, `recent`, `breakdown`, `timeseries`, `models`, `byDivision`, `byUser` (default: all). Unknown values are rejected with `400`. |
+| `page` | integer (≥ 1) | No | 1-based page of the table section (default `1`). |
+| `limit` | integer (1–100) | No | Page size of the table section (default `10`). |
+| `search` | string (≤ 100 chars) | No | Case-insensitive match against the table row's resolved `key` labels. |
+
+```json
+{ "status": "ok", "message": "", "data": {
+    "window": { "from": "2026-10-01T00:00:00.000Z", "to": "2026-10-31T23:59:59.999Z" },
+    "summary": { "totalRequests": 1523, "totalFailedRequests": 12, "totalInputTokens": 8123412,
+                 "totalCachedTokens": 0, "totalOutputTokens": 912331, "totalCostUsd": 41.27 },
+    "recent": [ … ],
+    "breakdown": { "byProvider": [ … ], "byModel": [ … ] },
+    "timeseries": [ … ],
+    "models": [ … ],
+    "pagination": { "page": 1, "limit": 10, "totalItems": 37, "totalPages": 4 },
+    "items": [ { "key": { "divisionId": "…", "name": "Engineering" }, "requests": 340,
+                 "quotaTokens": 1250000, … } ],
+    "byDivision": [ … ] } }
+```
+
+- `pagination` and `items` are present only when a table section (`byDivision` or `byUser`) is
+  requested. When both are requested, `byDivision` wins and `byUser` is omitted — one table section
+  per request.
+- `items` is the requested page and is mirrored into `byDivision` / `byUser` for callers of the
+  older shape.
+- `summary`, `recent`, `breakdown`, `timeseries`, and `models` are **not** paged; they cover the
+  whole window.
+
+### 10.7 `GET /api/admin/usage/export`
+
+The same aggregate as §10.5, as a downloadable file. Accepts `from`, `to`, `groupBy`, and
+`divisionId` — and the same `super_admin` requirement.
 
 - **Response:** `200`, `Content-Type: text/csv; charset=utf-8`,
   `Content-Disposition: attachment; filename="usage-<groupBy>-<YYYY-MM-DD>.csv"`, `Cache-Control: no-store`.
 - **Body:** RFC 4180 CSV, `CRLF` line endings, header row first. Columns are the grouping columns in
-  alphabetical order, then `requests`, `failedRequests`, `inputTokens`, `outputTokens`,
-  `quotaTokens`, `estimatedCostUsd`, `usageSourceProvider`, `usageSourceEstimated`.
-- Numbers are unquoted; text cells are quoted only when they contain `,`, `"`, CR, or LF. A missing
-  `estimatedCostUsd` is an empty cell (never `0`, which would be a false cost).
+  alphabetical order, then the metrics. Numbers are unquoted; text cells are quoted only when they
+  contain `,`, `"`, CR, or LF. A missing `estimatedCostUsd` is an empty cell (never `0`, which would
+  be a false cost).
+- **Headers are always Indonesian.** The grouping columns map as `divisionId` → `ID Departemen`,
+  `name` → `Nama Departemen`, `userId` → `ID Pengguna`, `email` → `Email`, `displayName` →
+  `Nama Lengkap`, `modelId` → `ID Model`, `modelKey` → `Kunci Model`, `provider` → `Provider`,
+  `providerId` → `ID Provider`, `providerKey` → `Kunci Provider`, `day` → `Tanggal`, `month` →
+  `Bulan`; an unmapped key falls back to its raw name. Metrics are `Total Permintaan`,
+  `Permintaan Gagal`, `Token Input`, `Token Output`, `Token Terpakai`, `Estimasi Biaya (USD)`,
+  `Sumber Penggunaan (Provider)`, `Sumber Penggunaan (Estimasi)`.
 
 ---
 
@@ -1376,8 +1422,8 @@ Writes an `audit_logs` row (`action: "provider.delete"`) and invalidates the reg
 |---|---|---|
 | `container` | model | Force the provider container path on even when `capabilities.documentGeneration` is `false`. |
 | `containerSkills` | model | Skills to declare on the container (`["pdf","docx","xlsx","pptx"]`); defaults to all four. |
-| `imageGeneration` | model | `false` opts a model out of the `image_generation` tool even when the capability flag is on. |
-| `imageGenerationOptions` | model | Forwarded provider knobs for the image tool (`output_format` and other allow-listed keys); unknown keys are dropped. |
+| `imageGeneration` | model | `false` opts a model out of the `image_generation` tool even when the capability declares `mode: "tool"`. |
+| `imageGenerationOptions` | model | Forwarded provider knobs for the image tool (`size`, `quality`, `background`, `output_format`, `moderation`, `action`, `output_compression`). Sizes must be `auto` or `WxH` with edges on a 16px grid, each edge ≤ 3840, an aspect ratio within 1:3–3:1 and 655,360–8,294,400 pixels. `partial_images` is clamped to `0..3`; `output_compression` is clamped to `0..100` and only sent for `jpeg`/`webp`. Values that fail validation are dropped and logged rather than sent. |
 | `storeResponses` | model | `true` asks OpenAI to retain the Responses object (default `false`). |
 | `useChatCompletions` | provider | `true` forces Chat Completions, disabling containers and hosted image generation for that provider. |
 | `sortOrder` | integer | No | Display sorting priority index (default `0`). |

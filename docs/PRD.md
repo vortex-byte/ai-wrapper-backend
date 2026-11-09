@@ -405,7 +405,11 @@ export interface ModelCapabilities {
   streaming: boolean;
   vision: boolean;
   documents: { pdf: boolean; maxPages?: number; /* others are text-extracted by platform */ };
-  imageGeneration: boolean;
+  /** Absent when the model cannot produce images at all. */
+  imageGeneration?: {
+    mode: 'tool' | 'provider';        // 'tool' = chat model calls the hosted tool; 'provider' = image endpoint
+    model?: string;                   // pinned image model, when the row names one
+  };
   documentGeneration: boolean;
   systemPrompt: boolean;
   tools: boolean;                     // reserved, false in MVP

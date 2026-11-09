@@ -152,38 +152,64 @@ async function seedUsers(ctx: SeedContext): Promise<void> {
     const divisionId = u.divisionName
       ? ctx.divisionIdByName.get(u.divisionName) ?? null
       : null;
-    const res = await ctx.tx.client.query<{ id: string }>(
-      `INSERT INTO users (
-         id, email, display_name, password_hash, role, status,
-         division_id, must_change_password, failed_login_attempts,
-         created_at, updated_at, last_login_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)
-       ON CONFLICT (email) WHERE deleted_at IS NULL DO UPDATE SET
-         display_name = EXCLUDED.display_name,
-         role = EXCLUDED.role,
-         status = EXCLUDED.status,
-         division_id = EXCLUDED.division_id,
-         last_login_at = EXCLUDED.last_login_at,
-         updated_at = now()
-       RETURNING id`,
-      [
-        u.id,
-        u.email,
-        u.displayName,
-        ctx.defaultPasswordHash,
-        u.role,
-        u.status,
-        divisionId,
-        u.mustChangePassword,
-        u.failedLoginAttempts,
-        u.createdAt,
-        u.lastLoginAt,
-      ],
+    const existing = await ctx.tx.client.query<{ id: string }>(
+      `SELECT id FROM users WHERE id = $1 OR (email = $2 AND deleted_at IS NULL) LIMIT 1`,
+      [u.id, u.email],
     );
-    const rowId = res.rows[0]?.id ?? u.id;
+    let rowId: string;
+    if (existing.rows[0]) {
+      rowId = existing.rows[0].id;
+      await ctx.tx.client.query(
+        `UPDATE users SET
+           email = $2,
+           display_name = $3,
+           role = $4,
+           status = $5,
+           division_id = $6,
+           must_change_password = $7,
+           failed_login_attempts = $8,
+           last_login_at = $9,
+           updated_at = now()
+         WHERE id = $1`,
+        [
+          rowId,
+          u.email,
+          u.displayName,
+          u.role,
+          u.status,
+          divisionId,
+          u.mustChangePassword,
+          u.failedLoginAttempts,
+          u.lastLoginAt,
+        ],
+      );
+    } else {
+      const res = await ctx.tx.client.query<{ id: string }>(
+        `INSERT INTO users (
+           id, email, display_name, password_hash, role, status,
+           division_id, must_change_password, failed_login_attempts,
+           created_at, updated_at, last_login_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)
+         RETURNING id`,
+        [
+          u.id,
+          u.email,
+          u.displayName,
+          ctx.defaultPasswordHash,
+          u.role,
+          u.status,
+          divisionId,
+          u.mustChangePassword,
+          u.failedLoginAttempts,
+          u.createdAt,
+          u.lastLoginAt,
+        ],
+      );
+      rowId = res.rows[0]?.id ?? u.id;
+      addInserted(ctx, 'users', 1);
+    }
     ctx.userIdByEmail.set(u.email, rowId);
-    addInserted(ctx, 'users', res.rowCount);
   }
 }
 

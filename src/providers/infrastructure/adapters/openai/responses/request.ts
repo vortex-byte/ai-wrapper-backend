@@ -189,16 +189,38 @@ function warnDroppedImageOption(req: NormalizedChatRequest, key: string, value: 
   );
 }
 
-function imageGenerationTool(req: NormalizedChatRequest): Record<string, unknown> {
+export function resolvedImageGenerationOptions(req: NormalizedChatRequest): Record<string, unknown> {
+  const modelConfigured = req.model.config['imageGenerationOptions'];
+  if (typeof modelConfigured === 'object' && modelConfigured !== null && !Array.isArray(modelConfigured)) {
+    return modelConfigured as Record<string, unknown>;
+  }
+  const providerConfigured = req.provider.config['imageGenerationOptions'];
+  if (typeof providerConfigured === 'object' && providerConfigured !== null && !Array.isArray(providerConfigured)) {
+    return providerConfigured as Record<string, unknown>;
+  }
+  return {};
+}
+
+export function resolvedImageModel(req: NormalizedChatRequest): string | undefined {
   const capability = req.model.capabilities.imageGeneration;
+  if (capability?.model !== undefined && capability.model.trim().length > 0) {
+    return capability.model.trim();
+  }
+  const providerModel = req.provider.config['imageModel'];
+  if (typeof providerModel === 'string' && providerModel.trim().length > 0) {
+    return providerModel.trim();
+  }
+  return undefined;
+}
+
+function imageGenerationTool(req: NormalizedChatRequest): Record<string, unknown> {
   const tool: Record<string, unknown> = { type: 'image_generation' };
-  if (capability?.model !== undefined && capability.model.length > 0) {
-    tool['model'] = capability.model;
+  const targetModel = resolvedImageModel(req);
+  if (targetModel !== undefined) {
+    tool['model'] = targetModel;
   }
 
-  const configured = req.model.config['imageGenerationOptions'];
-  if (typeof configured !== 'object' || configured === null) return tool;
-  const options = configured as Record<string, unknown>;
+  const options = resolvedImageGenerationOptions(req);
 
   for (const key of IMAGE_GENERATION_OPTION_KEYS) {
     const value = options[key];

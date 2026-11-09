@@ -175,6 +175,7 @@ describe('OpenAIAdapter — hosted image generation', () => {
           streaming: req.model.capabilities.streaming,
           vision: req.model.capabilities.vision,
           documents: req.model.capabilities.documents,
+          imageGeneration: null,
           documentGeneration: req.model.capabilities.documentGeneration,
           systemPrompt: req.model.capabilities.systemPrompt,
           tools: req.model.capabilities.tools,
@@ -489,6 +490,120 @@ describe('OpenAIAdapter — hosted image generation', () => {
     expect(fake.responsesCalls[0]!['tools']).toEqual([
       { type: 'image_generation', model: 'gpt-image-2.5-flare' },
     ]);
+  });
+
+  it('falls back to the provider imageModel when the capability names none', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = withProviderConfig(makeRequest(), { imageModel: 'dall-e-3' });
+    await collect(new OpenAIAdapter(() => fake.client), req);
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', model: 'dall-e-3' },
+    ]);
+  });
+
+  it('prefers the capability model over the provider imageModel', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = withProviderConfig(makeRequest(), { imageModel: 'dall-e-3' });
+    await collect(new OpenAIAdapter(() => fake.client), {
+      ...req,
+      model: {
+        ...req.model,
+        capabilities: {
+          ...req.model.capabilities,
+          imageGeneration: { mode: 'tool', model: 'gpt-image-2.5-flare' },
+        },
+      },
+    });
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', model: 'gpt-image-2.5-flare' },
+    ]);
+  });
+
+  it('sends no tool model when neither capability nor provider names one', async () => {
+    const fake = fakeClient(imageTurn());
+    await collect(new OpenAIAdapter(() => fake.client), makeRequest());
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([{ type: 'image_generation' }]);
+  });
+
+  it('uses provider imageGenerationOptions when the model configures none', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = withProviderConfig(makeRequest(), {
+      imageGenerationOptions: { size: '1024x1024', output_format: 'jpeg' },
+    });
+    const [artifact] = artifacts(await collect(new OpenAIAdapter(() => fake.client), req));
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', size: '1024x1024', output_format: 'jpeg' },
+    ]);
+    expect(artifact!.mimeType).toBe('image/jpeg');
+  });
+
+  it('model imageGenerationOptions override the provider-level ones', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = withProviderConfig(
+      withModelConfig(makeRequest(), { imageGenerationOptions: { size: '1536x1024' } }),
+      { imageGenerationOptions: { size: '1024x1024' } },
+    );
+    await collect(new OpenAIAdapter(() => fake.client), req);
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', size: '1536x1024' },
+    ]);
+  });
+
+  it('empty model imageGenerationOptions override provider-level options', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = withProviderConfig(
+      withModelConfig(makeRequest(), { imageGenerationOptions: {} }),
+      { imageGenerationOptions: { size: '1024x1024', output_format: 'jpeg' } },
+    );
+    const [artifact] = artifacts(await collect(new OpenAIAdapter(() => fake.client), req));
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([{ type: 'image_generation' }]);
+    expect(artifact!.mimeType).toBe('image/png');
+  });
+
+  it('ignores an array in model imageGenerationOptions and falls back to provider', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = withProviderConfig(
+      withModelConfig(makeRequest(), { imageGenerationOptions: ['invalid'] }),
+      { imageGenerationOptions: { size: '1024x1024' } },
+    );
+    await collect(new OpenAIAdapter(() => fake.client), req);
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', size: '1024x1024' },
+    ]);
+  });
+
+  it('resolves webp mime from provider imageGenerationOptions', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = withProviderConfig(makeRequest(), {
+      imageGenerationOptions: { output_format: 'webp' },
+    });
+    const [artifact] = artifacts(await collect(new OpenAIAdapter(() => fake.client), req));
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', output_format: 'webp' },
+    ]);
+    expect(artifact!.mimeType).toBe('image/webp');
+  });
+
+  it('trims whitespace on provider imageModel and ignores whitespace-only strings', async () => {
+    const fake1 = fakeClient(imageTurn());
+    const req1 = withProviderConfig(makeRequest(), { imageModel: '  dall-e-3  ' });
+    await collect(new OpenAIAdapter(() => fake1.client), req1);
+    expect(fake1.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', model: 'dall-e-3' },
+    ]);
+
+    const fake2 = fakeClient(imageTurn());
+    const req2 = withProviderConfig(makeRequest(), { imageModel: '    ' });
+    await collect(new OpenAIAdapter(() => fake2.client), req2);
+    expect(fake2.responsesCalls[0]!['tools']).toEqual([{ type: 'image_generation' }]);
   });
 
   it('sends safety_identifier from the request metadata', async () => {

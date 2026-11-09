@@ -13,6 +13,7 @@ import {
 } from '../config.ts';
 import { detectImageMime, mimeFromFilename } from '../media.ts';
 import type { ContainerFileEntry, ExecutionState, RawResponsesItem } from '../types.ts';
+import { resolvedImageGenerationOptions } from './request.ts';
 
 export function containerFileHandle(containerId: string, fileId: string): string {
   return `${CONTAINER_FILE_PREFIX}${containerId}:${fileId}`;
@@ -29,11 +30,8 @@ export function parseContainerFileHandle(
 }
 
 function configuredImageMime(req: NormalizedChatRequest): string {
-  const configured = req.model.config['imageGenerationOptions'];
-  const format =
-    typeof configured === 'object' && configured !== null
-      ? (configured as Record<string, unknown>)['output_format']
-      : undefined;
+  const options = resolvedImageGenerationOptions(req);
+  const format = options['output_format'];
   if (format === 'jpeg') return 'image/jpeg';
   if (format === 'webp') return 'image/webp';
   return 'image/png';

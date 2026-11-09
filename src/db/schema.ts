@@ -427,10 +427,9 @@ export const quotaLedger = pgTable(
 
 export const usageEvents = pgTable('usage_events', {
   id: uuid('id').primaryKey(),
-  generationId: uuid('generation_id')
-    .notNull()
-    .unique()
-    .references(() => generationJobs.id, { onDelete: 'cascade' }),
+  generationId: uuid('generation_id').references(() => generationJobs.id, {
+    onDelete: 'set null',
+  }),
   userId: uuid('user_id')
     .notNull()
     .references(() => users.id),

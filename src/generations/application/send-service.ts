@@ -49,10 +49,17 @@ function assertImageToolSupported(capabilities: ModelCapabilities, requested: bo
 function resolveImageIntent(
   capabilities: ModelCapabilities,
   options: GenerationOptions | undefined,
+  config?: Readonly<Record<string, unknown>>,
 ): boolean {
   assertConversationTarget(capabilities);
   const requested = options?.tools?.imageGeneration === true;
   assertImageToolSupported(capabilities, requested);
+  if (requested && config?.['imageGeneration'] === false) {
+    throw new AppError(
+      'unsupported_for_model',
+      'The selected model has image generation disabled.',
+    );
+  }
   return requested;
 }
 
@@ -202,7 +209,11 @@ export function createSendService(deps: SendMessageDeps): SendService {
         throw new AppError('unsupported_for_model', 'File attachments are not supported yet.');
       }
 
-      const wantsImageOutput = resolveImageIntent(model.capabilities, input.options);
+      const wantsImageOutput = resolveImageIntent(
+        model.capabilities,
+        input.options,
+        model.config,
+      );
 
       const reasoningEffort = resolveReasoningEffort(model, input.options?.reasoningEffort);
 
@@ -613,7 +624,11 @@ export function createSendService(deps: SendMessageDeps): SendService {
       }
       const { model, provider, runtime } = resolved;
 
-      const wantsImageOutput = resolveImageIntent(model.capabilities, input.options);
+      const wantsImageOutput = resolveImageIntent(
+        model.capabilities,
+        input.options,
+        model.config,
+      );
 
       const reasoningEffort = resolveReasoningEffort(model, input.options?.reasoningEffort);
 

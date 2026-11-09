@@ -78,6 +78,7 @@ const DEFAULT_CAPABILITIES = {
 async function seedActiveModel(
   providerAdapter = 'openai',
   capabilities: Record<string, unknown> = DEFAULT_CAPABILITIES,
+  config: Record<string, unknown> = {},
 ): Promise<string> {
   const pool = getPool();
   const providerId = Bun.randomUUIDv7();
@@ -90,9 +91,9 @@ async function seedActiveModel(
   );
   await pool.query(
     `INSERT INTO ai_models (id, provider_id, api_model_id, display_name, status,
-                            capabilities, context_window, max_output_tokens, default_max_output_tokens)
-     VALUES ($1, $2, 'gpt-4o', 'GPT-4o', 'active', $3, 128000, 4096, 2048)`,
-    [modelId, providerId, JSON.stringify(capabilities)],
+                            capabilities, context_window, max_output_tokens, default_max_output_tokens, config)
+     VALUES ($1, $2, 'gpt-4o', 'GPT-4o', 'active', $3, 128000, 4096, 2048, $4)`,
+    [modelId, providerId, JSON.stringify(capabilities), JSON.stringify(config)],
   );
   services.registry.invalidate();
   return modelId;
@@ -423,6 +424,30 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     });
     await seedUser('image-endpoint@corp.example');
     const auth = await loginAs('image-endpoint@corp.example');
+    const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
+
+    const res = await send(convId, auth.cookie, auth.csrfToken, {
+      key: Bun.randomUUIDv7(),
+      body: {
+        parts: [{ type: 'text', text: 'Draw a cat' }],
+        options: { tools: { imageGeneration: true } },
+      },
+    });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe('unsupported_for_model');
+  });
+
+  it('rejects the image tool when model.config.imageGeneration is false', async () => {
+    const modelId = await seedActiveModel(
+      'openai',
+      {
+        ...DEFAULT_CAPABILITIES,
+        imageGeneration: { mode: 'tool' },
+      },
+      { imageGeneration: false },
+    );
+    await seedUser('image-optout@corp.example');
+    const auth = await loginAs('image-optout@corp.example');
     const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
 
     const res = await send(convId, auth.cookie, auth.csrfToken, {

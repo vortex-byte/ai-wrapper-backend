@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import Anthropic from '@anthropic-ai/sdk';
 import {
   AnthropicAdapter,
+  isModernEffortModel,
   type AnthropicClientLike,
 } from '@/providers/infrastructure/adapters/anthropic/adapter.ts';
 import { makeChatRequest } from '@/providers/infrastructure/fake/fake-provider.ts';
@@ -40,7 +41,6 @@ function makeAnthropicRequest(
         streaming: true,
         vision: true,
         documents: { pdf: true },
-        imageGeneration: false,
         documentGeneration: false,
         systemPrompt: true,
         tools: false,
@@ -100,7 +100,6 @@ describe('AnthropicAdapter (Unit)', () => {
           streaming: true,
           vision: true,
           documents: { pdf: true },
-          imageGeneration: false,
           documentGeneration: false,
           systemPrompt: true,
           tools: false,
@@ -183,7 +182,6 @@ describe('AnthropicAdapter (Unit)', () => {
           streaming: true,
           vision: true,
           documents: { pdf: true },
-          imageGeneration: false,
           documentGeneration: false,
           systemPrompt: true,
           tools: false,
@@ -439,6 +437,53 @@ describe('AnthropicAdapter (Unit)', () => {
     expect(params.top_p).toBeUndefined();
   });
 
+  it('maps reasoning effort to output_config.effort and suppresses sampling parameters for modern models', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      model: {
+        ...makeAnthropicRequest().model,
+        apiModelId: 'claude-opus-4-7',
+      },
+      reasoningEffort: 'high',
+      temperature: 0.7,
+      topP: 0.9,
+    });
+    const params = adapter.toProviderRequest(req) as {
+      output_config?: { effort: string };
+      thinking?: unknown;
+      temperature?: number;
+      top_p?: number;
+    };
+
+    expect(params.output_config).toEqual({ effort: 'high' });
+    expect(params.thinking).toEqual({ type: 'adaptive' });
+    expect(params.temperature).toBeUndefined();
+    expect(params.top_p).toBeUndefined();
+  });
+
+  it('suppresses sampling parameters for modern models even when reasoning effort is not requested', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      model: {
+        ...makeAnthropicRequest().model,
+        apiModelId: 'claude-opus-4-7',
+      },
+      temperature: 0.7,
+      topP: 0.9,
+    });
+    const params = adapter.toProviderRequest(req) as {
+      output_config?: { effort: string };
+      thinking?: unknown;
+      temperature?: number;
+      top_p?: number;
+    };
+
+    expect(params.output_config).toBeUndefined();
+    expect(params.thinking).toBeUndefined();
+    expect(params.temperature).toBeUndefined();
+    expect(params.top_p).toBeUndefined();
+  });
+
   it('skips thinking when the output budget leaves no room', () => {
     const adapter = new AnthropicAdapter();
     const params = adapter.toProviderRequest(
@@ -639,7 +684,8 @@ describe('AnthropicAdapter (Unit)', () => {
     expect(capturedParams?.['context_management']).toEqual({
       edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 160_000 } }],
     });
-    expect(capturedHeaders?.['anthropic-beta']).toBe('compact-2026-01-12');
+    expect(capturedHeaders?.['anthropic-beta']).toContain('compact-2026-01-12');
+    expect(capturedHeaders?.['anthropic-beta']).toContain('compact-2026-09-04');
   });
 
   it('emits a compaction event and keeps generating after it', async () => {
@@ -755,6 +801,296 @@ describe('AnthropicAdapter (Unit)', () => {
       void event;
     }
 
+    expect(capturedHeaders?.['anthropic-beta']).toContain('compact-2026-09-04');
     expect(capturedHeaders?.['anthropic-beta']).toContain('compact-2026-01-12');
+  });
+
+  it('emits on-demand whole compaction block with signature from content_block_start', async () => {
+    const mockEvents = [
+      {
+        type: 'message_start',
+        message: { id: 'msg-ondemand', usage: { input_tokens: 100 } },
+      },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: {
+          type: 'compaction',
+          content: 'complete on-demand summary',
+          signature: 'sig_demand_xyz',
+        },
+      },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } },
+    ];
+
+    const adapter = new AnthropicAdapter(() => createMockAnthropicClient(mockEvents));
+    const events: GenerationEvent[] = [];
+    for await (const event of adapter.execute(makeAnthropicRequest(), {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      events.push(event);
+    }
+
+    expect(events.find((e) => e.type === 'compaction')).toEqual({
+      type: 'compaction',
+      provider: 'anthropic',
+      payload: {
+        type: 'compaction',
+        content: 'complete on-demand summary',
+        signature: 'sig_demand_xyz',
+      },
+    });
+  });
+
+  it('aggregates compaction usage across iterations', async () => {
+    const mockEvents = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg-iter',
+          usage: {
+            input_tokens: 50,
+            cache_read_input_tokens: 10,
+            iterations: [
+              {
+                type: 'compaction',
+                input_tokens: 100,
+                output_tokens: 20,
+                cache_read_input_tokens: 5,
+              },
+            ],
+          },
+        },
+      },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn' },
+        usage: {
+          output_tokens: 15,
+          iterations: [
+            {
+              type: 'compaction',
+              output_tokens: 10,
+            },
+          ],
+        },
+      },
+    ];
+
+    const adapter = new AnthropicAdapter(() => createMockAnthropicClient(mockEvents));
+    const events: GenerationEvent[] = [];
+    for await (const event of adapter.execute(makeAnthropicRequest(), {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      events.push(event);
+    }
+
+    const usageEvent = events.find((e) => e.type === 'usage');
+    expect(usageEvent).toMatchObject({
+      type: 'usage',
+      usage: {
+        inputTokens: 50 + 10 + 100 + 5,
+        outputTokens: 15 + 20,
+        cachedInputTokens: 10 + 5,
+        source: 'provider',
+      },
+      final: true,
+    });
+  });
+
+  it('resets iteration output tokens across pause_turn turns', async () => {
+    let call = 0;
+    const adapter = new AnthropicAdapter(() => ({
+      models: { list: async () => ({ data: [] }) },
+      messages: {
+        async create() {
+          call += 1;
+          if (call === 1) {
+            return (async function* () {
+              yield {
+                type: 'message_start',
+                message: {
+                  id: 'msg-turn-1',
+                  usage: {
+                    input_tokens: 30,
+                    iterations: [{ type: 'compaction', input_tokens: 40, output_tokens: 25 }],
+                  },
+                },
+              };
+              yield {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'text', text: '' },
+              };
+              yield {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'text_delta', text: 'Turn 1 text' },
+              };
+              yield { type: 'content_block_stop', index: 0 };
+              yield {
+                type: 'message_delta',
+                delta: { stop_reason: 'pause_turn' },
+                usage: { output_tokens: 10 },
+              };
+            })();
+          }
+          return (async function* () {
+            yield {
+              type: 'message_start',
+              message: { id: 'msg-turn-2', usage: { input_tokens: 10 } },
+            };
+            yield {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'text', text: '' },
+            };
+            yield {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'Turn 2 text' },
+            };
+            yield { type: 'content_block_stop', index: 0 };
+            yield {
+              type: 'message_delta',
+              delta: { stop_reason: 'end_turn' },
+              usage: { output_tokens: 8 },
+            };
+          })();
+        },
+      },
+    }));
+
+    const events: GenerationEvent[] = [];
+    for await (const event of adapter.execute(makeAnthropicRequest(), {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      events.push(event);
+    }
+
+    const usageEvent = events.find((e) => e.type === 'usage');
+    expect(usageEvent).toMatchObject({
+      type: 'usage',
+      usage: {
+        inputTokens: 30 + 40 + 10,
+        outputTokens: 25 + 10 + 8,
+        source: 'provider',
+      },
+      final: true,
+    });
+  });
+
+  it('omits sampling parameters under anthropic-version 2026-10-21 across all models', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      temperature: 0.7,
+      topP: 0.9,
+    });
+    const params = adapter.toProviderRequest(req) as {
+      temperature?: number;
+      top_p?: number;
+    };
+
+    expect(params.temperature).toBeUndefined();
+    expect(params.top_p).toBeUndefined();
+  });
+
+  it('permits sampling parameters for non-modern models when legacy anthropic-version is explicitly configured', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      provider: {
+        ...makeAnthropicRequest().provider,
+        config: { anthropicVersion: '2023-06-01' },
+      },
+      temperature: 0.7,
+      topP: 0.9,
+    });
+    const params = adapter.toProviderRequest(req) as {
+      temperature?: number;
+      top_p?: number;
+    };
+
+    expect(params.temperature).toBe(0.7);
+    expect(params.top_p).toBe(0.9);
+  });
+
+  it('configures adaptive thinking and effort for dot-notated modern model IDs', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      model: {
+        ...makeAnthropicRequest().model,
+        apiModelId: 'claude-opus-4.7',
+      },
+      reasoningEffort: 'high',
+    });
+    const params = adapter.toProviderRequest(req) as {
+      output_config?: { effort: string };
+      thinking?: { type: string };
+    };
+
+    expect(params.output_config).toEqual({ effort: 'high' });
+    expect(params.thinking).toEqual({ type: 'adaptive' });
+  });
+
+  it('correctly classifies model versions with dot notation in isModernEffortModel', () => {
+    expect(isModernEffortModel('claude-opus-4.7')).toBe(true);
+    expect(isModernEffortModel('claude-sonnet-4.8')).toBe(true);
+    expect(isModernEffortModel('claude-haiku-5.5')).toBe(true);
+    expect(isModernEffortModel('claude-sonnet-4-6')).toBe(false);
+    expect(isModernEffortModel('claude-3-5-sonnet-20241022')).toBe(false);
+  });
+
+  it('defers compaction event emission until signature_delta has arrived at content_block_stop', async () => {
+    const mockEvents = [
+      {
+        type: 'message_start',
+        message: { id: 'msg-race', usage: { input_tokens: 100 } },
+      },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'compaction', content: null },
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'compaction_delta', content: 'threshold summary' },
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'signature_delta', signature: 'sig_crypto_123' },
+      },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } },
+    ];
+
+    const adapter = new AnthropicAdapter(() => createMockAnthropicClient(mockEvents));
+    const events: GenerationEvent[] = [];
+    for await (const event of adapter.execute(makeAnthropicRequest(), {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      events.push(event);
+    }
+
+    const compactionEvents = events.filter((e) => e.type === 'compaction');
+    expect(compactionEvents).toHaveLength(1);
+    expect(compactionEvents[0]).toEqual({
+      type: 'compaction',
+      provider: 'anthropic',
+      payload: {
+        type: 'compaction',
+        content: 'threshold summary',
+        signature: 'sig_crypto_123',
+      },
+    });
   });
 });

@@ -42,7 +42,6 @@ function request(overrides: Partial<NormalizedChatRequest> = {}): NormalizedChat
         streaming: true,
         vision: true,
         documents: { pdf: true },
-        imageGeneration: false,
         documentGeneration: true,
         systemPrompt: true,
         tools: true,
@@ -245,6 +244,36 @@ describe('AnthropicAdapter — pause_turn continuation', () => {
     expect(events.filter((e) => e.type === 'usage')).toHaveLength(1);
   });
 
+  it('preserves dynamically assigned container ID on continuation turn', async () => {
+    const pauseTurnWithContainer = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_p1',
+          container: { id: 'cntr_server_assigned_123' },
+          usage: { input_tokens: 5 },
+        },
+      },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'working…' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'pause_turn' }, usage: { output_tokens: 3 } },
+    ];
+    const { client, calls } = scriptedClient([pauseTurnWithContainer, textStream]);
+    const adapter = new AnthropicAdapter(() => client);
+    await collect(
+      adapter.execute(request({ container: { codeExecution: true } }), {
+        signal: new AbortController().signal,
+        deadline: 0,
+      }),
+    );
+
+    expect(calls).toHaveLength(2);
+    expect((calls[1]?.['container'] as Record<string, unknown>)?.['id']).toBe(
+      'cntr_server_assigned_123',
+    );
+  });
+
   it('caps runaway pause_turn loops at the hard limit', async () => {
     const { client, calls } = scriptedClient([pauseTurn]);
     const adapter = new AnthropicAdapter(() => client);
@@ -264,12 +293,64 @@ describe('AnthropicAdapter — Files API', () => {
     vi.restoreAllMocks();
   });
 
-  it('downloads a generated file with the API key in the header', async () => {
+  it('downloads a generated file and retrieves metadata from the Files API', async () => {
+    const body = new Uint8Array([1, 2, 3, 4]);
+    const fetchMock = vi.fn(async (input: string | URL | { readonly url?: string }) => {
+      const url = typeof input === 'string' ? input : 'url' in input && typeof input.url === 'string' ? input.url : input.toString();
+      if (url.endsWith('/content')) {
+        return new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'application/pdf', 'content-length': '4' },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          id: 'file_018XYZ',
+          filename: 'report.pdf',
+          mime_type: 'application/pdf',
+          size_bytes: 4,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const adapter = new AnthropicAdapter(() => scriptedClient([textStream]).client);
+    const artifact = await adapter.fetchArtifactStream('file_018XYZ', {
+      provider: request().provider,
+      signal: new AbortController().signal,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [metaUrl, metaInit] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      { headers: Record<string, string> },
+    ];
+    const [contentUrl, contentInit] = fetchMock.mock.calls[1] as unknown as [
+      string,
+      { headers: Record<string, string> },
+    ];
+    expect(metaUrl).toContain('/v1/files/file_018XYZ');
+    expect(metaInit.headers['x-api-key']).toBe('sk-test');
+    expect(metaInit.headers['anthropic-version']).toBe('2026-10-21');
+    expect(contentUrl).toContain('/v1/files/file_018XYZ/content');
+    expect(contentInit.headers['x-api-key']).toBe('sk-test');
+    expect(contentInit.headers['anthropic-version']).toBe('2026-10-21');
+    expect(artifact.filename).toBe('report.pdf');
+    expect(artifact.mimeType).toBe('application/pdf');
+    expect(artifact.sizeBytes).toBe(4);
+  });
+
+  it('extracts filename from Content-Disposition header when downloading a generated file', async () => {
     const body = new Uint8Array([1, 2, 3, 4]);
     const fetchMock = vi.fn(async () =>
       new Response(body, {
         status: 200,
-        headers: { 'content-type': 'application/pdf', 'content-length': '4' },
+        headers: {
+          'content-type': 'application/pdf',
+          'content-length': '4',
+          'content-disposition': 'attachment; filename="quarterly-report.pdf"',
+        },
       }),
     );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -280,10 +361,7 @@ describe('AnthropicAdapter — Files API', () => {
       signal: new AbortController().signal,
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
-    expect(url).toContain('/v1/files/file_018XYZ/content');
-    expect(init.headers['x-api-key']).toBe('sk-test');
+    expect(artifact.filename).toBe('quarterly-report.pdf');
     expect(artifact.mimeType).toBe('application/pdf');
     expect(artifact.sizeBytes).toBe(4);
   });
@@ -314,6 +392,22 @@ describe('AnthropicAdapter — Files API', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { method: string }];
     expect(url).toContain('/v1/files');
     expect(init.method).toBe('POST');
+  });
+
+  it('supplies default anthropic-version 2026-10-21 to the SDK client factory', async () => {
+    let capturedOptions: Record<string, unknown> | undefined;
+    const adapter = new AnthropicAdapter((options) => {
+      capturedOptions = options as Record<string, unknown>;
+      return scriptedClient([textStream]).client;
+    });
+
+    await collect(
+      adapter.execute(request(), { signal: new AbortController().signal, deadline: 0 }),
+    );
+
+    expect(capturedOptions?.['defaultHeaders']).toEqual({
+      'anthropic-version': '2026-10-21',
+    });
   });
 });
 

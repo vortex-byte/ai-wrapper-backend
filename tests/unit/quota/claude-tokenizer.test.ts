@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { countClaudeTokens, estimateClaudeInputTokens } from '@/providers/infrastructure/adapters/anthropic/tokenizer/claude-tokenizer.ts';
+import {
+  countClaudeTokens,
+  estimateInputTokens,
+} from '@/providers/infrastructure/adapters/anthropic/estimate.ts';
+import { makeChatRequest } from '@/providers/infrastructure/fake/fake-provider.ts';
 
 describe('claude tokenizer (local o200k BPE approximation)', () => {
   it('counts tokens deterministically for plain text', () => {
@@ -26,23 +30,44 @@ describe('claude tokenizer (local o200k BPE approximation)', () => {
     expect(countClaudeTokens('')).toBe(0);
   });
 
-  it('estimateClaudeInputTokens adds per-message overhead and reply priming', () => {
-    const estimate = estimateClaudeInputTokens({
-      messages: [
-        { parts: [{ type: 'text', text: 'hi' }] },
-        { parts: [{ type: 'text', text: 'there' }] },
-      ],
-    });
+  it('estimateInputTokens adds per-message overhead and reply priming', () => {
+    const estimate = estimateInputTokens(
+      makeChatRequest({
+        messages: [
+          { role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+          { role: 'assistant', parts: [{ type: 'text', text: 'there' }] },
+        ],
+      }),
+    );
     const raw = countClaudeTokens('hi') + countClaudeTokens('there');
-    // 2 messages × 4 overhead + 3 priming
     expect(estimate.tokens).toBe(raw + 8 + 3);
     expect(estimate.confidence).toBe('approx');
   });
 
   it('counts media parts with a flat allowance', () => {
-    const estimate = estimateClaudeInputTokens({
-      messages: [{ parts: [{ type: 'image' }, { type: 'text', text: 'describe this' }] }],
-    });
+    const estimate = estimateInputTokens(
+      makeChatRequest({
+        messages: [
+          {
+            role: 'user',
+            parts: [
+              {
+                type: 'image',
+                file: {
+                  fileId: 'f-1',
+                  name: 'img.png',
+                  mimeType: 'image/png',
+                  sizeBytes: 10,
+                  read: () => Promise.resolve(new Uint8Array()),
+                  stream: () => Promise.resolve(new ReadableStream()),
+                },
+              },
+              { type: 'text', text: 'describe this' },
+            ],
+          },
+        ],
+      }),
+    );
     const text = countClaudeTokens('describe this');
     expect(estimate.tokens).toBe(text + 4 + 256 + 3);
   });

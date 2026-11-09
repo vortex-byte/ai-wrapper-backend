@@ -12,7 +12,6 @@ const mockModel: ModelRuntimeConfig = {
     streaming: true,
     vision: true,
     documents: { pdf: true },
-    imageGeneration: false,
     documentGeneration: false,
     systemPrompt: true,
     tools: false,
@@ -38,7 +37,13 @@ describe('Context Builder', () => {
     const base = {
       requestId: 'req-img',
       generationId: 'gen-img',
-      model: { ...mockModel, capabilities: { ...mockModel.capabilities, imageGeneration: true } },
+      model: {
+        ...mockModel,
+        capabilities: {
+          ...mockModel.capabilities,
+          imageGeneration: { mode: 'tool' as const },
+        },
+      },
       provider: mockProvider,
       newParts: [{ type: 'text' as const, text: 'draw a cat' }],
       history: [],

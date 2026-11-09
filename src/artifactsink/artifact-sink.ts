@@ -30,6 +30,8 @@ export interface ArtifactHydrationInput {
   readonly sizeBytes?: number | undefined;
   /** In-band bytes from provider response (skips network download when present). */
   readonly bytes?: Uint8Array | undefined;
+  /** Provider-rewritten prompt that produced the image, when the provider returns one. */
+  readonly revisedPrompt?: string | undefined;
 }
 
 /** Fetches provider-side bytes for a generated file. */
@@ -237,7 +239,11 @@ export class ArtifactSink {
       width: null,
       height: null,
       pageCount: null,
-      metadata: { providerFileId: input.providerFileId, filename: displayName },
+      metadata: {
+        providerFileId: input.providerFileId,
+        filename: displayName,
+        ...(input.revisedPrompt !== undefined ? { revisedPrompt: input.revisedPrompt } : {}),
+      },
       expiresAt: new Date(now.getTime() + this.deps.retentionDays * 86_400_000),
       createdAt: now,
       deletedAt: null,

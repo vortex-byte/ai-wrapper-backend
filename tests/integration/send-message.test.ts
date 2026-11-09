@@ -399,6 +399,43 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     expect(((await res.json()) as { code: string }).code).toBe('unsupported_for_model');
   });
 
+  it('rejects the image tool on a model that cannot generate images', async () => {
+    const modelId = await seedActiveModel();
+    await seedUser('image-none@corp.example');
+    const auth = await loginAs('image-none@corp.example');
+    const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
+
+    const res = await send(convId, auth.cookie, auth.csrfToken, {
+      key: Bun.randomUUIDv7(),
+      body: {
+        parts: [{ type: 'text', text: 'Draw a cat' }],
+        options: { tools: { imageGeneration: true } },
+      },
+    });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe('unsupported_for_model');
+  });
+
+  it('rejects the image tool on an image endpoint, which is not a chat model', async () => {
+    const modelId = await seedActiveModel('openai', {
+      ...DEFAULT_CAPABILITIES,
+      imageGeneration: { mode: 'provider' },
+    });
+    await seedUser('image-endpoint@corp.example');
+    const auth = await loginAs('image-endpoint@corp.example');
+    const convId = await createConversation(auth.cookie, auth.csrfToken, modelId);
+
+    const res = await send(convId, auth.cookie, auth.csrfToken, {
+      key: Bun.randomUUIDv7(),
+      body: {
+        parts: [{ type: 'text', text: 'Draw a cat' }],
+        options: { tools: { imageGeneration: true } },
+      },
+    });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe('unsupported_for_model');
+  });
+
   it('requires a UUID Idempotency-Key (400 when missing or malformed)', async () => {
     const modelId = await seedActiveModel();
     await seedUser('header@corp.example');

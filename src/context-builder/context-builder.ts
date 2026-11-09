@@ -7,6 +7,7 @@ import type {
   ProviderRuntimeConfig,
   ReasoningEffort,
 } from '@/providers/index.ts';
+import { imageToolSupported } from '@/providers/index.ts';
 import type { MessagePart, MessageWithParts } from '@/conversations/domain/conversation.ts';
 import { estimateMediaTokens, estimateTextTokens } from '@/estimation.ts';
 import { AppError } from '@/errors.ts';
@@ -256,7 +257,9 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     messages: normalizedMessages,
     maxOutputTokens,
     responseModalities:
-      input.imageGeneration === true && capabilities.imageGeneration ? ['text', 'image'] : ['text'],
+      input.imageGeneration === true && imageToolSupported(capabilities)
+        ? ['text', 'image']
+        : ['text'],
     ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
     metadata: { userIdHash: input.userIdHash },
   };

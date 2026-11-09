@@ -216,6 +216,9 @@ export class GenerationManager {
               ...(artifact.mimeType !== undefined ? { mimeType: artifact.mimeType } : {}),
               ...(artifact.sizeBytes !== undefined ? { sizeBytes: artifact.sizeBytes } : {}),
               ...(artifact.bytes !== undefined ? { bytes: artifact.bytes } : {}),
+              ...(artifact.revisedPrompt !== undefined
+                ? { revisedPrompt: artifact.revisedPrompt }
+                : {}),
             },
             async (providerFileId) => {
               if (fetchArtifactStream === undefined) {

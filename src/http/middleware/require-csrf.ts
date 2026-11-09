@@ -34,7 +34,11 @@ export function requireCsrf(config: Config): MiddlewareHandler<AppEnv> {
     }
 
     const origin = c.req.header('origin');
-    if (config.NODE_ENV !== 'development' && origin !== undefined && !isAllowedOrigin(config, origin)) {
+    if (
+      config.NODE_ENV !== 'development' &&
+      origin !== undefined &&
+      !isAllowedOrigin(config, origin)
+    ) {
       throw new AppError('forbidden');
     }
 

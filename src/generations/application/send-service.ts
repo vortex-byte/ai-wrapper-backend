@@ -20,9 +20,41 @@ import type {
   NormalizedChatRequest,
   ReasoningEffort,
 } from '@/providers/domain/capabilities.ts';
+import { canGenerateImages, conversationCapable, imageToolSupported } from '@/providers/domain/capabilities.ts';
 import { validatePartsForModel } from '@/providers/domain/capability-validation.ts';
 import type { SettingsService } from '@/settings/application/settings-service.ts';
 import type { Finalizer } from './finalizer.ts';
+
+function assertConversationTarget(capabilities: ModelCapabilities): void {
+  if (conversationCapable(capabilities)) return;
+  throw new AppError(
+    'unsupported_for_model',
+    'The selected model is an image model and cannot run a conversation.',
+  );
+}
+
+function assertImageToolSupported(capabilities: ModelCapabilities, requested: boolean): void {
+  if (!requested) return;
+  if (!canGenerateImages(capabilities)) {
+    throw new AppError('unsupported_for_model', 'The selected model cannot generate images.');
+  }
+  if (!imageToolSupported(capabilities)) {
+    throw new AppError(
+      'unsupported_for_model',
+      'The selected model is an image model and cannot run a conversation.',
+    );
+  }
+}
+
+function resolveImageIntent(
+  capabilities: ModelCapabilities,
+  options: GenerationOptions | undefined,
+): boolean {
+  assertConversationTarget(capabilities);
+  const requested = options?.tools?.imageGeneration === true;
+  assertImageToolSupported(capabilities, requested);
+  return requested;
+}
 
 /** Maps attachment-domain resolved parts into normalized PAL parts. */
 function toPalParts(parts: readonly ResolvedAttachmentPart[]): NormalizedPart[] {
@@ -170,10 +202,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
         throw new AppError('unsupported_for_model', 'File attachments are not supported yet.');
       }
 
-      const wantsImageOutput = input.options?.tools?.imageGeneration === true;
-      if (wantsImageOutput && !model.capabilities.imageGeneration) {
-        throw new AppError('unsupported_for_model', 'The selected model cannot generate images.');
-      }
+      const wantsImageOutput = resolveImageIntent(model.capabilities, input.options);
 
       const reasoningEffort = resolveReasoningEffort(model, input.options?.reasoningEffort);
 
@@ -584,10 +613,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
       }
       const { model, provider, runtime } = resolved;
 
-      const wantsImageOutput = input.options?.tools?.imageGeneration === true;
-      if (wantsImageOutput && !model.capabilities.imageGeneration) {
-        throw new AppError('unsupported_for_model', 'The selected model cannot generate images.');
-      }
+      const wantsImageOutput = resolveImageIntent(model.capabilities, input.options);
 
       const reasoningEffort = resolveReasoningEffort(model, input.options?.reasoningEffort);
 

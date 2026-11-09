@@ -52,7 +52,7 @@ function request(): NormalizedChatRequest {
         streaming: true,
         vision: true,
         documents: { pdf: true },
-        imageGeneration: true,
+        imageGeneration: { mode: 'tool' },
         documentGeneration: true,
         systemPrompt: true,
         tools: true,

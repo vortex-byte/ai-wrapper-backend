@@ -338,4 +338,34 @@ describe('ArtifactSink', () => {
     expect(storage.deleted).toHaveLength(1);
     expect(conversations.failedParts).toEqual(['part-1']);
   });
+
+  it('records the provider-revised prompt in the attachment metadata', async () => {
+    const storage = new FakeStorage();
+    const attachments = new FakeAttachmentRepo();
+    const conversations = new FakeConversationRepo();
+    const sink = sinkWith({ storage, attachments, conversations });
+
+    await sink.hydrate({ ...input, revisedPrompt: 'a watercolour cat on a windowsill' }, async () => ({
+      stream: new Blob([bytes('png-content')]).stream(),
+      mimeType: 'image/png',
+    }));
+
+    expect(attachments.inserted[0]?.metadata).toMatchObject({
+      revisedPrompt: 'a watercolour cat on a windowsill',
+    });
+  });
+
+  it('omits revisedPrompt from the metadata when the provider sends none', async () => {
+    const storage = new FakeStorage();
+    const attachments = new FakeAttachmentRepo();
+    const conversations = new FakeConversationRepo();
+    const sink = sinkWith({ storage, attachments, conversations });
+
+    await sink.hydrate({ ...input }, async () => ({
+      stream: new Blob([bytes('png-content')]).stream(),
+      mimeType: 'image/png',
+    }));
+
+    expect(attachments.inserted[0]?.metadata).not.toHaveProperty('revisedPrompt');
+  });
 });

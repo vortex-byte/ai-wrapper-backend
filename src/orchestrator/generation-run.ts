@@ -42,6 +42,8 @@ export interface GenerationRunArtifactInput {
   readonly sizeBytes?: number | undefined;
   /** Provider-returned bytes (image tool base64); when set there is nothing to download. */
   readonly bytes?: Uint8Array | undefined;
+  /** Provider-rewritten prompt that produced the image, when the provider returns one. */
+  readonly revisedPrompt?: string | undefined;
 }
 
 export interface GenerationRunHooks {
@@ -622,6 +624,7 @@ export class GenerationRun {
     readonly sizeBytes?: number | undefined;
     readonly bytes?: Uint8Array | undefined;
     readonly index?: number | undefined;
+    readonly revisedPrompt?: string | undefined;
   }): Promise<void> {
     let partId = this.filePartIdForIndex(event.index);
     if (partId === null) {
@@ -645,6 +648,7 @@ export class GenerationRun {
           ...(event.mimeType !== undefined ? { mimeType: event.mimeType } : {}),
           ...(event.sizeBytes !== undefined ? { sizeBytes: event.sizeBytes } : {}),
           ...(event.bytes !== undefined ? { bytes: event.bytes } : {}),
+          ...(event.revisedPrompt !== undefined ? { revisedPrompt: event.revisedPrompt } : {}),
         });
         attachmentId = result?.attachmentId ?? null;
       } catch {

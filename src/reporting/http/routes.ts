@@ -100,7 +100,10 @@ export function reportingRoutes(deps: ReportingRoutesDeps): Hono<AppEnv> {
     const day = new Date().toISOString().slice(0, 10);
     noStore(c);
     c.header('Content-Type', 'text/csv; charset=utf-8');
-    c.header('Content-Disposition', `attachment; filename="usage-${query.groupBy}-${day}.csv"`);
+    c.header(
+      'Content-Disposition',
+      `attachment; filename="laporan-penggunaan-${query.groupBy}-${day}.csv"`,
+    );
     return c.body(csv);
   });
 

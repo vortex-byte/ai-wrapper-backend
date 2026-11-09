@@ -37,11 +37,24 @@ export const USAGE_REPORT_SECTIONS = [
 
 export type UsageReportSection = (typeof USAGE_REPORT_SECTIONS)[number];
 
+export interface UsageTableSection {
+  readonly pagination: {
+    readonly page: number;
+    readonly limit: number;
+    readonly totalItems: number;
+    readonly totalPages: number;
+  };
+  readonly items: readonly UsageReportRow[];
+}
+
 export interface UsageWindowInput {
   readonly from?: string | undefined;
   readonly to?: string | undefined;
   readonly divisionId?: string | undefined;
   readonly sections?: readonly UsageReportSection[] | undefined;
+  readonly page?: number | undefined;
+  readonly limit?: number | undefined;
+  readonly search?: string | undefined;
 }
 
 export interface ErrorExplorerInput {
@@ -168,6 +181,8 @@ export interface DashboardReport {
 
 export interface UsageReportResult {
   readonly window: WireWindow;
+  readonly pagination?: UsageTableSection['pagination'] | undefined;
+  readonly items?: readonly UsageReportRow[] | undefined;
   readonly summary?: UsageSummaryRow | undefined;
   readonly recent?: readonly WireRecentRequest[] | undefined;
   readonly breakdown?: UsageBreakdownResult | undefined;
@@ -180,6 +195,77 @@ export interface UsageReportResult {
 export type { UsageSummaryRow };
 
 const DEFAULT_RANGE_DAYS = 30;
+
+const DEFAULT_PAGE_SIZE = 10;
+const MAX_PAGE_SIZE = 100;
+
+interface CsvHeaders {
+  readonly keyColumns: Readonly<Record<string, string>>;
+  readonly requests: string;
+  readonly failedRequests: string;
+  readonly inputTokens: string;
+  readonly outputTokens: string;
+  readonly quotaTokens: string;
+  readonly estimatedCostUsd: string;
+  readonly usageSourceProvider: string;
+  readonly usageSourceEstimated: string;
+}
+
+const CSV_HEADERS_ID: CsvHeaders = {
+  keyColumns: {
+    userId: 'ID Pengguna',
+    email: 'Email',
+    displayName: 'Nama Lengkap',
+    divisionId: 'ID Departemen',
+    name: 'Nama Departemen',
+    modelId: 'ID Model',
+    modelKey: 'Kode Model',
+    provider: 'Provider',
+    providerId: 'ID Provider',
+    providerKey: 'Kode Provider',
+    day: 'Tanggal',
+    month: 'Bulan',
+  },
+  requests: 'Total Permintaan',
+  failedRequests: 'Permintaan Gagal',
+  inputTokens: 'Token Input',
+  outputTokens: 'Token Output',
+  quotaTokens: 'Token Terpakai',
+  estimatedCostUsd: 'Estimasi Biaya (USD)',
+  usageSourceProvider: 'Sumber Penggunaan (Provider)',
+  usageSourceEstimated: 'Sumber Penggunaan (Estimasi)',
+};
+
+function matchesSearch(row: UsageReportRow, search: string): boolean {
+  if (search === '') return true;
+  return Object.values(row.key).some(
+    (value) => value !== null && value.toLowerCase().includes(search),
+  );
+}
+
+function paginateUsageRows(
+  rows: readonly UsageReportRow[],
+  search: string | undefined,
+  page: number | undefined,
+  limit: number | undefined,
+): UsageTableSection {
+  const needle = (search ?? '').trim().toLowerCase();
+  const filtered = needle === '' ? rows : rows.filter((row) => matchesSearch(row, needle));
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, limit ?? DEFAULT_PAGE_SIZE));
+  const pageIndex = Math.max(1, page ?? 1);
+  const totalItems = filtered.length;
+  const start = (pageIndex - 1) * pageSize;
+
+  return {
+    pagination: {
+      page: pageIndex,
+      limit: pageSize,
+      totalItems,
+      totalPages: totalItems === 0 ? 0 : Math.ceil(totalItems / pageSize),
+    },
+    items: filtered.slice(start, start + pageSize),
+  };
+}
 
 function encodeCursor(date: Date, id: number): string {
   return Buffer.from(`${date.toISOString()}|${id}`).toString('base64url');
@@ -238,14 +324,13 @@ export class ReportingService {
     dayStart.setUTCHours(0, 0, 0, 0);
     const dayEnd = new Date(now);
     dayEnd.setUTCHours(23, 59, 59, 999);
-    const monthStart = new Date(dayStart.getTime() - 29 * 24 * 3600 * 1000);
 
     const [summary, recentRows, breakdown, modelRows, departmentUsage] = await Promise.all([
       this.repository.usageSummary({ from: dayStart, to: dayEnd }),
       this.repository.listRecentRequests({ limit: 20 }),
       this.repository.usageBreakdown({ from: dayStart, to: dayEnd }),
       this.repository.modelUsage({ from: dayStart, to: dayEnd }),
-      this.repository.aggregateUsage({ from: monthStart, to: dayEnd, groupBy: 'division' }),
+      this.repository.aggregateUsage({ from: dayStart, to: dayEnd, groupBy: 'division' }),
     ]);
 
     return {
@@ -267,29 +352,35 @@ export class ReportingService {
     const wanted = new Set<UsageReportSection>(input.sections ?? USAGE_REPORT_SECTIONS);
     const wants = (section: UsageReportSection) => wanted.has(section);
 
-    const [summary, recentRows, breakdown, timeseriesRows, modelRows, byDivision, byUser] =
+    const table = wants('byDivision')
+      ? ('division' as const)
+      : wants('byUser')
+        ? ('user' as const)
+        : undefined;
+
+    const [summary, recentRows, breakdown, timeseriesRows, modelRows, tableRows] =
       await Promise.all([
         wants('summary') ? this.repository.usageSummary({ from, to, divisionId }) : undefined,
-        wants('recent')
-          ? this.repository.listRecentRequests({ limit: 20, divisionId })
-          : undefined,
-        wants('breakdown')
-          ? this.repository.usageBreakdown({ from, to, divisionId })
-          : undefined,
+        wants('recent') ? this.repository.listRecentRequests({ limit: 20, divisionId }) : undefined,
+        wants('breakdown') ? this.repository.usageBreakdown({ from, to, divisionId }) : undefined,
         wants('timeseries')
           ? this.repository.usageTimeseries({ from, to, interval: 'day', divisionId })
           : undefined,
         wants('models') ? this.repository.modelUsage({ from, to, divisionId }) : undefined,
-        wants('byDivision')
-          ? this.repository.aggregateUsage({ from, to, groupBy: 'division', divisionId })
-          : undefined,
-        wants('byUser')
-          ? this.repository.aggregateUsage({ from, to, groupBy: 'user', divisionId })
-          : undefined,
+        table === undefined
+          ? undefined
+          : this.repository.aggregateUsage({ from, to, groupBy: table, divisionId }),
       ]);
+
+    const tableSection =
+      tableRows === undefined
+        ? undefined
+        : paginateUsageRows(tableRows, input.search, input.page, input.limit);
 
     return {
       window: { from: from.toISOString(), to: to.toISOString() },
+      ...(tableSection === undefined ? {} : { pagination: tableSection.pagination }),
+      ...(tableSection === undefined ? {} : { items: tableSection.items }),
       ...(summary === undefined ? {} : { summary }),
       ...(recentRows === undefined ? {} : { recent: recentRows.map(toWireRecentRequest) }),
       ...(breakdown === undefined
@@ -312,30 +403,30 @@ export class ReportingService {
             })),
           }),
       ...(modelRows === undefined ? {} : { models: modelRows.map(toWireModelUsage) }),
-      ...(byDivision === undefined ? {} : { byDivision }),
-      ...(byUser === undefined ? {} : { byUser }),
+      ...(table === 'division' && tableSection !== undefined
+        ? { byDivision: tableSection.items }
+        : {}),
+      ...(table === 'user' && tableSection !== undefined ? { byUser: tableSection.items } : {}),
     };
   }
 
   async usageCsv(input: UsageReportInput): Promise<string> {
     const rows = await this.usage(input);
-    const keyColumns = Array.from(
-      new Set(rows.flatMap((row) => Object.keys(row.key))),
-    ).sort();
+    const keyColumns = Array.from(new Set(rows.flatMap((row) => Object.keys(row.key)))).sort();
 
     const header = [
-      ...keyColumns,
-      'requests',
-      'failedRequests',
-      'inputTokens',
-      'outputTokens',
-      'quotaTokens',
-      'estimatedCostUsd',
-      'usageSourceProvider',
-      'usageSourceEstimated',
+      ...keyColumns.map((column) => CSV_HEADERS_ID.keyColumns[column] ?? column),
+      CSV_HEADERS_ID.requests,
+      CSV_HEADERS_ID.failedRequests,
+      CSV_HEADERS_ID.inputTokens,
+      CSV_HEADERS_ID.outputTokens,
+      CSV_HEADERS_ID.quotaTokens,
+      CSV_HEADERS_ID.estimatedCostUsd,
+      CSV_HEADERS_ID.usageSourceProvider,
+      CSV_HEADERS_ID.usageSourceEstimated,
     ];
 
-    const lines = [header.join(',')];
+    const lines = [header.map(csvCell).join(',')];
     for (const row of rows) {
       const values = [
         ...keyColumns.map((column) => csvCell(row.key[column] ?? '')),

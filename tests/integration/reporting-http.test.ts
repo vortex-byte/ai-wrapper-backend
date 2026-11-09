@@ -150,7 +150,7 @@ describe('admin reporting surface (real PostgreSQL)', () => {
     const cookie = await loginAs('root@corp.example');
 
     const res = await get(
-      '/api/admin/usage/report?from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z',
+      '/api/admin/usage/report?sections=byUser&from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z',
       cookie,
     );
     expect(res.status).toBe(200);
@@ -194,8 +194,34 @@ describe('admin reporting surface (real PostgreSQL)', () => {
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as { data: Record<string, unknown> };
-    expect(Object.keys(body.data).sort()).toEqual(['byUser', 'window']);
+    expect(Object.keys(body.data).sort()).toEqual(['byUser', 'items', 'pagination', 'window']);
     expect(Array.isArray(body.data['byUser'])).toBe(true);
+    expect(body.data['items']).toEqual(body.data['byUser']);
+  });
+
+  it('returns paged table items alongside the pagination envelope', async () => {
+    await seedUser('super_admin', 'root@corp.example');
+    await seedUsageDay();
+    const cookie = await loginAs('root@corp.example');
+
+    const res = await get(
+      '/api/admin/usage/report?sections=byUser&page=1&limit=5&search=usage&from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z',
+      cookie,
+    );
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as {
+      data: {
+        pagination: { page: number; limit: number; totalItems: number; totalPages: number };
+        items: Array<{ key: Record<string, string | null> }>;
+        byUser: unknown[];
+      };
+    };
+
+    expect(body.data.pagination).toMatchObject({ page: 1, limit: 5 });
+    expect(body.data.items.length).toBeLessThanOrEqual(5);
+    expect(body.data.byUser).toEqual(body.data.items);
+    expect(body.data.items.every((row) => row.key['email']?.includes('usage') !== false)).toBe(true);
   });
 
   it('rejects unknown report sections', async () => {
@@ -245,9 +271,26 @@ describe('admin reporting surface (real PostgreSQL)', () => {
 
     const text = await res.text();
     expect(text.split('\r\n')[0]).toBe(
-      'day,requests,failedRequests,inputTokens,outputTokens,quotaTokens,estimatedCostUsd,usageSourceProvider,usageSourceEstimated',
+      'Tanggal,Total Permintaan,Permintaan Gagal,Token Input,Token Output,Token Terpakai,Estimasi Biaya (USD),Sumber Penggunaan (Provider),Sumber Penggunaan (Estimasi)',
     );
     expect(text).toContain('2026-10-18,4,1,1000,200,1200,0.005000,0.750000,0.250000');
+  });
+
+  it('exports division usage with Indonesian headers', async () => {
+    await seedUser('super_admin', 'root@corp.example');
+    await seedUsageDay();
+    const cookie = await loginAs('root@corp.example');
+
+    const res = await get(
+      '/api/admin/usage/export?groupBy=division&from=2026-10-01&to=2026-10-31',
+      cookie,
+    );
+    expect(res.status).toBe(200);
+
+    const text = await res.text();
+    expect(text.split('\r\n')[0]).toBe(
+      'ID Departemen,Nama Departemen,Total Permintaan,Permintaan Gagal,Token Input,Token Output,Token Terpakai,Estimasi Biaya (USD),Sumber Penggunaan (Provider),Sumber Penggunaan (Estimasi)',
+    );
   });
 
   it('reports an unknown cost as null, not zero', async () => {
@@ -275,7 +318,7 @@ describe('admin reporting surface (real PostgreSQL)', () => {
     );
 
     const res = await get(
-      '/api/admin/usage/report?from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z',
+      '/api/admin/usage/report?sections=byUser&from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z',
       cookie,
     );
     expect(res.status).toBe(200);

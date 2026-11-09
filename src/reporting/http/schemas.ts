@@ -36,6 +36,9 @@ export const UsageWindowQuerySchema = z.object({
   from: ISO_DATE.optional(),
   to: ISO_DATE.optional(),
   divisionId: z.uuid().optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  search: z.string().trim().max(100).optional(),
   sections: z
     .string()
     .trim()

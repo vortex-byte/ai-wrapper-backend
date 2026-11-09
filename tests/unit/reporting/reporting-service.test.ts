@@ -152,7 +152,7 @@ describe('ReportingService.usage', () => {
     expect(repository.usageQueries[0]?.divisionId).toBe('div-1');
   });
 
-  it('renders usage as standard CSV with a stable header', async () => {
+  it('renders usage as Indonesian CSV with a stable header', async () => {
     const repository = new FakeReportingRepository();
     repository.usageRows = [
       {
@@ -171,11 +171,34 @@ describe('ReportingService.usage', () => {
     const [header, row] = csv.split('\r\n');
 
     expect(header).toBe(
-      'displayName,modelId,provider,requests,failedRequests,inputTokens,outputTokens,quotaTokens,estimatedCostUsd,usageSourceProvider,usageSourceEstimated',
+      'Nama Lengkap,ID Model,Provider,Total Permintaan,Permintaan Gagal,Token Input,Token Output,Token Terpakai,Estimasi Biaya (USD),Sumber Penggunaan (Provider),Sumber Penggunaan (Estimasi)',
     );
     expect(row).toContain('"Claude, ""Sonnet"""');
     expect(row).toContain(',3,1,100,20,120,0.000123,0.500000,0.500000');
     expect(csv.endsWith('\r\n')).toBe(true);
+  });
+
+  it('renders division usage headers in Indonesian', async () => {
+    const repository = new FakeReportingRepository();
+    repository.usageRows = [
+      {
+        key: { divisionId: 'div-1', name: 'Engineering' },
+        requests: 3,
+        failedRequests: 1,
+        inputTokens: 100,
+        outputTokens: 20,
+        quotaTokens: 120,
+        estimatedCostUsd: 0.5,
+        usageSource: { provider: 1, estimated: 0 },
+      },
+    ];
+
+    const csv = await service(repository).usageCsv({ groupBy: 'division' });
+    const [header] = csv.split('\r\n');
+
+    expect(header).toBe(
+      'ID Departemen,Nama Departemen,Total Permintaan,Permintaan Gagal,Token Input,Token Output,Token Terpakai,Estimasi Biaya (USD),Sumber Penggunaan (Provider),Sumber Penggunaan (Estimasi)',
+    );
   });
 
   it('neutralizes formula injection characters in CSV fields', async () => {
@@ -201,7 +224,7 @@ describe('ReportingService.usage', () => {
 });
 
 describe('ReportingService.dashboard', () => {
-  it('uses the UTC day for the summary and a 30-day window for department usage', async () => {
+  it('uses the UTC day for the summary and department usage', async () => {
     const repository = new FakeReportingRepository();
     await service(repository).dashboard();
 
@@ -211,7 +234,7 @@ describe('ReportingService.dashboard', () => {
 
     const divisionQuery = repository.usageQueries[0];
     expect(divisionQuery?.groupBy).toBe('division');
-    expect(divisionQuery?.from).toEqual(new Date('2026-09-21T00:00:00.000Z'));
+    expect(divisionQuery?.from).toEqual(new Date('2026-10-20T00:00:00.000Z'));
     expect(divisionQuery?.to).toEqual(new Date('2026-10-20T23:59:59.999Z'));
   });
 
@@ -252,14 +275,14 @@ describe('ReportingService.usageReport', () => {
     expect(summary?.from).toEqual(new Date(NOW.getTime() - 30 * 86_400_000));
   });
 
-  it('computes both the division and user aggregates for the window', async () => {
+  it('computes one aggregate for the table section', async () => {
     const repository = new FakeReportingRepository();
     await service(repository).usageReport({
       from: '2026-10-01T00:00:00.000Z',
       to: '2026-10-31T23:59:59.999Z',
     });
 
-    expect(repository.usageQueries.map((q) => q.groupBy)).toEqual(['division', 'user']);
+    expect(repository.usageQueries.map((q) => q.groupBy)).toEqual(['division']);
     expect(repository.usageQueries[0]?.from).toEqual(new Date('2026-10-01T00:00:00.000Z'));
     expect(repository.usageQueries[0]?.to).toEqual(new Date('2026-10-31T23:59:59.999Z'));
   });
@@ -295,7 +318,59 @@ describe('ReportingService.usageReport', () => {
 
     expect(repository.summaryQueries).toHaveLength(1);
     expect(repository.recentQueries).toHaveLength(1);
-    expect(repository.usageQueries.map((q) => q.groupBy)).toEqual(['division', 'user']);
+    expect(repository.usageQueries.map((q) => q.groupBy)).toEqual(['division']);
+  });
+
+  it('pages the table section and reports the pagination envelope', async () => {
+    const repository = new FakeReportingRepository();
+    repository.usageRows = Array.from({ length: 25 }, (_, index) => ({
+      key: { divisionId: `div-${index}`, name: `Division ${index}` },
+      requests: 1,
+      failedRequests: 0,
+      inputTokens: 10,
+      outputTokens: 5,
+      quotaTokens: 15,
+      estimatedCostUsd: null,
+      usageSource: { provider: 1, estimated: 0 },
+    }));
+
+    const report = await service(repository).usageReport({ sections: ['byDivision'], page: 2, limit: 10 });
+
+    expect(report.pagination).toEqual({ page: 2, limit: 10, totalItems: 25, totalPages: 3 });
+    expect(report.items).toHaveLength(10);
+    expect(report.items?.[0]?.key['divisionId']).toBe('div-10');
+    expect(report.byDivision).toEqual(report.items);
+  });
+
+  it('filters the table section by search over the grouping labels', async () => {
+    const repository = new FakeReportingRepository();
+    repository.usageRows = [
+      {
+        key: { divisionId: 'div-eng', name: 'Engineering' },
+        requests: 1,
+        failedRequests: 0,
+        inputTokens: 10,
+        outputTokens: 5,
+        quotaTokens: 15,
+        estimatedCostUsd: null,
+        usageSource: { provider: 1, estimated: 0 },
+      },
+      {
+        key: { divisionId: 'div-legal', name: 'Legal' },
+        requests: 1,
+        failedRequests: 0,
+        inputTokens: 10,
+        outputTokens: 5,
+        quotaTokens: 15,
+        estimatedCostUsd: null,
+        usageSource: { provider: 1, estimated: 0 },
+      },
+    ];
+
+    const report = await service(repository).usageReport({ sections: ['byDivision'], search: 'eng' });
+
+    expect(report.pagination?.totalItems).toBe(1);
+    expect(report.items?.map((row) => row.key['name'])).toEqual(['Engineering']);
   });
 
   it('maps timeseries rows to display labels', async () => {

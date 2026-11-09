@@ -78,6 +78,14 @@ export default tseslint.config(
     },
   },
   {
+    // Adapter modules stay small enough to hold in one head; split rather than grow.
+    // `warn` until the anthropic and gemini adapters are split like openai/.
+    files: ['src/providers/infrastructure/adapters/openai/**/*.ts'],
+    rules: {
+      'max-lines': ['warn', { max: 400, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  {
     // Tests, CLI scripts and the boot path may use console/operate freely.
     files: ['tests/**/*.ts', 'src/cli/**/*.ts', 'src/server.ts'],
     rules: {

@@ -82,23 +82,19 @@ const ImageGenerationObjectSchema = z
 
 const ImageGenerationCapabilitySchema = z
   .union([z.boolean(), ImageGenerationObjectSchema, z.null()])
+  .optional()
   .transform((value) => {
     if (value === true) return { mode: 'tool' as const };
-    if (value === false || value === null) return undefined;
+    if (value === false || value === null || value === undefined) return null;
     return value;
-  })
-  .optional();
+  });
 
-/**
- * `null` on a partial patch clears the stored capability and must survive the transform; on the
- * full schema `null` means absent.
- */
 const PartialImageGenerationCapabilitySchema = z
   .union([z.boolean(), ImageGenerationObjectSchema, z.null()])
   .optional()
   .transform((value) => {
     if (value === true) return { mode: 'tool' as const };
-    if (value === false) return undefined;
+    if (value === false) return null;
     return value;
   });
 
@@ -109,7 +105,7 @@ export const ModelCapabilitiesSchema = z
     streaming: z.boolean().default(true),
     vision: z.boolean().default(false),
     documents: DocumentCapabilitiesSchema.default({ pdf: false }),
-    imageGeneration: ImageGenerationCapabilitySchema,
+    imageGeneration: ImageGenerationCapabilitySchema.default(null),
     documentGeneration: z.boolean().default(false),
     systemPrompt: z.boolean().default(true),
     tools: z.boolean().default(false),
@@ -127,8 +123,14 @@ export const ModelCapabilitiesSchema = z
     { message: 'compaction triggerTokens must be less than contextWindow' },
   )
   .refine(
-    (cap) => cap.maxImagesPerRequest === undefined || cap.imageGeneration !== undefined,
-    { message: 'maxImagesPerRequest requires imageGeneration', path: ['maxImagesPerRequest'] },
+    (cap) =>
+      cap.maxImagesPerRequest === undefined ||
+      cap.vision === true ||
+      (cap.imageGeneration !== undefined && cap.imageGeneration !== null),
+    {
+      message: 'maxImagesPerRequest requires vision or imageGeneration',
+      path: ['maxImagesPerRequest'],
+    },
   );
 
 const PartialDocumentCapabilitiesSchema = z
@@ -148,7 +150,7 @@ export const PartialModelCapabilitiesSchema = z
     documentGeneration: z.boolean().optional(),
     systemPrompt: z.boolean().optional(),
     tools: z.boolean().optional(),
-    maxImagesPerRequest: z.number().int().positive().optional(),
+    maxImagesPerRequest: z.number().int().positive().nullable().optional(),
     contextWindow: z.number().int().positive().optional(),
     maxOutputTokens: z.number().int().positive().optional(),
     compaction: CompactionCapabilitySchema.nullable().optional(),
@@ -189,16 +191,15 @@ export function parseCapabilities(
       pdf: parsed.documents.pdf,
       ...(parsed.documents.maxPages !== undefined ? { maxPages: parsed.documents.maxPages } : {}),
     },
-    ...(parsed.imageGeneration !== undefined
-      ? {
-          imageGeneration: {
+    imageGeneration:
+      parsed.imageGeneration !== undefined && parsed.imageGeneration !== null
+        ? {
             mode: parsed.imageGeneration.mode,
             ...(parsed.imageGeneration.model !== undefined
               ? { model: parsed.imageGeneration.model }
               : {}),
-          },
-        }
-      : {}),
+          }
+        : null,
     documentGeneration: parsed.documentGeneration,
     systemPrompt: parsed.systemPrompt,
     tools: parsed.tools,
@@ -302,6 +303,7 @@ export function toCapabilitiesJson(capabilities: ModelCapabilities): Record<stri
   return {
     schemaVersion: CAPABILITIES_SCHEMA_VERSION,
     ...rest,
+    imageGeneration: capabilities.imageGeneration ?? null,
     ...(reasoning !== undefined ? { reasoning } : {}),
   };
 }

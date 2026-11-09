@@ -56,9 +56,10 @@ export function toWireModel(model: ModelRecord): WireModel {
     limits: {
       maxFilesPerMessage:
         model.capabilities.documents.pdf || model.capabilities.vision ? 5 : 0,
-      maxImagesPerMessage: conversationCapable(model.capabilities)
-        ? (model.capabilities.maxImagesPerRequest ?? (model.capabilities.vision ? 10 : 0))
-        : 0,
+      maxImagesPerMessage:
+        conversationCapable(model.capabilities) && model.capabilities.vision
+          ? (model.capabilities.maxImagesPerRequest ?? 10)
+          : 0,
     },
   };
 }

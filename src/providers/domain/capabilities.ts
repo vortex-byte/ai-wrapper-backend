@@ -41,7 +41,7 @@ export interface ImageGenerationCapability {
 export function canGenerateImages(
   capabilities: Pick<ModelCapabilities, 'imageGeneration'>,
 ): boolean {
-  return capabilities.imageGeneration !== undefined;
+  return capabilities.imageGeneration !== undefined && capabilities.imageGeneration !== null;
 }
 
 /**
@@ -70,8 +70,7 @@ export interface ModelCapabilities {
   readonly streaming: boolean;
   readonly vision: boolean;
   readonly documents: DocumentCapabilities;
-  /** Absent when the model cannot produce images at all. */
-  readonly imageGeneration?: ImageGenerationCapability;
+  readonly imageGeneration: ImageGenerationCapability | null;
   readonly documentGeneration: boolean;
   readonly systemPrompt: boolean;
   readonly tools: boolean;
@@ -94,7 +93,7 @@ export interface PartialModelCapabilities {
   readonly documentGeneration?: boolean;
   readonly systemPrompt?: boolean;
   readonly tools?: boolean;
-  readonly maxImagesPerRequest?: number;
+  readonly maxImagesPerRequest?: number | null;
   readonly contextWindow?: number;
   readonly maxOutputTokens?: number;
   /** `null` clears the stored capability; omission keeps it. */

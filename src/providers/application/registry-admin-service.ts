@@ -1,9 +1,11 @@
+import { z } from 'zod';
 import type { AuditLogRepository } from '@/audit/ports/audit-log-repository.ts';
 import { AUDIT_ACTIONS } from '@/audit/actions.ts';
 import type { Clock, IdGenerator } from '@/clock/index.ts';
 import { withTransaction } from '@/db/index.ts';
 import { AppError, isUniqueViolation } from '@/errors.ts';
 import type { RequestMeta } from '@/request-context.ts';
+import { parseCapabilities } from '../domain/capabilities-schema.ts';
 import type {
   ModelCapabilities,
   PartialModelCapabilities,
@@ -412,12 +414,14 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
                 reasoning: reasoningPatch,
                 compaction: compactionPatch,
                 imageGeneration: imageGenerationPatch,
+                maxImagesPerRequest: maxImagesPatch,
                 ...capabilityPatch
               } = input.capabilities ?? {};
               const {
                 reasoning: _existingReasoning,
                 compaction: _existingCompaction,
                 imageGeneration: _existingImageGeneration,
+                maxImagesPerRequest: existingMaxImages,
                 ...existingCapabilities
               } = existing.capabilities;
               const reasoning = mergeReasoningCapability(
@@ -430,21 +434,51 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
                   : (compactionPatch ?? existing.capabilities.compaction);
               const imageGeneration =
                 imageGenerationPatch === null
-                  ? undefined
-                  : (imageGenerationPatch ?? existing.capabilities.imageGeneration);
-              return {
+                  ? null
+                  : (imageGenerationPatch ?? existing.capabilities.imageGeneration ?? null);
+
+              const contextWindow =
+                input.contextWindow ?? input.capabilities?.contextWindow ?? existing.capabilities.contextWindow;
+              const maxOutputTokens =
+                input.maxOutputTokens ?? input.capabilities?.maxOutputTokens ?? existing.capabilities.maxOutputTokens;
+
+              const vision = capabilityPatch.vision ?? existingCapabilities.vision;
+              const hasImageGen = imageGeneration !== null && imageGeneration !== undefined;
+
+              let maxImagesPerRequest: number | undefined;
+              if (maxImagesPatch === null) {
+                maxImagesPerRequest = undefined;
+              } else if (maxImagesPatch !== undefined) {
+                maxImagesPerRequest = maxImagesPatch;
+              } else if (!vision && !hasImageGen) {
+                maxImagesPerRequest = undefined;
+              } else {
+                maxImagesPerRequest = existingMaxImages;
+              }
+
+              const merged = {
                 ...existingCapabilities,
                 ...capabilityPatch,
                 documents: {
                   ...existing.capabilities.documents,
                   ...(input.capabilities?.documents ?? {}),
                 },
-                contextWindow: input.contextWindow ?? input.capabilities?.contextWindow ?? existing.capabilities.contextWindow,
-                maxOutputTokens: input.maxOutputTokens ?? input.capabilities?.maxOutputTokens ?? existing.capabilities.maxOutputTokens,
-                ...(imageGeneration !== undefined ? { imageGeneration } : {}),
+                contextWindow,
+                maxOutputTokens,
+                imageGeneration,
                 ...(compaction !== undefined ? { compaction } : {}),
                 ...(reasoning !== undefined ? { reasoning } : {}),
+                ...(maxImagesPerRequest !== undefined ? { maxImagesPerRequest } : {}),
               };
+
+              try {
+                return parseCapabilities(merged, { contextWindow, maxOutputTokens });
+              } catch (err) {
+                if (err instanceof z.ZodError) {
+                  throw new AppError('invalid_request', err.issues[0]?.message ?? 'Invalid capabilities.');
+                }
+                throw err;
+              }
             })()
           : undefined;
 

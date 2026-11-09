@@ -17,6 +17,7 @@ function model(overrides: Partial<ModelRecord> = {}): ModelRecord {
       streaming: true,
       vision: true,
       documents: { pdf: true },
+      imageGeneration: null,
       documentGeneration: false,
       systemPrompt: true,
       tools: true,
@@ -47,7 +48,6 @@ describe('toWireModel limits', () => {
       model({
         capabilities: {
           ...model().capabilities,
-          imageGeneration: { mode: 'tool' },
           maxImagesPerRequest: 2,
         },
       }),
@@ -68,6 +68,20 @@ describe('toWireModel limits', () => {
         capabilities: {
           ...model().capabilities,
           imageGeneration: { mode: 'provider' },
+        },
+      }),
+    );
+    expect(wire.limits.maxImagesPerMessage).toBe(0);
+  });
+
+  it('reports zero image limit for an image-generating model without vision', () => {
+    const wire = toWireModel(
+      model({
+        capabilities: {
+          ...model().capabilities,
+          vision: false,
+          imageGeneration: { mode: 'tool' },
+          maxImagesPerRequest: 4,
         },
       }),
     );

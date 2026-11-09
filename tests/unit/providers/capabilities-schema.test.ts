@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SEED_MODELS } from '@/db/seed-data/providers-models.ts';
 import {
   parseCapabilities,
   parsePartialCapabilities,
@@ -57,6 +58,17 @@ describe('capabilities schema', () => {
     expect(reparsed.maxOutputTokens).toBe(512);
   });
 
+  it('preserves an explicit maxImagesPerRequest on a vision model', () => {
+    const parsed = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      vision: true,
+      maxImagesPerRequest: 10,
+    });
+    expect(parsed.maxImagesPerRequest).toBe(10);
+    expect(parsed.vision).toBe(true);
+  });
+
   it('preserves an explicit maxImagesPerRequest alongside image generation', () => {
     const parsed = parseCapabilities({
       contextWindow: 8_192,
@@ -69,15 +81,38 @@ describe('capabilities schema', () => {
     expect(parsed.vision).toBe(true);
   });
 
-  it('rejects maxImagesPerRequest on a model that cannot generate images', () => {
+  it('preserves an explicit maxImagesPerRequest on an image generation model without vision', () => {
+    const parsed = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      vision: false,
+      imageGeneration: { mode: 'provider' },
+      maxImagesPerRequest: 4,
+    });
+    expect(parsed.maxImagesPerRequest).toBe(4);
+    expect(parsed.imageGeneration).toEqual({ mode: 'provider' });
+  });
+
+  it('rejects maxImagesPerRequest on a model without vision or image generation', () => {
     expect(() =>
       parseCapabilities({
         contextWindow: 8_192,
         maxOutputTokens: 1_024,
-        vision: true,
+        vision: false,
         maxImagesPerRequest: 10,
       }),
-    ).toThrow(/maxImagesPerRequest requires imageGeneration/);
+    ).toThrow(/maxImagesPerRequest requires vision or imageGeneration/);
+  });
+
+  it('parses all seed model capabilities without error', () => {
+    for (const model of SEED_MODELS) {
+      expect(() =>
+        parseCapabilities(model.capabilities, {
+          contextWindow: model.contextWindow,
+          maxOutputTokens: model.maxOutputTokens,
+        }),
+      ).not.toThrow();
+    }
   });
 
   it('parses a reasoning capability and requires the default to be selectable', () => {
@@ -145,14 +180,14 @@ describe('capabilities schema', () => {
       maxOutputTokens: 1_024,
       imageGeneration: false,
     });
-    expect(absent.imageGeneration).toBeUndefined();
+    expect(absent.imageGeneration).toBeNull();
 
     const cleared = parseCapabilities({
       contextWindow: 8_192,
       maxOutputTokens: 1_024,
       imageGeneration: null,
     });
-    expect(cleared.imageGeneration).toBeUndefined();
+    expect(cleared.imageGeneration).toBeNull();
   });
 
   it('lets a partial patch set, replace and clear the image capability', () => {
@@ -163,7 +198,13 @@ describe('capabilities schema', () => {
       imageGeneration: { mode: 'provider' },
     });
     expect(parsePartialCapabilities({ imageGeneration: null })).toEqual({ imageGeneration: null });
-    expect(parsePartialCapabilities({ imageGeneration: false })).toEqual({});
+    expect(parsePartialCapabilities({ imageGeneration: false })).toEqual({ imageGeneration: null });
+  });
+
+  it('allows maxImagesPerRequest to be cleared with null in partial patch', () => {
+    expect(parsePartialCapabilities({ maxImagesPerRequest: null })).toEqual({
+      maxImagesPerRequest: null,
+    });
   });
 
   it('rejects an unknown image generation mode', () => {

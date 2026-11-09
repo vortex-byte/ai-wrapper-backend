@@ -28,6 +28,39 @@ export interface CompactionCapability {
   readonly triggerTokens?: number;
 }
 
+/** How a model produces images: through the chat tool, or as a dedicated image endpoint. */
+export type ImageGenerationMode = 'tool' | 'provider';
+
+export interface ImageGenerationCapability {
+  readonly mode: ImageGenerationMode;
+  /** The provider model id that renders the images. Only meaningful for `tool` (default) and image-only rows. */
+  readonly model?: string;
+}
+
+/** Whether the model can produce images at all, regardless of role. */
+export function canGenerateImages(
+  capabilities: Pick<ModelCapabilities, 'imageGeneration'>,
+): boolean {
+  return capabilities.imageGeneration !== undefined;
+}
+
+/**
+ * Whether the chat tool can ask this model for images. `provider`-mode rows are image endpoints:
+ * they never run as a conversation target, so they never drive a chat request.
+ */
+export function imageToolSupported(
+  capabilities: Pick<ModelCapabilities, 'imageGeneration'>,
+): boolean {
+  return capabilities.imageGeneration?.mode === 'tool';
+}
+
+/** Whether the model can be the target of a conversation. Image endpoints cannot. */
+export function conversationCapable(
+  capabilities: Pick<ModelCapabilities, 'imageGeneration'>,
+): boolean {
+  return capabilities.imageGeneration?.mode !== 'provider';
+}
+
 export interface PartialDocumentCapabilities {
   readonly pdf?: boolean;
   readonly maxPages?: number;
@@ -37,7 +70,8 @@ export interface ModelCapabilities {
   readonly streaming: boolean;
   readonly vision: boolean;
   readonly documents: DocumentCapabilities;
-  readonly imageGeneration: boolean;
+  /** Absent when the model cannot produce images at all. */
+  readonly imageGeneration?: ImageGenerationCapability;
   readonly documentGeneration: boolean;
   readonly systemPrompt: boolean;
   readonly tools: boolean;
@@ -55,7 +89,8 @@ export interface PartialModelCapabilities {
   readonly streaming?: boolean;
   readonly vision?: boolean;
   readonly documents?: PartialDocumentCapabilities;
-  readonly imageGeneration?: boolean;
+  /** `null` clears the stored capability; omission keeps it. */
+  readonly imageGeneration?: ImageGenerationCapability | null;
   readonly documentGeneration?: boolean;
   readonly systemPrompt?: boolean;
   readonly tools?: boolean;

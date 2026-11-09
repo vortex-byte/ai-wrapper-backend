@@ -57,15 +57,27 @@ describe('capabilities schema', () => {
     expect(reparsed.maxOutputTokens).toBe(512);
   });
 
-  it('preserves an explicit maxImagesPerRequest', () => {
+  it('preserves an explicit maxImagesPerRequest alongside image generation', () => {
     const parsed = parseCapabilities({
       contextWindow: 8_192,
       maxOutputTokens: 1_024,
       vision: true,
+      imageGeneration: { mode: 'tool' },
       maxImagesPerRequest: 10,
     });
     expect(parsed.maxImagesPerRequest).toBe(10);
     expect(parsed.vision).toBe(true);
+  });
+
+  it('rejects maxImagesPerRequest on a model that cannot generate images', () => {
+    expect(() =>
+      parseCapabilities({
+        contextWindow: 8_192,
+        maxOutputTokens: 1_024,
+        vision: true,
+        maxImagesPerRequest: 10,
+      }),
+    ).toThrow(/maxImagesPerRequest requires imageGeneration/);
   });
 
   it('parses a reasoning capability and requires the default to be selectable', () => {
@@ -102,6 +114,65 @@ describe('capabilities schema', () => {
 
   it('rejects an unknown effort value in a partial patch', () => {
     expect(() => parsePartialCapabilities({ reasoning: { defaultEffort: 'extreme' } })).toThrow();
+  });
+
+  it('parses image generation as a role and keeps an optional pinned model', () => {
+    const tool = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      imageGeneration: { mode: 'tool', model: 'gpt-image-2.5-flare' },
+    });
+    expect(tool.imageGeneration).toEqual({ mode: 'tool', model: 'gpt-image-2.5-flare' });
+
+    const provider = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      imageGeneration: { mode: 'provider' },
+    });
+    expect(provider.imageGeneration).toEqual({ mode: 'provider' });
+  });
+
+  it('reads the legacy boolean as the tool role', () => {
+    const legacy = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      imageGeneration: true,
+    });
+    expect(legacy.imageGeneration).toEqual({ mode: 'tool' });
+
+    const absent = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      imageGeneration: false,
+    });
+    expect(absent.imageGeneration).toBeUndefined();
+
+    const cleared = parseCapabilities({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      imageGeneration: null,
+    });
+    expect(cleared.imageGeneration).toBeUndefined();
+  });
+
+  it('lets a partial patch set, replace and clear the image capability', () => {
+    expect(parsePartialCapabilities({ imageGeneration: true })).toEqual({
+      imageGeneration: { mode: 'tool' },
+    });
+    expect(parsePartialCapabilities({ imageGeneration: { mode: 'provider' } })).toEqual({
+      imageGeneration: { mode: 'provider' },
+    });
+    expect(parsePartialCapabilities({ imageGeneration: null })).toEqual({ imageGeneration: null });
+    expect(parsePartialCapabilities({ imageGeneration: false })).toEqual({});
+  });
+
+  it('rejects an unknown image generation mode', () => {
+    const result = ModelCapabilitiesSchema.safeParse({
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      imageGeneration: { mode: 'video' },
+    });
+    expect(result.success).toBe(false);
   });
 
   it('parses valid compaction capability with triggerTokens', () => {

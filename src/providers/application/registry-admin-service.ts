@@ -408,11 +408,16 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       const mergedCapabilities: ModelCapabilities | undefined =
         input.capabilities !== undefined || input.contextWindow !== undefined || input.maxOutputTokens !== undefined
           ? (() => {
-              const { reasoning: reasoningPatch, compaction: compactionPatch, ...capabilityPatch } =
-                input.capabilities ?? {};
+              const {
+                reasoning: reasoningPatch,
+                compaction: compactionPatch,
+                imageGeneration: imageGenerationPatch,
+                ...capabilityPatch
+              } = input.capabilities ?? {};
               const {
                 reasoning: _existingReasoning,
                 compaction: _existingCompaction,
+                imageGeneration: _existingImageGeneration,
                 ...existingCapabilities
               } = existing.capabilities;
               const reasoning = mergeReasoningCapability(
@@ -423,6 +428,10 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
                 compactionPatch === null
                   ? undefined
                   : (compactionPatch ?? existing.capabilities.compaction);
+              const imageGeneration =
+                imageGenerationPatch === null
+                  ? undefined
+                  : (imageGenerationPatch ?? existing.capabilities.imageGeneration);
               return {
                 ...existingCapabilities,
                 ...capabilityPatch,
@@ -432,6 +441,7 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
                 },
                 contextWindow: input.contextWindow ?? input.capabilities?.contextWindow ?? existing.capabilities.contextWindow,
                 maxOutputTokens: input.maxOutputTokens ?? input.capabilities?.maxOutputTokens ?? existing.capabilities.maxOutputTokens,
+                ...(imageGeneration !== undefined ? { imageGeneration } : {}),
                 ...(compaction !== undefined ? { compaction } : {}),
                 ...(reasoning !== undefined ? { reasoning } : {}),
               };

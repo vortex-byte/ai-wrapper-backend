@@ -6,6 +6,7 @@ import { requirePasswordChanged } from '@/http/middleware/require-password-chang
 import type { AppEnv } from '@/http/types.ts';
 import type { AuthService } from '@/auth/application/auth-service.ts';
 import type { ModelRecord } from '../domain/registry.ts';
+import { conversationCapable } from '../domain/capabilities.ts';
 import type { ModelRegistry } from '../ports/model-registry.ts';
 
 export interface ModelRoutesDeps {
@@ -32,8 +33,20 @@ export function modelRoutes(deps: ModelRoutesDeps): Hono<AppEnv> {
   return routes;
 }
 
+export interface WireModel {
+  readonly id: string;
+  readonly displayName: string;
+  readonly providerLabel: string;
+  readonly status: string;
+  readonly capabilities: ModelRecord['capabilities'];
+  readonly limits: {
+    readonly maxFilesPerMessage: number;
+    readonly maxImagesPerMessage: number;
+  };
+}
+
 /** The public model shape: no other row ids, no config, no secrets. */
-function toWireModel(model: ModelRecord) {
+export function toWireModel(model: ModelRecord): WireModel {
   return {
     id: model.id,
     displayName: model.displayName,
@@ -43,8 +56,9 @@ function toWireModel(model: ModelRecord) {
     limits: {
       maxFilesPerMessage:
         model.capabilities.documents.pdf || model.capabilities.vision ? 5 : 0,
-      maxImagesPerMessage:
-        model.capabilities.maxImagesPerRequest ?? (model.capabilities.vision ? 10 : 0),
+      maxImagesPerMessage: conversationCapable(model.capabilities)
+        ? (model.capabilities.maxImagesPerRequest ?? (model.capabilities.vision ? 10 : 0))
+        : 0,
     },
   };
 }

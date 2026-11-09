@@ -11,6 +11,8 @@ export { providerError } from './domain/errors.ts';
 export type {
   DocumentCapabilities,
   CompactionCapability,
+  ImageGenerationCapability,
+  ImageGenerationMode,
   ModelCapabilities,
   ModelRuntimeConfig,
   PartialReasoningCapability,
@@ -19,7 +21,12 @@ export type {
   ReasoningCapability,
   ReasoningEffort,
 } from './domain/capabilities.ts';
-export { REASONING_EFFORTS } from './domain/capabilities.ts';
+export {
+  REASONING_EFFORTS,
+  canGenerateImages,
+  conversationCapable,
+  imageToolSupported,
+} from './domain/capabilities.ts';
 export {
   ModelCapabilitiesSchema,
   PartialModelCapabilitiesSchema,

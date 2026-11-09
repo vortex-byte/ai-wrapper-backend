@@ -125,6 +125,8 @@ export type GenerationEvent =
       readonly bytes?: Uint8Array;
       /** Index of the `part_started` this artifact belongs to, when the provider gives one. */
       readonly index?: number;
+      /** Provider-rewritten prompt that produced the image, when the provider returns one. */
+      readonly revisedPrompt?: string;
     }
   | {
       /** A provider-side compaction block was emitted; it replaces the turns it summarizes. */

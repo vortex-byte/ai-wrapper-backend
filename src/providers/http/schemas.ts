@@ -74,7 +74,7 @@ export const CreateModelBodySchema = z
     displayName: z.string().trim().min(1).max(128),
     description: z.string().trim().max(1024).nullable().optional(),
     status: ModelStatusSchema.optional(),
-    capabilities: PartialModelCapabilitiesSchema.default({}),
+    capabilities: PartialModelCapabilitiesSchema.default({ imageGeneration: undefined }),
     contextWindow: z.number().int().positive().optional(),
     maxOutputTokens: z.number().int().positive().optional(),
     defaultMaxOutputTokens: z.number().int().positive().optional(),

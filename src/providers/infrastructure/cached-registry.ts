@@ -1,5 +1,6 @@
 import type { Clock } from '@/clock/index.ts';
 import type { ModelRuntimeConfig, ProviderRuntimeConfig } from '../domain/capabilities.ts';
+import { conversationCapable } from '../domain/capabilities.ts';
 import type { ModelRecord, ProviderRecord } from '../domain/registry.ts';
 import type { ModelRegistry, ResolvedModel } from '../ports/model-registry.ts';
 import type { RegistryRepository } from '../ports/registry-repository.ts';
@@ -71,7 +72,10 @@ export class CachedModelRegistry implements ModelRegistry {
       providers.filter((provider) => provider.status === 'active').map((provider) => provider.id),
     );
     return models.filter(
-      (model) => enabled.has(model.providerId) && model.status === 'active',
+      (model) =>
+        enabled.has(model.providerId) &&
+        model.status === 'active' &&
+        conversationCapable(model.capabilities),
     );
   }
 

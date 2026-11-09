@@ -188,6 +188,28 @@ describe('CachedModelRegistry', () => {
     expect(visible.map((m) => m.id)).toEqual(['active']);
   });
 
+  it('hides image endpoints from the picker but keeps chat models with the image tool', async () => {
+    const clock = new MutableClock(new Date('2026-01-01T00:00:00Z'));
+    const withImage = (imageGeneration: ModelCapabilities['imageGeneration']) =>
+      parseCapabilities({
+        contextWindow: 8_192,
+        maxOutputTokens: 1_024,
+        ...(imageGeneration !== undefined ? { imageGeneration } : {}),
+      });
+    const repository = new CountingRepository(
+      [provider()],
+      [
+        model({ id: 'plain' }),
+        model({ id: 'image-tool', capabilities: withImage({ mode: 'tool' }) }),
+        model({ id: 'image-endpoint', capabilities: withImage({ mode: 'provider' }) }),
+      ],
+    );
+    const registry = new CachedModelRegistry({ repository, secrets, clock });
+
+    const visible = await registry.listVisibleModels();
+    expect(visible.map((m) => m.id)).toEqual(['plain', 'image-tool']);
+  });
+
   it('resolves secrets from the resolver and never leaks a missing key', async () => {
     const clock = new MutableClock(new Date('2026-01-01T00:00:00Z'));
     const repository = new CountingRepository(

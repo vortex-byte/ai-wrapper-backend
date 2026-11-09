@@ -42,6 +42,7 @@ function request(overrides: Partial<NormalizedChatRequest> = {}): NormalizedChat
         streaming: true,
         vision: true,
         documents: { pdf: true },
+        imageGeneration: null,
         documentGeneration: true,
         systemPrompt: true,
         tools: true,

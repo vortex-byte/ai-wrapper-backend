@@ -293,6 +293,7 @@ export function makeChatRequest(
       streaming: true,
       vision: false,
       documents: { pdf: false },
+      imageGeneration: null,
       documentGeneration: false,
       systemPrompt: true,
       tools: false,

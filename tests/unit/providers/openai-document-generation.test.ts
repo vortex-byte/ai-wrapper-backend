@@ -30,6 +30,7 @@ function makeRequest(overrides: Partial<NormalizedChatRequest> = {}): Normalized
         streaming: true,
         vision: true,
         documents: { pdf: true },
+        imageGeneration: null,
         documentGeneration: true,
         systemPrompt: true,
         tools: true,

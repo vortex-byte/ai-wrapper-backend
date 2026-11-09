@@ -12,6 +12,7 @@ const mockModel: ModelRuntimeConfig = {
     streaming: true,
     vision: true,
     documents: { pdf: true },
+    imageGeneration: null,
     documentGeneration: false,
     systemPrompt: true,
     tools: false,

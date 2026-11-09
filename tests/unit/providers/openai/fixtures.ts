@@ -18,6 +18,7 @@ export function openAIModel(overrides: Partial<ModelRuntimeConfig> = {}): ModelR
       streaming: true,
       vision: true,
       documents: { pdf: true },
+      imageGeneration: null,
       documentGeneration: false,
       systemPrompt: true,
       tools: false,

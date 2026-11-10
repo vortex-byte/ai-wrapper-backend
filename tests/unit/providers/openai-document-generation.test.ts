@@ -208,6 +208,24 @@ describe('OpenAIAdapter — document generation (Unit)', () => {
     const params = fake.responsesCalls[0] ?? {};
     expect(params['tools']).toEqual([{ type: 'code_interpreter', container: { type: 'auto' } }]);
     expect(params['include']).toEqual(['code_interpreter_call.outputs']);
+    expect(String(params['instructions'])).toContain('access to the code_interpreter tool');
+    expect(String(params['instructions'])).toContain('Choose whether to use this tool');
+  });
+
+  it('lists the shell tool in prompt instructions when shell is enabled', async () => {
+    const fake = fakeClient(textTurn);
+    const adapter = new OpenAIAdapter(() => fake.client);
+
+    await collect(
+      adapter,
+      withSkillsShell(
+        makeRequest({ container: { codeExecution: true, skills: ['xlsx'] } }),
+      ),
+    );
+
+    const params = fake.responsesCalls[0] ?? {};
+    expect(String(params['instructions'])).toContain('access to the shell tool');
+    expect(String(params['instructions'])).toContain('Choose whether to use this tool');
   });
 
   it('never offers the shell tool when every requested skill is unmapped', async () => {

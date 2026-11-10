@@ -79,14 +79,23 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
       : Math.max(0, input.userRemainingQuota - maxOutputTokens);
   const historyBudget = Math.min(modelInputBudget, quotaInputBudget);
 
-  const systemAddendum =
-    typeof model.config['systemAddendum'] === 'string' ? model.config['systemAddendum'] : undefined;
+  const modelAddendum =
+    typeof model.config['systemAddendum'] === 'string' &&
+    model.config['systemAddendum'].trim().length > 0
+      ? model.config['systemAddendum'].trim()
+      : undefined;
+  const providerAddendum =
+    typeof provider.config['systemAddendum'] === 'string' &&
+    provider.config['systemAddendum'].trim().length > 0
+      ? provider.config['systemAddendum'].trim()
+      : undefined;
+  const systemAddendum = modelAddendum ?? providerAddendum;
   const systemParts: string[] = [];
   if (platformSystemPrompt && platformSystemPrompt.trim().length > 0) {
     systemParts.push(platformSystemPrompt.trim());
   }
-  if (systemAddendum && systemAddendum.trim().length > 0) {
-    systemParts.push(systemAddendum.trim());
+  if (systemAddendum) {
+    systemParts.push(systemAddendum);
   }
   const systemPrompt = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 

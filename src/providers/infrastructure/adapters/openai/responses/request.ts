@@ -57,9 +57,12 @@ export function compactionConfig(req: NormalizedChatRequest): readonly unknown[]
   return [{ type: 'compaction', compact_threshold: threshold }];
 }
 
-function outputDirAddendum(): string {
+function outputDirAddendum(hasShell: boolean): string {
+  const toolName = hasShell ? 'shell' : 'code_interpreter';
   return (
-    `\n\nCRITICAL: Always save or copy every generated file (PDF, DOCX, XLSX, PPTX, images) ` +
+    `\n\nYou have access to the ${toolName} tool for execution. ` +
+    `Choose whether to use this tool based on the user's request. ` +
+    `Always save or copy every generated file (PDF, DOCX, XLSX, PPTX, images) ` +
     `directly under ${OPENAI_OUTPUT_DIR} so it can be downloaded by the user.`
   );
 }
@@ -317,8 +320,9 @@ export async function buildResponsesRequest(
   const tools = buildResponsesTools(req);
 
   const base = req.system !== undefined && req.system.trim().length > 0 ? req.system : '';
+  const hasShell = tools.some((t) => (t as { type?: string }).type === 'shell');
   const instructions =
-    `${base}${req.container !== undefined ? outputDirAddendum() : ''}`.trimStart();
+    `${base}${req.container !== undefined ? outputDirAddendum(hasShell) : ''}`.trimStart();
   const contextManagement = compactionConfig(req);
 
   return {

@@ -121,8 +121,9 @@ export class OpenAIAdapter implements ProviderAdapter {
     const client = this.client(provider, requireApiKey(provider.secrets));
     const result = await client.models.list(undefined, { signal });
     return result.data
-      .map((model) => ({ id: model.id }))
+      .filter((model) => model.shutdown_date === null || model.shutdown_date === undefined)
       .filter((model) => isChatCapableModelId(model.id))
+      .map((model) => ({ id: model.id }))
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 

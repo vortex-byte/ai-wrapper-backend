@@ -108,6 +108,50 @@ describe('Context Builder', () => {
     expect(result.truncation.truncated).toBe(false);
   });
 
+  it('falls back to provider systemAddendum when model has none', () => {
+    const result = buildContext({
+      requestId: 'req-addendum-prov',
+      generationId: 'gen-addendum-prov',
+      model: { ...mockModel, config: {} },
+      provider: { ...mockProvider, config: { systemAddendum: 'Provider addendum.' } },
+      platformSystemPrompt: 'Platform prompt.',
+      newParts: [{ type: 'text', text: 'Hello AI' }],
+      history: [],
+      userIdHash: 'hash-1',
+    });
+
+    expect(result.request.system).toBe('Platform prompt.\n\nProvider addendum.');
+  });
+
+  it('prefers model systemAddendum over provider systemAddendum', () => {
+    const result = buildContext({
+      requestId: 'req-addendum-override',
+      generationId: 'gen-addendum-override',
+      model: { ...mockModel, config: { systemAddendum: 'Model override.' } },
+      provider: { ...mockProvider, config: { systemAddendum: 'Provider addendum.' } },
+      platformSystemPrompt: 'Platform prompt.',
+      newParts: [{ type: 'text', text: 'Hello AI' }],
+      history: [],
+      userIdHash: 'hash-1',
+    });
+
+    expect(result.request.system).toBe('Platform prompt.\n\nModel override.');
+  });
+
+  it('uses addendum as the sole system prompt when platform system prompt is absent', () => {
+    const result = buildContext({
+      requestId: 'req-addendum-sole',
+      generationId: 'gen-addendum-sole',
+      model: { ...mockModel, config: {} },
+      provider: { ...mockProvider, config: { systemAddendum: 'Only addendum.' } },
+      newParts: [{ type: 'text', text: 'Hello AI' }],
+      history: [],
+      userIdHash: 'hash-1',
+    });
+
+    expect(result.request.system).toBe('Only addendum.');
+  });
+
   it('truncates history when budget is exceeded', () => {
     const historyItem = (seq: number, text: string) => ({
       message: {

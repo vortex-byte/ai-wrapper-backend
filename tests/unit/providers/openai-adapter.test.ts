@@ -473,6 +473,30 @@ describe('OpenAIAdapter — multimodal input and reasoning config', () => {
     expect(models.map((model) => model.id)).toEqual(['gpt-4o', 'o4-mini']);
   });
 
+  it('filters out models with an announced shutdown date', async () => {
+    const adapter = new OpenAIAdapter(() => ({
+      models: {
+        async list() {
+          return {
+            data: [
+              { id: 'gpt-4o' },
+              { id: 'gpt-4o-mini', shutdown_date: null },
+              { id: 'o3-mini', shutdown_date: '2026-12-01' },
+              { id: 'gpt-4-turbo', shutdown_date: undefined },
+            ],
+          };
+        },
+      },
+      chat: { completions: { create: async () => (async function* () {})() } },
+    }));
+
+    const models = await adapter.listModels({
+      provider: makeOpenAIRequest().provider,
+      signal: new AbortController().signal,
+    });
+    expect(models.map((model) => model.id)).toEqual(['gpt-4-turbo', 'gpt-4o', 'gpt-4o-mini']);
+  });
+
   it('lists nothing as a key when the provider secret is missing', async () => {
     const adapter = new OpenAIAdapter(() => createMockOpenAIClient([]));
     await expect(

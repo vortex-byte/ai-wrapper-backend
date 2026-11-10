@@ -23,7 +23,9 @@ export const MIN_COMPACTION_TRIGGER = 50_000;
 
 export function outputDirAddendum(envVar: string): string {
   return (
-    `\n\nCRITICAL: Always copy or save all generated files (PDF, DOCX, XLSX, PPTX, images) ` +
+    `\n\nYou have access to code execution tools. ` +
+    `Choose whether to use this tool based on the user's request. ` +
+    `Always copy or save all generated files (PDF, DOCX, XLSX, PPTX, images) ` +
     `directly into the directory specified by $${envVar} so they can be captured.`
   );
 }

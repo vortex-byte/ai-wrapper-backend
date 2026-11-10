@@ -332,6 +332,7 @@ export async function buildResponsesRequest(
     max_output_tokens: req.maxOutputTokens,
     stream: true,
     store: req.model.config['storeResponses'] === true,
+    truncation: contextManagement !== undefined ? 'auto' : 'disabled',
     safety_identifier: req.metadata.userIdHash,
     ...(sampling && typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
     ...(sampling && typeof req.topP === 'number' ? { top_p: req.topP } : {}),

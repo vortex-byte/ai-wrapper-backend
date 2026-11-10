@@ -91,4 +91,23 @@ describe('responses/request — payload', () => {
     );
     expect(on['store']).toBe(true);
   });
+
+  it('sets truncation to auto when compaction is active and disabled otherwise', async () => {
+    const plain = await buildResponsesRequest(makeOpenAIRequest());
+    expect(plain['truncation']).toBe('disabled');
+
+    const compacting = await buildResponsesRequest(
+      makeOpenAIRequest({
+        model: openAIModel({
+          capabilities: { ...openAIModel().capabilities, compaction: {} },
+        }),
+      }),
+    );
+    expect(compacting['truncation']).toBe('auto');
+  });
+
+  it('sends safety_identifier from user metadata', async () => {
+    const params = await buildResponsesRequest(makeOpenAIRequest());
+    expect(params['safety_identifier']).toBe('hash-1');
+  });
 });

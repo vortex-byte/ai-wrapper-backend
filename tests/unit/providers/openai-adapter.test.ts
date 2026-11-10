@@ -428,6 +428,13 @@ describe('OpenAIAdapter — multimodal input and reasoning config', () => {
     ]);
   });
 
+  it('forwards the hashed user id as safety_identifier', () => {
+    const req = makeOpenAIRequest();
+    const params = buildRequest(req, buildMessages(req)) as Record<string, unknown>;
+
+    expect(params['safety_identifier']).toBe('hash-1');
+  });
+
   it('forwards reasoning_effort from the registry config', () => {
     const req = makeOpenAIRequest();
     const params = buildRequest(
@@ -560,6 +567,8 @@ describe('OpenAIAdapter — provider-native compaction', () => {
     expect(calls[0]?.['context_management']).toEqual([
       { type: 'compaction', compact_threshold: 102_400 },
     ]);
+    expect(calls[0]?.['truncation']).toBe('auto');
+    expect(calls[0]?.['safety_identifier']).toBe('hash-1');
     expect(events.find((e) => e.type === 'compaction')).toEqual({
       type: 'compaction',
       provider: 'openai',

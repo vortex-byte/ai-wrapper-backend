@@ -47,6 +47,7 @@ export function buildRequest(
     max_completion_tokens: req.maxOutputTokens,
     stream: true,
     stream_options: { include_usage: true },
+    safety_identifier: req.metadata.userIdHash,
     ...(sampling && typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
     ...(sampling && typeof req.topP === 'number' ? { top_p: req.topP } : {}),
     ...(typeof reasoningEffort === 'string' && reasoningEffort.length > 0

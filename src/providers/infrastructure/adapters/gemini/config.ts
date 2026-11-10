@@ -19,6 +19,12 @@ export const THINKING_BUDGETS: Readonly<Record<ReasoningEffort, number>> = {
 
 const MIN_OUTPUT_HEADROOM = 1024;
 
+export function gemini3OrLater(apiModelId: string): boolean {
+  const id = apiModelId.replace(/^models\//, '');
+  const match = /(?:^|-)gemini-(\d+)/i.exec(id);
+  return match !== null && Number(match[1]) >= 3;
+}
+
 export function resolveThinkingBudget(effort: ReasoningEffort, maxOutputTokens: number): number {
   const budget = THINKING_BUDGETS[effort];
   const ceiling = maxOutputTokens - MIN_OUTPUT_HEADROOM;

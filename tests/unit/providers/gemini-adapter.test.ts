@@ -7,6 +7,7 @@ import {
 } from '@/providers/infrastructure/adapters/gemini/adapter.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
 import type { GenerationEvent } from '@/providers/domain/pal.ts';
+import { gemini3OrLater } from '@/providers/infrastructure/adapters/gemini/config.ts';
 
 function sseStream(chunks: readonly unknown[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -142,6 +143,44 @@ describe('GeminiAdapter', () => {
     };
     expect(payload.generationConfig['responseModalities']).toBeUndefined();
     expect(payload.generationConfig['imageConfig']).toBeUndefined();
+  });
+
+  it('classifies Gemini 3 and later model ids', () => {
+    expect(gemini3OrLater('gemini-3.1-pro-preview')).toBe(true);
+    expect(gemini3OrLater('gemini-4-argon')).toBe(true);
+    expect(gemini3OrLater('gemini-2.5-flash')).toBe(false);
+    expect(gemini3OrLater('models/gemini-3.6-flash')).toBe(true);
+    expect(gemini3OrLater('gemini-3-flash')).toBe(true);
+  });
+
+  it('drops sampling parameters and keeps the thinking budget on Gemini 3 models', () => {
+    const adapter = new GeminiAdapter();
+    const base = request({
+      temperature: 0.6,
+      topP: 0.9,
+      reasoningEffort: 'high',
+      maxOutputTokens: 16384,
+    });
+    const payload = adapter.toProviderRequest({
+      ...base,
+      model: { ...base.model, apiModelId: 'gemini-3.1-pro-preview' },
+    }) as { generationConfig: Record<string, unknown> };
+
+    expect(payload.generationConfig['temperature']).toBeUndefined();
+    expect(payload.generationConfig['topP']).toBeUndefined();
+    expect(payload.generationConfig['thinkingConfig']).toEqual({ thinkingBudget: 8192 });
+  });
+
+  it('keeps sampling parameters on Gemini 2.x models', () => {
+    const adapter = new GeminiAdapter();
+    const base = request({ temperature: 0.6, topP: 0.9 });
+    const payload = adapter.toProviderRequest({
+      ...base,
+      model: { ...base.model, apiModelId: 'gemini-2.5-flash' },
+    }) as { generationConfig: Record<string, unknown> };
+
+    expect(payload.generationConfig['temperature']).toBe(0.6);
+    expect(payload.generationConfig['topP']).toBe(0.9);
   });
 
   it('estimates input tokens locally', async () => {

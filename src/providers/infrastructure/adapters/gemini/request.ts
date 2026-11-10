@@ -1,5 +1,5 @@
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
-import { flag, resolveThinkingBudget } from './config.ts';
+import { flag, gemini3OrLater, resolveThinkingBudget } from './config.ts';
 import { mediaPart } from './media.ts';
 
 export function buildTools(req: NormalizedChatRequest): unknown[] {
@@ -72,6 +72,7 @@ export function assembleRequest(
   const imageRequested = req.responseModalities.includes('image');
   const tools = imageRequested ? [] : buildTools(req);
   const imageConfig = imageRequested ? buildImageConfig(req) : undefined;
+  const omitSampling = gemini3OrLater(req.model.apiModelId);
 
   return {
     ...(req.system !== undefined && req.system.trim().length > 0
@@ -80,8 +81,10 @@ export function assembleRequest(
     contents,
     generationConfig: {
       maxOutputTokens: req.maxOutputTokens,
-      ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
-      ...(typeof req.topP === 'number' ? { topP: req.topP } : {}),
+      ...(typeof req.temperature === 'number' && !omitSampling
+        ? { temperature: req.temperature }
+        : {}),
+      ...(typeof req.topP === 'number' && !omitSampling ? { topP: req.topP } : {}),
       ...(imageRequested ? { responseModalities: ['TEXT', 'IMAGE'] } : {}),
       ...(imageConfig !== undefined ? { imageConfig } : {}),
       ...(req.reasoningEffort !== undefined && !imageRequested

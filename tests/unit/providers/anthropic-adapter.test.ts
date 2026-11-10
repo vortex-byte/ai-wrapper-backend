@@ -395,7 +395,6 @@ describe('AnthropicAdapter (Unit)', () => {
   it('formats requests with non-empty content and ensures first message is user', () => {
     const adapter = new AnthropicAdapter();
 
-    // Leading assistant message with empty parts
     const req = makeChatRequest({
       messages: [
         {
@@ -523,6 +522,71 @@ describe('AnthropicAdapter (Unit)', () => {
     const translated = adapter.translateError(error);
     expect(translated.category).toBe('context_too_large');
     expect(translated.retryable).toBe(false);
+  });
+
+  it('keeps the provider message from the wrapped SDK error body', () => {
+    const adapter = new AnthropicAdapter();
+    // The SDK stores the whole response envelope on `.error`, so the actionable text is nested.
+    const error = new Anthropic.BadRequestError(
+      400,
+      {
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message: 'Your credit balance is too low to access the Anthropic API.',
+        },
+      },
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"bad"}}',
+      new Headers(),
+    );
+
+    const translated = adapter.translateError(error);
+    expect(translated.internalMessage).toBe(
+      'Your credit balance is too low to access the Anthropic API.',
+    );
+    expect(translated.providerCode).toBe('invalid_request_error');
+    expect(translated.providerStatus).toBe(400);
+  });
+
+  it('classifies a 400 billing rejection as provider_unavailable, not invalid_request', () => {
+    const adapter = new AnthropicAdapter();
+    const error = new Anthropic.BadRequestError(
+      400,
+      {
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message:
+            'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.',
+        },
+      },
+      'Bad Request',
+      new Headers(),
+    );
+
+    const translated = adapter.translateError(error);
+    expect(translated.category).toBe('provider_unavailable');
+    expect(translated.retryable).toBe(false);
+    expect(translated.internalMessage).toContain('credit balance is too low');
+  });
+
+  it('falls back to the SDK message when the error body has no message', () => {
+    const adapter = new AnthropicAdapter();
+    const error = new Anthropic.BadRequestError(400, undefined, 'Body missing', new Headers());
+
+    const translated = adapter.translateError(error);
+    expect(translated.internalMessage).toContain('Body missing');
+  });
+
+  it('keeps the sanitized message for bare mid-stream error events', () => {
+    const adapter = new AnthropicAdapter();
+    const translated = adapter.translateError({
+      type: 'invalid_request_error',
+      message: 'max_tokens: 200000 > 64000, which is the maximum allowed',
+    });
+
+    expect(translated.category).toBe('invalid_request');
+    expect(translated.internalMessage).toContain('max_tokens');
   });
 
   it('translates 500 internal error with retry-after header', () => {

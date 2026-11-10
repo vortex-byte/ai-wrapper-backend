@@ -20,7 +20,15 @@ export interface FinalizeInput {
   readonly status: GenerationStatus;
   readonly finishReason: string;
   readonly error?:
-    { readonly code: string; readonly message: string; readonly retryable: boolean } | undefined;
+    | {
+        readonly code: string;
+        readonly message: string;
+        readonly retryable: boolean;
+        readonly detail?: string | undefined;
+        readonly httpStatus?: number | undefined;
+        readonly providerCode?: string | undefined;
+      }
+    | undefined;
   readonly accumulatedText: string;
   readonly usage?: TokenUsage | undefined;
   /** Whether the upstream provider accepted the request (stream connection established / started event). */
@@ -163,8 +171,7 @@ export class Finalizer {
           );
         }
 
-        // An adapter that streamed text without `part_started`, or a crash that lost the part
-        // row, would drop the whole answer: persist it so the content stays recoverable.
+        // An adapter that streamed text without `part_started`, or a crash that lost the part row, would drop the whole answer.
         if (textParts.length === 0 && resolvedText.length > 0) {
           const position = messageWithParts.parts.length;
           await this.conversations.insertParts(
@@ -268,8 +275,16 @@ export class Finalizer {
           providerId: record.providerId,
           modelId: record.modelId,
           generationId: record.id,
-          message: input.error.message,
-          context: { retryable: input.error.retryable },
+          message: input.error.detail ?? input.error.message,
+          context: {
+            retryable: input.error.retryable,
+            ...(input.error.httpStatus !== undefined
+              ? { providerStatus: input.error.httpStatus }
+              : {}),
+            ...(input.error.providerCode !== undefined
+              ? { providerCode: input.error.providerCode }
+              : {}),
+          },
         });
       } catch {
         // Non-fatal error event write failure
@@ -279,7 +294,25 @@ export class Finalizer {
     const durationMs = record.startedAt
       ? Math.max(0, now.getTime() - record.startedAt.getTime())
       : null;
-    getLogger().info(
+    const failed = input.status === 'failed';
+    const failureIsFault = failed && input.error?.retryable !== false;
+    const logFailed = (meta: Record<string, unknown>, message: string): void => {
+      if (failureIsFault) getLogger().error(meta, message);
+      else if (failed) getLogger().warn(meta, message);
+      else getLogger().info(meta, message);
+    };
+    const failureMeta =
+      failed && input.error !== undefined
+        ? {
+            errorCode: input.error.code,
+            errorDetail: input.error.detail ?? input.error.message,
+            retryable: input.error.retryable,
+            ...(input.error.httpStatus !== undefined
+              ? { providerStatus: input.error.httpStatus }
+              : {}),
+          }
+        : {};
+    logFailed(
       {
         requestId: record.requestId,
         userId: record.userId,
@@ -290,6 +323,7 @@ export class Finalizer {
         finishReason,
         durationMs,
         outputTokens: usage.outputTokens,
+        ...failureMeta,
       },
       'generation finalized',
     );
@@ -322,7 +356,6 @@ function normaliseCancelReason(reason: string | undefined): CancelReason {
   return 'user_cancel';
 }
 
-/** `timeout` maps to the dedicated category; everything else that failed is a provider-level error. */
 function failureCategory(reason: string): GenerationFailureCategory {
   switch (reason) {
     case 'provider_unavailable':

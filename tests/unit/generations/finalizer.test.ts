@@ -5,6 +5,7 @@ import type { ConversationRepository } from '@/conversations/ports/conversation-
 import type { QuotaPort, Settlement } from '@/generations/ports/quota-port.ts';
 import type { ErrorEventEntry, ErrorEventWriter } from '@/generations/ports/error-event-writer.ts';
 import type { MessagePart, MessageWithParts } from '@/conversations/domain/conversation.ts';
+import { captureLogs } from '../../helpers/capture-logs.ts';
 
 function createDummyRecord(id: string): GenerationRecord {
   return {
@@ -277,6 +278,129 @@ describe('Finalizer', () => {
     expect(errorRecords[0]?.generationId).toBe('gen-fail');
   });
 
+  it('records the provider diagnostic instead of the generic public message', async () => {
+    const errorRecords: ErrorEventEntry[] = [];
+
+    const mockGenerations: Partial<GenerationRepository> = {
+      transitionToTerminal: async () => true,
+      findById: async (id: string) => createDummyRecord(id),
+    };
+
+    const finalizer = new Finalizer({
+      generations: mockGenerations as GenerationRepository,
+      conversations: {
+        updateMessage: async () => {},
+        findMessageForUser: async () => null,
+      } as Partial<ConversationRepository> as ConversationRepository,
+      quota: { settleOrRelease: async () => {} } as Partial<QuotaPort> as QuotaPort,
+      errorEvents: {
+        record: async (entry) => {
+          errorRecords.push(entry);
+        },
+      } as ErrorEventWriter,
+      clock,
+    });
+
+    await finalizer.finalize({
+      generationId: 'gen-billing',
+      status: 'failed',
+      finishReason: 'error',
+      error: {
+        code: 'provider_unavailable',
+        message: 'The model provider rejected the request for billing reasons.',
+        retryable: false,
+        detail: 'Your credit balance is too low to access the Anthropic API.',
+        httpStatus: 400,
+        providerCode: 'invalid_request_error',
+      },
+      accumulatedText: '',
+    });
+
+    const entry = errorRecords[0];
+    expect(entry?.message).toBe('Your credit balance is too low to access the Anthropic API.');
+    expect(entry?.context).toMatchObject({
+      retryable: false,
+      providerStatus: 400,
+      providerCode: 'invalid_request_error',
+    });
+  });
+
+  it('logs an expected provider rejection as a warning, not an error', async () => {
+    const logs = captureLogs();
+    try {
+      const finalizer = new Finalizer({
+        generations: {
+          transitionToTerminal: async () => true,
+          findById: async (id: string) => createDummyRecord(id),
+        } as Partial<GenerationRepository> as GenerationRepository,
+        conversations: {
+          updateMessage: async () => {},
+          findMessageForUser: async () => null,
+        } as Partial<ConversationRepository> as ConversationRepository,
+        quota: { settleOrRelease: async () => {} } as Partial<QuotaPort> as QuotaPort,
+        errorEvents: { record: async () => {} } as ErrorEventWriter,
+        clock,
+      });
+
+      await finalizer.finalize({
+        generationId: 'gen-declined',
+        status: 'failed',
+        finishReason: 'error',
+        error: {
+          code: 'provider_unavailable',
+          message: 'The model provider rejected the request for billing reasons.',
+          retryable: false,
+          detail: 'Your credit balance is too low.',
+          httpStatus: 400,
+        },
+        accumulatedText: '',
+      });
+
+      const finalized = logs.records.find((r) => r.msg === 'generation finalized');
+      expect(finalized?.level).toBe('warn');
+      expect(finalized?.meta['errorDetail']).toBe('Your credit balance is too low.');
+    } finally {
+      logs.restore();
+    }
+  });
+
+  it('logs a transport-level failure as an error', async () => {
+    const logs = captureLogs();
+    try {
+      const finalizer = new Finalizer({
+        generations: {
+          transitionToTerminal: async () => true,
+          findById: async (id: string) => createDummyRecord(id),
+        } as Partial<GenerationRepository> as GenerationRepository,
+        conversations: {
+          updateMessage: async () => {},
+          findMessageForUser: async () => null,
+        } as Partial<ConversationRepository> as ConversationRepository,
+        quota: { settleOrRelease: async () => {} } as Partial<QuotaPort> as QuotaPort,
+        errorEvents: { record: async () => {} } as ErrorEventWriter,
+        clock,
+      });
+
+      await finalizer.finalize({
+        generationId: 'gen-outage',
+        status: 'failed',
+        finishReason: 'error',
+        error: {
+          code: 'provider_unavailable',
+          message: 'The model provider is temporarily unavailable.',
+          retryable: true,
+          detail: 'upstream connect error',
+        },
+        accumulatedText: '',
+      });
+
+      const finalized = logs.records.find((r) => r.msg === 'generation finalized');
+      expect(finalized?.level).toBe('error');
+    } finally {
+      logs.restore();
+    }
+  });
+
   it('releases quota when a failed generation never reached the provider', async () => {
     const settlements: Settlement[] = [];
 
@@ -462,7 +586,6 @@ describe('Finalizer', () => {
     });
 
     expect(result).toBe(true);
-    // Partial content is preserved as `incomplete` rather than hard `failed`.
     expect(messageUpdates[0]?.['status']).toBe('incomplete');
     expect(messageUpdates[0]?.['finishReason']).toBe('error');
   });

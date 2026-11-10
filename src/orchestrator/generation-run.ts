@@ -57,6 +57,15 @@ export interface GenerationRunHooks {
     ((partId: string, chunk: string, lastEventSeq: number) => void) | undefined;
   readonly onHeartbeat?: ((generationId: string) => Promise<void>) | undefined;
   readonly onFinalize?: ((input: RunFinalizeInput) => Promise<void>) | undefined;
+  readonly onFailure?: ((input: GenerationRunFailureInput) => Promise<void>) | undefined;
+}
+
+export interface GenerationRunFailureInput {
+  readonly generationId: string;
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly partPosition: number;
 }
 
 export interface RunFinalizeInput {
@@ -64,7 +73,15 @@ export interface RunFinalizeInput {
   readonly status: GenerationStatus;
   readonly finishReason: string;
   readonly error?:
-    { readonly code: string; readonly message: string; readonly retryable: boolean } | undefined;
+    | {
+        readonly code: string;
+        readonly message: string;
+        readonly retryable: boolean;
+        readonly detail?: string | undefined;
+        readonly httpStatus?: number | undefined;
+        readonly providerCode?: string | undefined;
+      }
+    | undefined;
   readonly accumulatedText: string;
   readonly usage?: TokenUsage | undefined;
   /** Whether the upstream provider accepted the request (stream connection established / started event). */
@@ -99,7 +116,6 @@ interface NextResult<T> {
   readonly aborted?: boolean;
 }
 
-/** Races an async iterator next() against an AbortSignal. */
 async function nextWithAbort<T>(
   iterator: AsyncIterator<T>,
   signal: AbortSignal,
@@ -131,7 +147,6 @@ async function nextWithAbort<T>(
   }
 }
 
-/** Extracts the `command` field from a container tool's input, when present and string-typed. */
 function commandFromToolInput(input: unknown): string | undefined {
   if (typeof input !== 'object' || input === null || !('command' in input)) return undefined;
   return typeof input.command === 'string' ? input.command : undefined;
@@ -269,7 +284,6 @@ export class GenerationRun {
     return this.status === 'completed' || this.status === 'cancelled' || this.status === 'failed';
   }
 
-  /** Attaches a subscriber to this run, validating replay capability. */
   subscribe(
     subscriberId: string,
     lastEventSeq?: number,
@@ -315,9 +329,7 @@ export class GenerationRun {
     return { canReplay: true, subscriber };
   }
 
-  /**
-   * Explicitly aborts this generation with a reason (e.g. 'user_cancel', 'detached', 'shutdown').
-   */
+  /** Explicitly aborts this generation with a reason (e.g. `user_cancel`, `detached`, `shutdown`). */
   abort(reason: string): void {
     if (this.isTerminal || this.abortController.signal.aborted) return;
     this.abortController.abort(reason);
@@ -328,7 +340,6 @@ export class GenerationRun {
     return this.abortController.signal;
   }
 
-  /** Begins generation execution, streaming events until completion or error. */
   async start(): Promise<void> {
     if (this.status !== 'pending') return;
     this.status = 'generating';
@@ -381,6 +392,16 @@ export class GenerationRun {
               code: event.error.category,
               message: event.error.safeMessage,
               retryable: event.error.retryable,
+              ...(event.error.internalMessage !== undefined &&
+              event.error.internalMessage !== ''
+                ? { detail: event.error.internalMessage }
+                : {}),
+              ...(event.error.providerStatus !== undefined
+                ? { httpStatus: event.error.providerStatus }
+                : {}),
+              ...(event.error.providerCode !== undefined
+                ? { providerCode: event.error.providerCode }
+                : {}),
             };
           }
           break;
@@ -393,6 +414,15 @@ export class GenerationRun {
         code: providerError.category,
         message: providerError.safeMessage,
         retryable: providerError.retryable,
+        ...(providerError.internalMessage !== undefined && providerError.internalMessage !== ''
+          ? { detail: providerError.internalMessage }
+          : {}),
+        ...(providerError.providerStatus !== undefined
+          ? { httpStatus: providerError.providerStatus }
+          : {}),
+        ...(providerError.providerCode !== undefined
+          ? { providerCode: providerError.providerCode }
+          : {}),
       };
     } finally {
       clearTimeout(timeoutTimer);
@@ -532,8 +562,7 @@ export class GenerationRun {
         this.textCoalescer.flush();
         if (event.fileId !== undefined) {
           const filePartId = this.filePartIdForIndex(event.index) ?? this.currentPartId ?? '';
-          // Hydration already resolved (or failed) this part; a duplicate must not flip a
-          // failed part back to complete.
+          // Hydration already resolved (or failed) this part; a duplicate must not flip a failed part back to complete.
           if (filePartId === '' || this.completedFilePartIds.has(filePartId)) break;
           this.emitFrame('part.completed', {
             partId: filePartId,
@@ -616,7 +645,6 @@ export class GenerationRun {
     return this.openFilePartIds.find((id) => !this.completedFilePartIds.has(id)) ?? null;
   }
 
-  /** Hydrates a provider artifact and emits completion frame with download URL. */
   private async hydrateArtifact(event: {
     readonly providerFileId: string;
     readonly filename: string;
@@ -672,7 +700,7 @@ export class GenerationRun {
 
   private async finalizeRun(
     finishReason: string,
-    error?: { code: string; message: string; retryable: boolean },
+    error?: RunFinalizeInput['error'],
   ): Promise<void> {
     if (this.isTerminal) return;
 
@@ -720,7 +748,9 @@ export class GenerationRun {
       }
     } else if (error !== undefined) {
       this.status = 'failed';
-      this.emitFrame('generation.failed', { error });
+      this.emitFrame('generation.failed', {
+        error: { code: error.code, message: error.message, retryable: error.retryable },
+      });
     } else {
       this.status = 'completed';
       const completedPayload: GenerationCompletedPayload = {
@@ -748,6 +778,20 @@ export class GenerationRun {
           providerAccepted: this.providerAccepted,
           ...(cancelReason !== undefined ? { cancelReason } : {}),
           ...(this.currentPartId !== null ? { fallbackPartId: this.currentPartId } : {}),
+        });
+      } catch {
+        // Suppress hook errors in run loop
+      }
+    }
+
+    if (this.status === 'failed' && error !== undefined && this.hooks?.onFailure !== undefined) {
+      try {
+        await this.hooks.onFailure({
+          generationId: this.generationId,
+          code: error.code,
+          message: error.message,
+          retryable: error.retryable,
+          partPosition: this.nextPartPosition,
         });
       } catch {
         // Suppress hook errors in run loop

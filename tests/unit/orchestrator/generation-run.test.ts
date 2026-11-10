@@ -212,6 +212,36 @@ describe('GenerationRun', () => {
     });
   });
 
+  it('notifies onFailure with the reason so a detached failure stays visible', async () => {
+    const clock = { now: () => new Date() };
+    const idGen = { uuidv7: () => 'part-1' };
+    const adapter = new FakeProvider({ chunkDelayMs: 200, chunks: ['never'] });
+
+    let failure: { code: string; message: string; retryable: boolean } | null = null;
+    const run = new GenerationRun({
+      generation: createDummyRecord(),
+      userMessageId: 'm-user',
+      assistantMessageId: 'm-assistant',
+      chatRequest: createDummyRequest(),
+      adapter,
+      contextInfo: { truncated: false },
+      clock,
+      idGen,
+      config: { detachTimeoutSeconds: 60, generationTimeoutMs: 30 },
+      hooks: {
+        onFailure: async (payload) => {
+          failure = payload;
+        },
+      },
+    });
+
+    await run.start();
+
+    expect(run.currentStatus).toBe('failed');
+    expect(failure).not.toBeNull();
+    expect(failure).toMatchObject({ code: 'generation_timeout', retryable: true });
+  });
+
   it('races signal against iterator.next() so an adapter that ignores abort cannot hang the runner', async () => {
     const clock = { now: () => new Date() };
     const idGen = { uuidv7: () => 'part-1' };
@@ -250,8 +280,7 @@ describe('GenerationRun', () => {
   it('persists a text part via onPartStarted when the adapter skips part_started', async () => {
     const clock = { now: () => new Date() };
     const idGen = { uuidv7: () => 'part-raw' };
-    // malformed_event still emits text deltas but we want a raw-delta adapter: use success with
-    // the part_started suppressed by wrapping the adapter.
+    // malformed_event still emits text deltas but we want a raw-delta adapter: use success with the part_started suppressed by wrapping the adapter.
     const base = new FakeProvider({ chunks: ['raw', 'text'] });
     const adapter = {
       ...base,

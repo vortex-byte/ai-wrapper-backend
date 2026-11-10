@@ -7,10 +7,37 @@ import {
   scrubSecrets,
 } from '../shared.ts';
 
+interface AnthropicErrorBody {
+  readonly type?: string;
+  readonly message?: string;
+  readonly error?: { readonly type?: string; readonly message?: string };
+}
+
+function errorBody(err: InstanceType<typeof Anthropic.APIError>): AnthropicErrorBody {
+  const body: unknown = (err as { error?: unknown }).error;
+  return typeof body === 'object' && body !== null ? (body as AnthropicErrorBody) : {};
+}
+
+const BILLING_PATTERNS = [
+  'credit balance is too low',
+  'plans & billing',
+  'billing',
+  'insufficient_quota',
+  'payment required',
+] as const;
+
+function isBillingMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return BILLING_PATTERNS.some((pattern) => lower.includes(pattern));
+}
+
 export function translateError(err: unknown): ProviderError {
   if (err instanceof Anthropic.APIError) {
     const status = err.status;
-    const rawMsg = err.message ?? '';
+    const body = errorBody(err);
+    const innerMessage = body.error?.message;
+    const rawMsg =
+      typeof innerMessage === 'string' && innerMessage !== '' ? innerMessage : (err.message ?? '');
     const sanitized = scrubSecrets(rawMsg);
 
     let retryAfterMs: number | undefined;
@@ -23,9 +50,21 @@ export function translateError(err: unknown): ProviderError {
       retryAfterMs = parseRetryAfter(headerVal);
     }
 
-    const errType = (err as { error?: { type?: string } }).error?.type;
+    const errType = body.error?.type ?? (body.type !== 'error' ? body.type : undefined);
 
     if (status === 400) {
+      if (isBillingMessage(rawMsg)) {
+        return providerError(
+          'provider_unavailable',
+          'The model provider rejected the request for billing reasons.',
+          {
+            retryable: false,
+            internalMessage: sanitized,
+            providerStatus: status,
+            ...(errType ? { providerCode: errType } : {}),
+          },
+        );
+      }
       const isContext =
         rawMsg.includes('prompt is too long') ||
         rawMsg.includes('max_tokens') ||
@@ -147,8 +186,9 @@ export function translateError(err: unknown): ProviderError {
       error?: { type?: string; message?: string };
       status?: number;
     };
-    const errType = maybeErr.error?.type ?? maybeErr.type;
-    const rawMsg = maybeErr.error?.message ?? maybeErr.message ?? '';
+    const inner = maybeErr.error;
+    const errType = inner?.type ?? maybeErr.type;
+    const rawMsg = (typeof inner?.message === 'string' && inner.message) || maybeErr.message || '';
     const sanitized = scrubSecrets(rawMsg);
 
     if (errType === 'overloaded_error' || maybeErr.status === 529) {

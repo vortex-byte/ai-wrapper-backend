@@ -254,6 +254,28 @@ export class GenerationManager {
             await input.hooks.onHeartbeat(genId);
           }
         },
+        onFailure: async (failure) => {
+          if (this.conversationRepo === undefined) return;
+          await this.conversationRepo.insertParts([
+            {
+              id: this.idGen.uuidv7(),
+              messageId: input.assistantMessageId,
+              position: failure.partPosition,
+              type: 'text',
+              status: 'failed',
+              textContent: null,
+              data: { error: { code: failure.code, message: failure.message } },
+              fileId: null,
+              createdAt: this.clock.now(),
+              updatedAt: this.clock.now(),
+            },
+          ]);
+          await this.conversationRepo.updateMessage(input.assistantMessageId, {
+            status: 'failed',
+            finishReason: 'error',
+            completedAt: this.clock.now(),
+          });
+        },
         onFinalize: async (outcome) => {
           if (checkpointer !== undefined) {
             await checkpointer.dispose();
@@ -302,19 +324,27 @@ export class GenerationManager {
 
           const durationSeconds = run.durationSeconds(this.clock.now());
           const ttftSeconds = run.timeToFirstTokenSeconds;
-          getLogger().info(
-            {
-              generationId: run.generationId,
-              provider: providerKey,
-              model: modelKey,
-              status: outcome.status,
-              finishReason: outcome.finishReason,
-              durationMs: durationSeconds === null ? null : Math.round(durationSeconds * 1000),
-              ttftMs: ttftSeconds === null ? null : Math.round(ttftSeconds * 1000),
-              errorCategory: outcome.error?.code ?? null,
-            },
-            'generation run finished',
-          );
+          const runFailed = outcome.status === 'failed';
+          const runMeta = {
+            generationId: run.generationId,
+            provider: providerKey,
+            model: modelKey,
+            status: outcome.status,
+            finishReason: outcome.finishReason,
+            durationMs: durationSeconds === null ? null : Math.round(durationSeconds * 1000),
+            ttftMs: ttftSeconds === null ? null : Math.round(ttftSeconds * 1000),
+            errorCategory: outcome.error?.code ?? null,
+            ...(outcome.error !== undefined
+              ? { errorDetail: outcome.error.detail ?? null }
+              : {}),
+          };
+          if (runFailed && outcome.error?.retryable !== false) {
+            getLogger().error(runMeta, 'generation run finished');
+          } else if (runFailed) {
+            getLogger().warn(runMeta, 'generation run finished');
+          } else {
+            getLogger().info(runMeta, 'generation run finished');
+          }
 
           if (input.hooks?.onFinalize !== undefined) {
             await input.hooks.onFinalize(outcome);

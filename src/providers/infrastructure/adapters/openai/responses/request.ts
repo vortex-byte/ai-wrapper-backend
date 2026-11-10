@@ -19,6 +19,17 @@ export function containerEnabled(req: NormalizedChatRequest): boolean {
   return container.codeExecution || (container.skills?.length ?? 0) > 0;
 }
 
+/**
+ * The skills toolchain is served by the `shell` tool, which only some models accept (`gpt-4o`
+ * rejects it). Models must opt in with `config.skillsShell`; everything else uses the
+ * `code_interpreter` sandbox, which also generates documents.
+ */
+export function supportsSkillsShell(req: NormalizedChatRequest): boolean {
+  if (req.model.config['skillsShell'] === true) return true;
+  if (req.model.config['skillsShell'] === false) return false;
+  return req.provider.config['skillsShell'] === true;
+}
+
 export function imageGenerationEnabled(req: NormalizedChatRequest): boolean {
   if (!imageToolSupported(req.model.capabilities)) return false;
   if (!req.responseModalities.includes('image')) return false;
@@ -134,25 +145,27 @@ async function buildResponsesInput(req: NormalizedChatRequest): Promise<unknown[
 function resolveSkills(req: NormalizedChatRequest): Array<Record<string, unknown>> {
   const configured = req.model.config['openaiSkills'];
   if (Array.isArray(configured)) {
-    const skills: Array<Record<string, unknown>> = [];
-    for (const entry of configured) {
-      if (typeof entry === 'string' && entry.length > 0) {
-        skills.push({ type: 'skill_reference', skill_id: entry, version: 'latest' });
-        continue;
-      }
-      if (typeof entry === 'object' && entry !== null) {
-        const id = (entry as { id?: unknown }).id;
-        const version = (entry as { version?: unknown }).version;
-        if (typeof id === 'string' && id.length > 0) {
-          skills.push({
-            type: 'skill_reference',
-            skill_id: id,
-            version: typeof version === 'string' && version.length > 0 ? version : 'latest',
-          });
+    return dedupeSkills(
+      configured.flatMap((entry) => {
+        if (typeof entry === 'string' && entry.length > 0) {
+          return [{ type: 'skill_reference', skill_id: entry, version: 'latest' }];
         }
-      }
-    }
-    return skills;
+        if (typeof entry === 'object' && entry !== null) {
+          const id = (entry as { id?: unknown }).id;
+          const version = (entry as { version?: unknown }).version;
+          if (typeof id === 'string' && id.length > 0) {
+            return [
+              {
+                type: 'skill_reference',
+                skill_id: id,
+                version: typeof version === 'string' && version.length > 0 ? version : 'latest',
+              },
+            ];
+          }
+        }
+        return [];
+      }),
+    );
   }
 
   const skills: Array<Record<string, unknown>> = [];
@@ -162,7 +175,18 @@ function resolveSkills(req: NormalizedChatRequest): Array<Record<string, unknown
       skills.push({ type: 'skill_reference', skill_id: curated, version: 'latest' });
     }
   }
-  return skills;
+  return dedupeSkills(skills);
+}
+
+function dedupeSkills(skills: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  return skills.filter((skill) => {
+    const id = skill['skill_id'];
+    if (typeof id !== 'string') return false;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 function clampPartialImages(value: unknown): number | null {
@@ -261,17 +285,17 @@ function buildResponsesTools(req: NormalizedChatRequest): unknown[] {
   if (container === undefined) return tools;
 
   const fileIds = (req.inputFiles ?? []).map((file) => file.providerFileId);
-  const wantsSkills = (container.skills?.length ?? 0) > 0;
+  const skills = resolveSkills(req);
+  const wantsShell = skills.length > 0 && supportsSkillsShell(req);
 
-  if (wantsSkills) {
-    const skills = resolveSkills(req);
+  if (wantsShell) {
     const environment =
       container.containerId !== undefined
         ? { type: 'container_reference', container_id: container.containerId }
         : {
             type: 'container_auto',
             ...(fileIds.length > 0 ? { file_ids: fileIds } : {}),
-            ...(skills.length > 0 ? { skills } : {}),
+            skills,
           };
     tools.push({ type: 'shell', environment });
     return tools;

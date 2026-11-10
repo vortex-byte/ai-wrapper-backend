@@ -46,6 +46,10 @@ function makeRequest(overrides: Partial<NormalizedChatRequest> = {}): Normalized
   return { ...base, ...overrides };
 }
 
+function withSkillsShell(req: NormalizedChatRequest): NormalizedChatRequest {
+  return { ...req, model: { ...req.model, config: { ...req.model.config, skillsShell: true } } };
+}
+
 interface FakeResponsesClient {
   readonly client: OpenAIClientLike;
   readonly responsesCalls: Array<Record<string, unknown>>;
@@ -167,17 +171,19 @@ describe('OpenAIAdapter — document generation (Unit)', () => {
     expect(params['stream']).toBe(true);
   });
 
-  it('declares the hosted shell with skills for document generation', async () => {
+  it('falls back to code_interpreter when no skill maps to an OpenAI skill id', async () => {
     const fake = fakeClient(textTurn);
     const adapter = new OpenAIAdapter(() => fake.client);
 
     await collect(
       adapter,
-      makeRequest({ container: { codeExecution: true, skills: ['xlsx', 'docx'] } }),
+      withSkillsShell(
+        makeRequest({ container: { codeExecution: true, skills: ['xlsx', 'docx'] } }),
+      ),
     );
 
     const params = fake.responsesCalls[0] ?? {};
-    // Only `openai-spreadsheets` is documented by id; unmapped skills run on the shell toolchain.
+    // Only `openai-spreadsheets` is mapped, so the shell stays available for it.
     expect(params['tools']).toEqual([
       {
         type: 'shell',
@@ -190,16 +196,48 @@ describe('OpenAIAdapter — document generation (Unit)', () => {
     expect(params['include']).toBeUndefined();
   });
 
+  it('falls back to code_interpreter when the model does not opt into the shell tool', async () => {
+    const fake = fakeClient(textTurn);
+    const adapter = new OpenAIAdapter(() => fake.client);
+
+    await collect(
+      adapter,
+      makeRequest({ container: { codeExecution: true, skills: ['pdf', 'docx', 'xlsx', 'pptx'] } }),
+    );
+
+    const params = fake.responsesCalls[0] ?? {};
+    expect(params['tools']).toEqual([{ type: 'code_interpreter', container: { type: 'auto' } }]);
+    expect(params['include']).toEqual(['code_interpreter_call.outputs']);
+  });
+
+  it('never offers the shell tool when every requested skill is unmapped', async () => {
+    const fake = fakeClient(textTurn);
+    const adapter = new OpenAIAdapter(() => fake.client);
+
+    await collect(
+      adapter,
+      withSkillsShell(
+        makeRequest({ container: { codeExecution: true, skills: ['pdf', 'docx', 'pptx'] } }),
+      ),
+    );
+
+    const params = fake.responsesCalls[0] ?? {};
+    expect(params['tools']).toEqual([{ type: 'code_interpreter', container: { type: 'auto' } }]);
+    expect(params['include']).toEqual(['code_interpreter_call.outputs']);
+  });
+
   it('lets the registry pin exact OpenAI skill ids', async () => {
     const fake = fakeClient(textTurn);
     const adapter = new OpenAIAdapter(() => fake.client);
-    const req = makeRequest({ container: { codeExecution: true, skills: ['pptx'] } });
+    const req = withSkillsShell(
+      makeRequest({ container: { codeExecution: true, skills: ['pptx'] } }),
+    );
 
     await collect(adapter, {
       ...req,
       model: {
         ...req.model,
-        config: { openaiSkills: [{ id: 'skill_abc', version: '2' }, 'openai-spreadsheets'] },
+        config: { ...req.model.config, openaiSkills: [{ id: 'skill_abc', version: '2' }, 'openai-spreadsheets'] },
       },
     });
 
@@ -213,15 +251,55 @@ describe('OpenAIAdapter — document generation (Unit)', () => {
     });
   });
 
+  it('honours an explicit skillsShell opt-out even when the provider enables it', async () => {
+    const fake = fakeClient(textTurn);
+    const adapter = new OpenAIAdapter(() => fake.client);
+    const req = makeRequest({ container: { codeExecution: true, skills: ['xlsx'] } });
+
+    await collect(adapter, {
+      ...req,
+      provider: { ...req.provider, config: { skillsShell: true } },
+      model: { ...req.model, config: { ...req.model.config, skillsShell: false } },
+    });
+
+    expect((fake.responsesCalls[0] ?? {})['tools']).toEqual([
+      { type: 'code_interpreter', container: { type: 'auto' } },
+    ]);
+  });
+
+  it('dedupes repeated OpenAI skill ids from the registry', async () => {
+    const fake = fakeClient(textTurn);
+    const adapter = new OpenAIAdapter(() => fake.client);
+    const req = withSkillsShell(
+      makeRequest({ container: { codeExecution: true, skills: ['xlsx'] } }),
+    );
+
+    await collect(adapter, {
+      ...req,
+      model: {
+        ...req.model,
+        config: { ...req.model.config, openaiSkills: ['openai-spreadsheets', 'openai-spreadsheets'] },
+      },
+    });
+
+    const tools = (fake.responsesCalls[0] ?? {})['tools'] as Array<Record<string, unknown>>;
+    expect(tools[0]?.['environment']).toEqual({
+      type: 'container_auto',
+      skills: [{ type: 'skill_reference', skill_id: 'openai-spreadsheets', version: 'latest' }],
+    });
+  });
+
   it('reuses a pinned container and tells the model where to write files', async () => {
     const fake = fakeClient(textTurn);
     const adapter = new OpenAIAdapter(() => fake.client);
 
     await collect(
       adapter,
-      makeRequest({
-        container: { codeExecution: true, containerId: 'cntr_abc', skills: ['xlsx'] },
-      }),
+      withSkillsShell(
+        makeRequest({
+          container: { codeExecution: true, containerId: 'cntr_abc', skills: ['xlsx'] },
+        }),
+      ),
     );
 
     const params = fake.responsesCalls[0] ?? {};
@@ -345,7 +423,7 @@ describe('OpenAIAdapter — document generation (Unit)', () => {
 
     const events = await collect(
       adapter,
-      makeRequest({ container: { codeExecution: true, skills: ['docx'] } }),
+      withSkillsShell(makeRequest({ container: { codeExecution: true, skills: ['docx'] } })),
     );
 
     expect(events).toContainEqual({

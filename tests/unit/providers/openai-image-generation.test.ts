@@ -778,7 +778,8 @@ describe('OpenAIAdapter — hosted image generation', () => {
     const adapter = new OpenAIAdapter(() => fake.client);
     const req: NormalizedChatRequest = {
       ...makeRequest(),
-      container: { codeExecution: true, skills: ['pdf'] },
+      container: { codeExecution: true, skills: ['xlsx'] },
+      model: { ...makeRequest().model, config: { skillsShell: true } },
     };
 
     await collect(adapter, req);

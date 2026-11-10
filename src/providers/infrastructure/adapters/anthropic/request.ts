@@ -200,6 +200,12 @@ export function buildMessages(
   return messages;
 }
 
+export function isPromptCachingEnabled(req: NormalizedChatRequest): boolean {
+  if (req.model.config['promptCaching'] === false) return false;
+  if (req.provider.config['promptCaching'] === false) return false;
+  return req.model.capabilities.promptCaching?.supported === true;
+}
+
 export function toProviderRequest(
   req: NormalizedChatRequest,
   messages?: OutgoingMessage[],
@@ -216,6 +222,7 @@ export function toProviderRequest(
     : buildThinking(req);
   const outputConfig = isModern && effort !== undefined ? { effort } : undefined;
   const compaction = compactionEdit(req);
+  const cachingEnabled = isPromptCachingEnabled(req);
   const version = resolveAnthropicVersion(req.provider);
   const isLegacyVersion = version !== '2026-10-21';
   const sampling = isLegacyVersion && !isModern && thinking === undefined;
@@ -223,6 +230,7 @@ export function toProviderRequest(
   return {
     model: req.model.apiModelId,
     max_tokens: req.maxOutputTokens,
+    ...(cachingEnabled ? { cache_control: { type: 'ephemeral' as const } } : {}),
     ...(system !== undefined ? { system } : {}),
     messages: turns,
     stream: true,

@@ -23,14 +23,20 @@ export type AnthropicClientFactory = (options: {
   defaultHeaders?: Record<string, string>;
 }) => AnthropicClientLike;
 
+export interface CacheControlEphemeral {
+  readonly type: 'ephemeral';
+}
+
 export interface TextBlock {
   readonly type: 'text';
   readonly text: string;
+  readonly cache_control?: CacheControlEphemeral;
 }
 
 export interface ContainerUploadBlock {
   readonly type: 'container_upload';
   readonly file_id: string;
+  readonly cache_control?: CacheControlEphemeral;
 }
 
 export interface ToolUseBlock {
@@ -38,11 +44,13 @@ export interface ToolUseBlock {
   readonly id: string;
   readonly name: string;
   readonly input: unknown;
+  readonly cache_control?: CacheControlEphemeral;
 }
 
 export interface ImageBlock {
   readonly type: 'image';
   readonly source: { readonly type: 'base64'; readonly media_type: string; readonly data: string };
+  readonly cache_control?: CacheControlEphemeral;
 }
 
 export interface DocumentBlock {
@@ -52,12 +60,14 @@ export interface DocumentBlock {
     readonly media_type: 'application/pdf';
     readonly data: string;
   };
+  readonly cache_control?: CacheControlEphemeral;
 }
 
 export interface CompactionBlock {
   readonly type: 'compaction';
   readonly content: string;
   readonly signature?: string;
+  readonly cache_control?: CacheControlEphemeral;
 }
 
 export type ReplayBlock = { readonly type: string } & Record<string, unknown>;

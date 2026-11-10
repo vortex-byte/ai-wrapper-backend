@@ -28,6 +28,10 @@ export interface CompactionCapability {
   readonly triggerTokens?: number;
 }
 
+export interface PromptCachingCapability {
+  readonly supported: boolean;
+}
+
 /** How a model produces images: through the chat tool, or as a dedicated image endpoint. */
 export type ImageGenerationMode = 'tool' | 'provider';
 
@@ -79,6 +83,8 @@ export interface ModelCapabilities {
   readonly maxOutputTokens: number;
   /** Omitted when the provider cannot compact this model's history server-side. */
   readonly compaction?: CompactionCapability;
+  /** Omitted when the model or provider does not support prompt caching. */
+  readonly promptCaching?: PromptCachingCapability;
   /** Omitted when the model is not configurable as a reasoning model. */
   readonly reasoning?: ReasoningCapability;
 }
@@ -98,6 +104,8 @@ export interface PartialModelCapabilities {
   readonly maxOutputTokens?: number;
   /** `null` clears the stored capability; omission keeps it. */
   readonly compaction?: CompactionCapability | null;
+  /** `null` clears the stored capability; omission keeps it. */
+  readonly promptCaching?: PromptCachingCapability | null;
   /** `null` clears the stored capability; omission keeps it. */
   readonly reasoning?: PartialReasoningCapability | null;
 }

@@ -73,6 +73,12 @@ const CompactionCapabilitySchema = z
   })
   .strict();
 
+const PromptCachingCapabilitySchema = z
+  .object({
+    supported: z.boolean().default(true),
+  })
+  .strict();
+
 const ImageGenerationObjectSchema = z
   .object({
     mode: z.enum(['tool', 'provider']),
@@ -98,7 +104,6 @@ const PartialImageGenerationCapabilitySchema = z
     return value;
   });
 
-/** Schema for normalized model capabilities. */
 export const ModelCapabilitiesSchema = z
   .object({
     schemaVersion: z.number().int().positive().default(CAPABILITIES_SCHEMA_VERSION),
@@ -113,6 +118,7 @@ export const ModelCapabilitiesSchema = z
     contextWindow: z.number().int().positive(),
     maxOutputTokens: z.number().int().positive(),
     compaction: CompactionCapabilitySchema.nullish(),
+    promptCaching: PromptCachingCapabilitySchema.nullish(),
     reasoning: ReasoningCapabilitySchema.nullish(),
   })
   .strict()
@@ -154,6 +160,7 @@ export const PartialModelCapabilitiesSchema = z
     contextWindow: z.number().int().positive().optional(),
     maxOutputTokens: z.number().int().positive().optional(),
     compaction: CompactionCapabilitySchema.nullable().optional(),
+    promptCaching: PromptCachingCapabilitySchema.nullable().optional(),
     reasoning: PartialReasoningCapabilitySchema.nullable().optional(),
   })
   .strict();
@@ -217,6 +224,13 @@ export function parseCapabilities(
           },
         }
       : {}),
+    ...(parsed.promptCaching !== undefined && parsed.promptCaching !== null
+      ? {
+          promptCaching: {
+            supported: parsed.promptCaching.supported,
+          },
+        }
+      : {}),
     ...(parsed.reasoning !== undefined && parsed.reasoning !== null
       ? {
           reasoning: {
@@ -274,6 +288,15 @@ export function parsePartialCapabilities(value: unknown): PartialModelCapabiliti
               ...(parsed.compaction.triggerTokens !== undefined
                 ? { triggerTokens: parsed.compaction.triggerTokens }
                 : {}),
+            },
+          }
+      : {}),
+    ...(parsed.promptCaching !== undefined
+      ? parsed.promptCaching === null
+        ? { promptCaching: null }
+        : {
+            promptCaching: {
+              supported: parsed.promptCaching.supported,
             },
           }
       : {}),

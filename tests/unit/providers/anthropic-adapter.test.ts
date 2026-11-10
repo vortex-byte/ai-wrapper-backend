@@ -1160,4 +1160,69 @@ describe('AnthropicAdapter (Unit)', () => {
       },
     });
   });
+
+  it('includes cache_control when model declares promptCaching capability', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      model: {
+        ...makeAnthropicRequest().model,
+        capabilities: {
+          ...makeAnthropicRequest().model.capabilities,
+          promptCaching: { supported: true },
+        },
+      },
+    });
+    const params = adapter.toProviderRequest(req) as {
+      cache_control?: { type: string };
+    };
+
+    expect(params.cache_control).toEqual({ type: 'ephemeral' });
+  });
+
+  it('omits cache_control when model does not declare promptCaching capability', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest();
+    const params = adapter.toProviderRequest(req) as {
+      cache_control?: { type: string };
+    };
+
+    expect(params.cache_control).toBeUndefined();
+  });
+
+  it('omits cache_control when model config or provider config explicitly disables promptCaching', () => {
+    const adapter = new AnthropicAdapter();
+
+    const modelDisabledReq = makeAnthropicRequest({
+      model: {
+        ...makeAnthropicRequest().model,
+        config: { promptCaching: false },
+        capabilities: {
+          ...makeAnthropicRequest().model.capabilities,
+          promptCaching: { supported: true },
+        },
+      },
+    });
+    const modelParams = adapter.toProviderRequest(modelDisabledReq) as {
+      cache_control?: { type: string };
+    };
+    expect(modelParams.cache_control).toBeUndefined();
+
+    const providerDisabledReq = makeAnthropicRequest({
+      provider: {
+        ...makeAnthropicRequest().provider,
+        config: { promptCaching: false },
+      },
+      model: {
+        ...makeAnthropicRequest().model,
+        capabilities: {
+          ...makeAnthropicRequest().model.capabilities,
+          promptCaching: { supported: true },
+        },
+      },
+    });
+    const providerParams = adapter.toProviderRequest(providerDisabledReq) as {
+      cache_control?: { type: string };
+    };
+    expect(providerParams.cache_control).toBeUndefined();
+  });
 });

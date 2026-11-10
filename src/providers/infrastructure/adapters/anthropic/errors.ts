@@ -109,6 +109,19 @@ export function translateError(err: unknown): ProviderError {
       );
     }
 
+    if (status === 409) {
+      return providerError(
+        'invalid_request',
+        'The request conflicts with the current state of the provider resource.',
+        {
+          retryable: false,
+          internalMessage: sanitized,
+          providerStatus: status,
+          ...(errType ? { providerCode: errType } : {}),
+        },
+      );
+    }
+
     if (status === 413) {
       return providerError('context_too_large', 'The request exceeds the provider size limits.', {
         retryable: false,

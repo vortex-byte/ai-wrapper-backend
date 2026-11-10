@@ -34,12 +34,13 @@ export function isModernEffortModel(apiModelId: string): boolean {
   const id = apiModelId.toLowerCase().replace(/(\d+)\.(\d+)/g, '$1-$2');
   return (
     id.includes('claude-5') ||
+    id.includes('claude-4-6') ||
     id.includes('claude-4-7') ||
     id.includes('claude-4-8') ||
     id.includes('claude-4-9') ||
     id.includes('claude-fable') ||
     id.includes('claude-mythos') ||
     /claude-[a-z]+-5/i.test(id) ||
-    /claude-[a-z]+-4-[7-9]/i.test(id)
+    /claude-[a-z]+-4-[6-9]/i.test(id)
   );
 }

@@ -510,6 +510,25 @@ describe('AnthropicAdapter (Unit)', () => {
     expect(translated.retryAfterMs).toBe(5000);
   });
 
+  it('maps a 409 conflict_error to a non-retryable invalid_request', () => {
+    const adapter = new AnthropicAdapter();
+    const error = new Anthropic.APIError(
+      409,
+      {
+        type: 'error',
+        error: { type: 'conflict_error', message: 'Resource was modified concurrently' },
+      },
+      'Conflict',
+      new Headers(),
+    );
+
+    const translated = adapter.translateError(error);
+    expect(translated.category).toBe('invalid_request');
+    expect(translated.retryable).toBe(false);
+    expect(translated.providerStatus).toBe(409);
+    expect(translated.providerCode).toBe('conflict_error');
+  });
+
   it('translates prompt too long error to context_too_large', () => {
     const adapter = new AnthropicAdapter();
     const error = new Anthropic.BadRequestError(
@@ -1110,8 +1129,37 @@ describe('AnthropicAdapter (Unit)', () => {
     expect(isModernEffortModel('claude-opus-4.7')).toBe(true);
     expect(isModernEffortModel('claude-sonnet-4.8')).toBe(true);
     expect(isModernEffortModel('claude-haiku-5.5')).toBe(true);
-    expect(isModernEffortModel('claude-sonnet-4-6')).toBe(false);
+    expect(isModernEffortModel('claude-sonnet-4-6')).toBe(true);
     expect(isModernEffortModel('claude-3-5-sonnet-20241022')).toBe(false);
+  });
+
+  it('uses adaptive thinking instead of the deprecated enabled budget on Claude 4.6', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      model: { ...makeAnthropicRequest().model, apiModelId: 'claude-opus-4-6' },
+      reasoningEffort: 'medium',
+    });
+    const params = adapter.toProviderRequest(req) as {
+      output_config?: { effort: string };
+      thinking?: { type: string };
+    };
+
+    expect(params.thinking).toEqual({ type: 'adaptive' });
+    expect(params.output_config).toEqual({ effort: 'medium' });
+  });
+
+  it('omits thinking when no reasoningEffort is set on Claude 4.6', () => {
+    const adapter = new AnthropicAdapter();
+    const req = makeAnthropicRequest({
+      model: { ...makeAnthropicRequest().model, apiModelId: 'claude-opus-4-6' },
+    });
+    const params = adapter.toProviderRequest(req) as {
+      thinking?: unknown;
+      output_config?: unknown;
+    };
+
+    expect(params.thinking).toBeUndefined();
+    expect(params.output_config).toBeUndefined();
   });
 
   it('defers compaction event emission until signature_delta has arrived at content_block_stop', async () => {

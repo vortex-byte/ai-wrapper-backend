@@ -13,7 +13,13 @@ import type {
   ProviderRuntimeConfig,
   ReasoningCapability,
 } from '../domain/capabilities.ts';
-import type { ModelRecord, ModelStatus, ProviderRecord, ProviderStatus } from '../domain/registry.ts';
+import { modelKind } from '../domain/registry.ts';
+import type {
+  ModelRecord,
+  ModelStatus,
+  ProviderRecord,
+  ProviderStatus,
+} from '../domain/registry.ts';
 import type { ModelRegistry } from '../ports/model-registry.ts';
 import type { ProviderAdapter, ProviderModelInfo } from '../ports/provider-adapter.ts';
 import type { ProviderRegistry } from '../ports/provider-registry.ts';
@@ -30,6 +36,7 @@ export interface RegistryAdminDeps {
   readonly audit: AuditLogRepository;
   readonly clock: Clock;
   readonly idGen: IdGenerator;
+  readonly configuredImageModel: (model: ModelRecord) => Promise<string | null>;
 }
 
 export interface CreateProviderInput {
@@ -139,7 +146,10 @@ export interface RegistryAdminService {
 const DEFAULT_PROVIDER_CONFIG: Record<string, unknown> = {};
 
 export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdminService {
-  const lastHealth = new Map<string, { at: Date; ok: boolean; latencyMs: number; detail: string | null }>();
+  const lastHealth = new Map<
+    string,
+    { at: Date; ok: boolean; latencyMs: number; detail: string | null }
+  >();
 
   function requireAdapter(adapter: string): void {
     if (!deps.adapters.has(adapter)) {
@@ -149,9 +159,15 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
     }
   }
 
-  function assertOutputTokenBounds(input: { maxOutputTokens: number; defaultMaxOutputTokens: number }): void {
+  function assertOutputTokenBounds(input: {
+    maxOutputTokens: number;
+    defaultMaxOutputTokens: number;
+  }): void {
     if (input.defaultMaxOutputTokens > input.maxOutputTokens) {
-      throw new AppError('invalid_request', 'defaultMaxOutputTokens must not exceed maxOutputTokens.');
+      throw new AppError(
+        'invalid_request',
+        'defaultMaxOutputTokens must not exceed maxOutputTokens.',
+      );
     }
   }
 
@@ -229,7 +245,9 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
           );
         } catch (error) {
           if (isUniqueViolation(error)) {
-            throw new AppError('conflict', 'A provider with this key already exists.', { cause: error });
+            throw new AppError('conflict', 'A provider with this key already exists.', {
+              cause: error,
+            });
           }
           throw error;
         }
@@ -371,9 +389,13 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
           );
         } catch (error) {
           if (isUniqueViolation(error)) {
-            throw new AppError('conflict', 'A model with this key or provider/api id already exists.', {
-              cause: error,
-            });
+            throw new AppError(
+              'conflict',
+              'A model with this key or provider/api id already exists.',
+              {
+                cause: error,
+              },
+            );
           }
           throw error;
         }
@@ -401,14 +423,37 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       const existing = await deps.repository.findModelById(input.id);
       if (!existing) throw new AppError('not_found', 'Model not found.');
 
+      if (input.status === 'disabled' && existing.status !== 'disabled') {
+        const configuredBy = await deps.configuredImageModel(existing);
+        if (configuredBy !== null) {
+          throw new AppError(
+            'conflict',
+            `Model cannot be disabled: it renders images for ${configuredBy}.`,
+          );
+        }
+      }
+
+      if (modelKind(existing) === 'image') {
+        const patch = input.capabilities?.imageGeneration;
+        if (patch === null || (patch !== undefined && patch.mode !== 'tool')) {
+          throw new AppError(
+            'invalid_request',
+            'An image model must keep image generation enabled; it is what renders the turn.',
+          );
+        }
+      }
+
       if (input.maxOutputTokens !== undefined || input.defaultMaxOutputTokens !== undefined) {
         const maxOutputTokens = input.maxOutputTokens ?? existing.maxOutputTokens;
-        const defaultMaxOutputTokens = input.defaultMaxOutputTokens ?? existing.defaultMaxOutputTokens;
+        const defaultMaxOutputTokens =
+          input.defaultMaxOutputTokens ?? existing.defaultMaxOutputTokens;
         assertOutputTokenBounds({ maxOutputTokens, defaultMaxOutputTokens });
       }
 
       const mergedCapabilities: ModelCapabilities | undefined =
-        input.capabilities !== undefined || input.contextWindow !== undefined || input.maxOutputTokens !== undefined
+        input.capabilities !== undefined ||
+        input.contextWindow !== undefined ||
+        input.maxOutputTokens !== undefined
           ? (() => {
               const {
                 reasoning: reasoningPatch,
@@ -438,9 +483,13 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
                   : (imageGenerationPatch ?? existing.capabilities.imageGeneration ?? null);
 
               const contextWindow =
-                input.contextWindow ?? input.capabilities?.contextWindow ?? existing.capabilities.contextWindow;
+                input.contextWindow ??
+                input.capabilities?.contextWindow ??
+                existing.capabilities.contextWindow;
               const maxOutputTokens =
-                input.maxOutputTokens ?? input.capabilities?.maxOutputTokens ?? existing.capabilities.maxOutputTokens;
+                input.maxOutputTokens ??
+                input.capabilities?.maxOutputTokens ??
+                existing.capabilities.maxOutputTokens;
 
               const vision = capabilityPatch.vision ?? existingCapabilities.vision;
               const hasImageGen = imageGeneration !== null && imageGeneration !== undefined;
@@ -475,7 +524,10 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
                 return parseCapabilities(merged, { contextWindow, maxOutputTokens });
               } catch (err) {
                 if (err instanceof z.ZodError) {
-                  throw new AppError('invalid_request', err.issues[0]?.message ?? 'Invalid capabilities.');
+                  throw new AppError(
+                    'invalid_request',
+                    err.issues[0]?.message ?? 'Invalid capabilities.',
+                  );
                 }
                 throw err;
               }
@@ -491,7 +543,9 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
             ...(input.status !== undefined ? { status: input.status } : {}),
             ...(mergedCapabilities !== undefined ? { capabilities: mergedCapabilities } : {}),
             ...(input.contextWindow !== undefined ? { contextWindow: input.contextWindow } : {}),
-            ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: input.maxOutputTokens } : {}),
+            ...(input.maxOutputTokens !== undefined
+              ? { maxOutputTokens: input.maxOutputTokens }
+              : {}),
             ...(input.defaultMaxOutputTokens !== undefined
               ? { defaultMaxOutputTokens: input.defaultMaxOutputTokens }
               : {}),
@@ -526,6 +580,14 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
     async deleteModel(input) {
       const existing = await deps.repository.findModelById(input.id);
       if (!existing) throw new AppError('not_found', 'Model not found.');
+
+      const configuredBy = await deps.configuredImageModel(existing);
+      if (configuredBy !== null) {
+        throw new AppError(
+          'conflict',
+          `Model cannot be deleted: it renders images for ${configuredBy}.`,
+        );
+      }
 
       const references = await deps.repository.countModelReferences(existing.id);
       if (references > 0) {
@@ -659,7 +721,12 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
         return {
           providerId: provider.id,
           key: provider.key,
-          status: entry === undefined ? ('unknown' as const) : entry.ok ? ('healthy' as const) : ('unhealthy' as const),
+          status:
+            entry === undefined
+              ? ('unknown' as const)
+              : entry.ok
+                ? ('healthy' as const)
+                : ('unhealthy' as const),
           lastCheckAt: entry?.at ?? null,
           latencyMs: entry?.latencyMs ?? null,
           detail: entry?.detail ?? null,

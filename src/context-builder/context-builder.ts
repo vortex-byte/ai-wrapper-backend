@@ -6,6 +6,7 @@ import type {
   NormalizedPart,
   ProviderRuntimeConfig,
   ReasoningEffort,
+  ResolvedFile,
 } from '@/providers/index.ts';
 import { imageToolSupported } from '@/providers/index.ts';
 import type { MessagePart, MessageWithParts } from '@/conversations/domain/conversation.ts';
@@ -33,6 +34,8 @@ export interface ContextBuilderInput {
    * window, history is trimmed to fit it (sliding-window fallback).
    */
   readonly userRemainingQuota?: number | null | undefined;
+  /** Order-preserving; unavailable or foreign ids are skipped. */
+  readonly images?: readonly ResolvedFile[] | undefined;
 }
 
 export interface TruncationInfo {
@@ -55,6 +58,7 @@ export interface BuildContextResult {
 export function buildContext(input: ContextBuilderInput): BuildContextResult {
   const { model, provider, platformSystemPrompt, newParts, history } = input;
   const capabilities: ModelCapabilities = model.capabilities;
+  const imageById = new Map((input.images ?? []).map((file) => [file.fileId, file]));
 
   const maxOutputTokens = input.maxOutputTokensOverride ?? model.defaultMaxOutputTokens;
   const safetyMargin = Math.max(1000, Math.floor(capabilities.contextWindow * 0.03));
@@ -136,6 +140,9 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     for (const p of item.parts) {
       if (p.type === 'text') {
         historyParts.push({ type: 'text', text: p.textContent ?? '' });
+      } else if (p.type === 'image') {
+        const image = historyImagePart(p, imageById);
+        if (image !== undefined) historyParts.push(image);
       } else if (p.type === 'document') {
         const text =
           p.textContent ??
@@ -168,7 +175,21 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     }
     const messageText = extractPartsText(historyParts);
     const compactionTokens = isCompactionAnchor ? estimateCompactionTokens(compactionPart) : 0;
-    const msgTokens = estimateTextTokens(messageText) + 8 + compactionTokens;
+    const mediaTokens = historyParts.reduce(
+      (sum, part) =>
+        part.type === 'image'
+          ? sum +
+            estimateMediaTokens({
+              type: 'image',
+              metadata: {
+                ...(part.file.width !== undefined ? { width: part.file.width } : {}),
+                ...(part.file.height !== undefined ? { height: part.file.height } : {}),
+              },
+            })
+          : sum,
+      0,
+    );
+    const msgTokens = estimateTextTokens(messageText) + 8 + compactionTokens + mediaTokens;
 
     // The compaction block anchors the transcript: everything older is already summarized, so
     // the walk stops here.
@@ -212,9 +233,15 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
       if (messageText.length > 0) {
         normalizedParts.push({ type: 'text', text: messageText });
       }
+      const keptParts =
+        normalizedParts.length > 0
+          ? normalizedParts
+          : historyParts.length > 0
+            ? historyParts
+            : [{ type: 'text' as const, text: ' ' }];
       selectedHistory.unshift({
         role: item.message.role,
-        parts: normalizedParts.length > 0 ? normalizedParts : [{ type: 'text', text: ' ' }],
+        parts: keptParts,
       });
       if (isCompactionAnchor) {
         compactedMessageCount += i;
@@ -245,7 +272,6 @@ export function buildContext(input: ContextBuilderInput): BuildContextResult {
     ...selectedHistory,
     { role: 'user', parts: newParts },
   ];
-
   const estimatedTokens = historyBudget - budgetRemaining;
 
   const request: NormalizedChatRequest = {
@@ -284,6 +310,16 @@ function truncationReason(
 ): TruncationReason {
   if (droppedMessageCount === 0) return 'none';
   return quotaInputBudget < modelInputBudget ? 'quota' : 'context_window';
+}
+
+/** Replays an image the model already saw, when its bytes are still resolvable for this user. */
+function historyImagePart(
+  part: MessagePart,
+  imageById: ReadonlyMap<string, ResolvedFile>,
+): NormalizedPart | undefined {
+  if (part.fileId === null) return undefined;
+  const file = imageById.get(part.fileId);
+  return file === undefined ? undefined : { type: 'image', file };
 }
 
 /** Compaction payloads are opaque; their length is the only portable signal available. */

@@ -118,9 +118,7 @@ export class AttachmentService implements MessageFileLookup {
     private readonly settings?: SettingsLookup | undefined,
   ) {}
 
-  /**
-   * Ends with inline extraction, which normally finishes inside the request.
-   */
+  /** Ends with inline extraction, which normally finishes inside the request. */
   async upload(input: UploadInput): Promise<UploadResult> {
     if (input.bytes.byteLength === 0) {
       throw new AppError('unsupported_file_type', 'The file is empty.');
@@ -291,6 +289,22 @@ export class AttachmentService implements MessageFileLookup {
     return { parts, attachments: resolved };
   }
 
+  /** Owner-scoped image refs for history replay; ids that are gone or not images are omitted. */
+  async resolveHistoryImages(
+    fileIds: readonly string[],
+    userId: string,
+  ): Promise<Map<string, AttachmentFileRef>> {
+    if (fileIds.length === 0) return new Map();
+    const rows = await this.attachments.findManyByIdsForUser(fileIds, userId);
+    const refs = new Map<string, AttachmentFileRef>();
+    for (const attachment of rows) {
+      if (attachment.kind !== 'image' || attachment.status !== 'ready') continue;
+      if (attachment.deletedAt !== null) continue;
+      refs.set(attachment.id, this.resolvedFile(attachment));
+    }
+    return refs;
+  }
+
   private resolvedFile(attachment: Attachment): AttachmentFileRef {
     return {
       fileId: attachment.id,
@@ -334,8 +348,7 @@ export class AttachmentService implements MessageFileLookup {
     }
 
     const total = attachment.sizeBytes;
-    // An empty blob cannot satisfy any byte range; serve it whole (an empty 200) rather than
-    // emitting a malformed `Content-Range: bytes 0--1/0`.
+    // An empty blob cannot satisfy a range; serve it whole rather than a malformed `Content-Range: bytes 0--1/0`.
     if (range === undefined || total === 0) {
       const result = await this.storage.getStream(attachment.storageKey);
       return {
@@ -385,7 +398,6 @@ export class AttachmentService implements MessageFileLookup {
     };
   }
 
-  /** Reads stored attachment bytes from storage for text extraction. */
   private async readStoredBytes(attachment: Attachment): Promise<Uint8Array> {
     const result = await this.storage.getStream(attachment.storageKey);
     const chunks: Uint8Array[] = [];

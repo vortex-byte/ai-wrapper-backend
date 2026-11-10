@@ -156,6 +156,171 @@ describe('Context Builder', () => {
     expect(result.request.messages.length).toBeLessThan(3);
   });
 
+  it('replays resolvable history images and skips the rest', () => {
+    const roomyModel: ModelRuntimeConfig = {
+      ...mockModel,
+      capabilities: { ...mockModel.capabilities, contextWindow: 200_000 },
+    };
+    const imagePart = (id: string, fileId: string) => ({
+      id,
+      messageId: 'msg-1',
+      position: 0,
+      type: 'image' as const,
+      status: 'complete' as const,
+      textContent: null,
+      data: {},
+      fileId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const history = [
+      {
+        message: {
+          id: 'msg-1',
+          conversationId: 'c-1',
+          seq: 1,
+          role: 'user' as const,
+          status: 'complete' as const,
+          finishReason: 'stop' as const,
+          supersededBy: null,
+          metadata: {},
+          createdAt: new Date(),
+          completedAt: new Date(),
+        },
+        parts: [imagePart('p-1', 'file-1'), imagePart('p-2', 'file-missing')],
+      },
+      {
+        message: {
+          id: 'msg-2',
+          conversationId: 'c-1',
+          seq: 2,
+          role: 'assistant' as const,
+          status: 'complete' as const,
+          finishReason: 'stop' as const,
+          supersededBy: null,
+          metadata: {},
+          createdAt: new Date(),
+          completedAt: new Date(),
+        },
+        parts: [
+          {
+            id: 'p-3',
+            messageId: 'msg-2',
+            position: 0,
+            type: 'text' as const,
+            status: 'complete' as const,
+            textContent: 'Nice cat.',
+            data: {},
+            fileId: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      },
+    ];
+
+    const result = buildContext({
+      requestId: 'req-img-history',
+      generationId: 'gen-img-history',
+      model: roomyModel,
+      provider: mockProvider,
+      newParts: [{ type: 'text', text: 'make it blue' }],
+      history,
+      userIdHash: 'hash-1',
+      images: [
+        {
+          fileId: 'file-1',
+          mimeType: 'image/png',
+          name: 'cat.png',
+          sizeBytes: 1024,
+          width: 1024,
+          height: 1024,
+          read: () => Promise.resolve(new Uint8Array([1, 2, 3])),
+          stream: () => Promise.resolve(new ReadableStream<Uint8Array>()),
+        },
+      ],
+    });
+
+    const replayedParts = result.request.messages[0]?.parts ?? [];
+    expect(replayedParts).toHaveLength(1);
+    expect(replayedParts[0]).toMatchObject({ type: 'image', file: { fileId: 'file-1' } });
+  });
+
+  it('ignores history images when none are resolved', () => {
+    const result = buildContext({
+      requestId: 'req-img-none',
+      generationId: 'gen-img-none',
+      model: {
+        ...mockModel,
+        capabilities: { ...mockModel.capabilities, contextWindow: 200_000 },
+      },
+      provider: mockProvider,
+      newParts: [{ type: 'text', text: 'hello' }],
+      history: [
+        {
+          message: {
+            id: 'msg-1',
+            conversationId: 'c-1',
+            seq: 1,
+            role: 'user' as const,
+            status: 'complete' as const,
+            finishReason: 'stop' as const,
+            supersededBy: null,
+            metadata: {},
+            createdAt: new Date(),
+            completedAt: new Date(),
+          },
+          parts: [
+            {
+              id: 'p-1',
+              messageId: 'msg-1',
+              position: 0,
+              type: 'image' as const,
+              status: 'complete' as const,
+              textContent: null,
+              data: {},
+              fileId: 'file-1',
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            },
+          ],
+        },
+        {
+          message: {
+            id: 'msg-2',
+            conversationId: 'c-1',
+            seq: 2,
+            role: 'assistant' as const,
+            status: 'complete' as const,
+            finishReason: 'stop' as const,
+            supersededBy: null,
+            metadata: {},
+            createdAt: new Date(),
+            completedAt: new Date(),
+          },
+          parts: [
+            {
+              id: 'p-2',
+              messageId: 'msg-2',
+              position: 0,
+              type: 'text' as const,
+              status: 'complete' as const,
+              textContent: 'Nice image.',
+              data: {},
+              fileId: null,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            },
+          ],
+        },
+      ],
+      userIdHash: 'hash-1',
+    });
+
+    expect(result.request.messages).toHaveLength(3);
+    expect(result.request.messages[0]?.parts).toEqual([{ type: 'text', text: ' ' }]);
+  });
+
   it('throws context_too_large if new prompt alone exceeds context window', () => {
     const hugeText = 'x'.repeat(40_000);
     try {

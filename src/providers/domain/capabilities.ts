@@ -48,10 +48,7 @@ export function canGenerateImages(
   return capabilities.imageGeneration !== undefined && capabilities.imageGeneration !== null;
 }
 
-/**
- * Whether the chat tool can ask this model for images. `provider`-mode rows are image endpoints:
- * they never run as a conversation target, so they never drive a chat request.
- */
+/** Whether the chat tool can ask this model for images; `provider`-mode rows never drive a chat request. */
 export function imageToolSupported(
   capabilities: Pick<ModelCapabilities, 'imageGeneration'>,
 ): boolean {
@@ -144,6 +141,19 @@ export interface NormalizedChatRequest {
   readonly temperature?: number;
   readonly topP?: number;
   readonly responseModalities: readonly ('text' | 'image' | 'file')[];
+  /** Error geometry pinned for this turn's image output: user choice, then admin default. */
+  readonly imageOutput?:
+    | {
+        readonly aspectRatio?: string;
+        readonly imageSize?: string;
+      }
+    | undefined;
+  /** Per-turn overrides for a provider tool, e.g. the image model the admin configured. */
+  readonly toolOptions?:
+    | {
+        readonly imageGeneration?: { readonly model?: string };
+      }
+    | undefined;
   /** Reasoning depth for this turn; absent when the model has no reasoning capability. */
   readonly reasoningEffort?: ReasoningEffort | undefined;
   readonly tools?: never;

@@ -10,7 +10,7 @@ import { requirePasswordChanged } from '@/http/middleware/require-password-chang
 import { clientIp, requestMeta } from '@/http/request-meta.ts';
 import type { AppEnv } from '@/http/types.ts';
 import { parseJsonBody } from '@/http/validate.ts';
-import type { ModelRecord, ProviderRecord } from '../domain/registry.ts';
+import { modelKind, type ModelRecord, type ProviderRecord } from '../domain/registry.ts';
 import {
   parseCapabilities,
   parsePartialCapabilities,
@@ -31,9 +31,7 @@ export interface RegistryAdminRoutesDeps {
   readonly config: Config;
 }
 
-/**
- * `secretRef` is echoed back (it is an env-var name), never any key material.
- */
+/** `secretRef` is echoed back (it is an env-var name), never any key material. */
 export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv> {
   const { registryAdmin, auth, config } = deps;
   const routes = new Hono<AppEnv>();
@@ -247,6 +245,7 @@ function toWireModel(model: ModelRecord) {
     maxOutputTokens: model.maxOutputTokens,
     defaultMaxOutputTokens: model.defaultMaxOutputTokens,
     quotaWeight: model.quotaWeight,
+    kind: modelKind(model),
     config: model.config,
     sortOrder: model.sortOrder,
     createdAt: model.createdAt.toISOString(),

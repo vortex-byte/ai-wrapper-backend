@@ -8,16 +8,26 @@ import type { AuthService } from '@/auth/application/auth-service.ts';
 import type { ModelRecord } from '../domain/registry.ts';
 import { conversationCapable } from '../domain/capabilities.ts';
 import type { ModelRegistry } from '../ports/model-registry.ts';
+import type { SettingsLookup } from '@/settings/application/cached-settings-reader.ts';
+import {
+  KNOWN_SETTINGS,
+  type ImageGenerationConfig,
+} from '@/settings/domain/settings.ts';
+import {
+  imageOutputSurface,
+  type ImageOutputSurface,
+} from '../application/image-generation-config.ts';
 
 export interface ModelRoutesDeps {
   readonly registry: ModelRegistry;
+  readonly settings: SettingsLookup;
   readonly auth: AuthService;
   readonly config: Config;
 }
 
 /** Model listing endpoint for authenticated users. */
 export function modelRoutes(deps: ModelRoutesDeps): Hono<AppEnv> {
-  const { registry, auth, config } = deps;
+  const { registry, settings, auth, config } = deps;
   const routes = new Hono<AppEnv>();
 
   routes.get(
@@ -26,7 +36,24 @@ export function modelRoutes(deps: ModelRoutesDeps): Hono<AppEnv> {
     requirePasswordChanged(),
     async (c) => {
       const models = await registry.listVisibleModels();
-      return c.json(ok({ items: models.map(toWireModel) }));
+      const imageGeneration =
+        (await settings.get<ImageGenerationConfig>(KNOWN_SETTINGS.imageGeneration))?.value ??
+        undefined;
+      const surfaces = new Map<string, ImageOutputSurface>();
+      await Promise.all(
+        models.map(async (model) => {
+          const surface = await imageOutputSurface(registry, model, imageGeneration);
+          if (surface !== null) surfaces.set(model.id, surface);
+        }),
+      );
+      return c.json(
+        ok({
+          items: models.map((model) => {
+            const surface = surfaces.get(model.id);
+            return toWireModel(model, surface === undefined ? null : surface);
+          }),
+        }),
+      );
     },
   );
 
@@ -43,10 +70,14 @@ export interface WireModel {
     readonly maxFilesPerMessage: number;
     readonly maxImagesPerMessage: number;
   };
+  readonly imageOutput: ImageOutputSurface | null;
 }
 
 /** The public model shape: no other row ids, no config, no secrets. */
-export function toWireModel(model: ModelRecord): WireModel {
+export function toWireModel(
+  model: ModelRecord,
+  imageOutput: ImageOutputSurface | null = null,
+): WireModel {
   return {
     id: model.id,
     displayName: model.displayName,
@@ -61,5 +92,6 @@ export function toWireModel(model: ModelRecord): WireModel {
           ? (model.capabilities.maxImagesPerRequest ?? 10)
           : 0,
     },
+    imageOutput,
   };
 }

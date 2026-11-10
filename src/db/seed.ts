@@ -55,7 +55,6 @@ export const EXAMPLE_MODELS: readonly ExampleModel[] = SEED_MODELS.map((m) => ({
   displayName: m.displayName,
 }));
 
-/** True when the provider registry table exists. */
 async function registryTablesPresent(): Promise<boolean> {
   const { rows } = await getPool().query<{ present: string | null }>(
     `SELECT to_regclass('public.ai_providers')::text AS present`,
@@ -348,15 +347,16 @@ async function seedModels(ctx: SeedContext): Promise<void> {
     const res = await ctx.tx.client.query<{ id: string }>(
       `INSERT INTO ai_models (
          id, provider_id, api_model_id, display_name, description, status,
-         capabilities, context_window, max_output_tokens, default_max_output_tokens,
+         capabilities, config, context_window, max_output_tokens, default_max_output_tokens,
          quota_weight, sort_order, updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, now())
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, now())
        ON CONFLICT (provider_id, api_model_id) DO UPDATE SET
          display_name = EXCLUDED.display_name,
          description = EXCLUDED.description,
          status = EXCLUDED.status,
          capabilities = EXCLUDED.capabilities,
+         config = EXCLUDED.config,
          context_window = EXCLUDED.context_window,
          max_output_tokens = EXCLUDED.max_output_tokens,
          default_max_output_tokens = EXCLUDED.default_max_output_tokens,
@@ -372,6 +372,7 @@ async function seedModels(ctx: SeedContext): Promise<void> {
         model.description,
         model.status,
         JSON.stringify(model.capabilities),
+        JSON.stringify(model.config ?? {}),
         model.contextWindow,
         model.maxOutputTokens,
         model.defaultMaxOutputTokens,
@@ -773,9 +774,7 @@ async function seedErrorEvents(ctx: SeedContext): Promise<void> {
   }
 }
 
-/**
- * Idempotent: re-running updates or skips existing records safely. Refuses in production.
- */
+/** Idempotent: re-running updates or skips existing records; refuses in production. */
 export async function runExampleSeed(): Promise<SeedResult> {
   const config = getConfig();
   if (config.NODE_ENV === 'production') {

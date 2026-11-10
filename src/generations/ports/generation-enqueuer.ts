@@ -11,6 +11,8 @@ export interface EnqueueGenerationInput {
     readonly droppedMessageCount?: number | undefined;
     readonly compactedMessageCount?: number | undefined;
     readonly reason?: 'context_window' | 'quota' | undefined;
+    readonly imageOutput?: { readonly aspectRatio?: string; readonly imageSize?: string } | undefined;
+    readonly routedFrom?: string | undefined;
   };
   readonly timeoutMs?: number | undefined;
 }

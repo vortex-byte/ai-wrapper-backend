@@ -160,6 +160,236 @@ describe('admin settings HTTP surface (real PostgreSQL)', () => {
     expect(body.code).toBe('invalid_request');
   });
 
+  it('stores only the rendering model and materializes it for each provider', async () => {
+    await seedUser('super_admin', 'root@corp.example');
+    const { cookie, csrfToken } = await loginAs('root@corp.example');
+
+    for (const [key, adapter] of [
+      ['openai', 'openai'],
+      ['gemini', 'gemini'],
+    ]) {
+      await getPool().query(
+        `INSERT INTO ai_providers (id, key, display_name, adapter, secret_ref, status, config)
+         VALUES ($1, $2, $2, $3, 'KEY', 'active', '{}'::jsonb)`,
+        [Bun.randomUUIDv7(), key, adapter],
+      );
+    }
+    services.registry.invalidate();
+
+    const accepted = await app.request(
+      new Request('http://localhost/api/admin/settings', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          imageGeneration: {
+            schemaVersion: 1,
+            gemini: { modelKey: 'gemini-nano-banana-2.1' },
+            openai: { modelKey: 'gpt-image-2.5-flare' },
+          },
+        }),
+      }),
+    );
+    expect(accepted.status).toBe(200);
+    const acceptedBody = (await accepted.json()) as {
+      data: { imageGeneration: { value: { openai?: { modelKey?: string } } } };
+    };
+    expect(acceptedBody.data.imageGeneration.value.openai).toEqual({
+      modelKey: 'gpt-image-2.5-flare',
+    });
+
+    const { rows } = await getPool().query<{
+      api_model_id: string;
+      internal: boolean;
+      provider_key: string;
+    }>(
+      `SELECT m.api_model_id, m.config->>'kind' AS kind, p.key AS provider_key
+         FROM ai_models m JOIN ai_providers p ON p.id = m.provider_id
+        ORDER BY m.api_model_id`,
+    );
+    expect(rows).toEqual([
+      { api_model_id: 'gemini-nano-banana-2.1', kind: 'image', provider_key: 'gemini' },
+      { api_model_id: 'gpt-image-2.5-flare', kind: 'image', provider_key: 'openai' },
+    ]);
+
+    const saved = await app.request(
+      new Request('http://localhost/api/admin/models', {
+        method: 'GET',
+        headers: { Cookie: cookie, Origin: ORIGIN },
+      }),
+    );
+    const savedBody = (await saved.json()) as {
+      data: { items: { apiModelId: string; kind: string }[] };
+    };
+    expect(savedBody.data.items.map((item) => [item.apiModelId, item.kind])).toEqual([
+      ['gemini-nano-banana-2.1', 'image'],
+      ['gpt-image-2.5-flare', 'image'],
+    ]);
+
+    const again = await app.request(
+      new Request('http://localhost/api/admin/settings', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          imageGeneration: { schemaVersion: 1, gemini: { modelKey: 'gemini-nano-banana-2.1' } },
+        }),
+      }),
+    );
+    expect(again.status).toBe(200);
+    const count = await getPool().query<{ n: string }>('SELECT count(*) AS n FROM ai_models');
+    expect(count.rows[0]?.n).toBe('2');
+
+    for (const rejected of [
+      { schemaVersion: 1, openai: { modelKey: 'gpt-image-2.5-flare', quality: 'high' } },
+      { schemaVersion: 1, gemini: { modelKey: 'gemini-nano-banana-2.1', aspectRatio: '16:9' } },
+      { schemaVersion: 1, gemini: { enabled: true, modelKey: 'gemini-nano-banana-2.1' } },
+      { schemaVersion: 1, gemini: { modelKey: 'gemini-3-flash' } },
+      { schemaVersion: 1, openai: { modelKey: 'gemini-nano-banana-2.1' } },
+    ]) {
+      const res = await app.request(
+        new Request('http://localhost/api/admin/settings', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: cookie,
+            'X-CSRF-Token': csrfToken,
+            Origin: ORIGIN,
+          },
+          body: JSON.stringify({ imageGeneration: rejected }),
+        }),
+      );
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('refuses to disable or delete the model currently configured for image generation', async () => {
+    await seedUser('super_admin', 'root@corp.example');
+    const { cookie, csrfToken } = await loginAs('root@corp.example');
+
+    await getPool().query(
+      `INSERT INTO ai_providers (id, key, display_name, adapter, secret_ref, status, config)
+       VALUES ($1, 'gemini', 'Gemini', 'gemini', 'KEY', 'active', '{}'::jsonb)`,
+      [Bun.randomUUIDv7()],
+    );
+    services.registry.invalidate();
+
+    const headers = {
+      'Content-Type': 'application/json',
+      Cookie: cookie,
+      'X-CSRF-Token': csrfToken,
+      Origin: ORIGIN,
+    };
+
+    const patch = await app.request(
+      new Request('http://localhost/api/admin/settings', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          imageGeneration: { schemaVersion: 1, gemini: { modelKey: 'gemini-nano-banana-2.1' } },
+        }),
+      }),
+    );
+    expect(patch.status).toBe(200);
+
+    const created = await getPool().query<{ id: string }>(
+      `SELECT id FROM ai_models WHERE api_model_id = 'gemini-nano-banana-2.1'`,
+    );
+    const modelId = created.rows[0]?.id;
+    expect(modelId).toBeDefined();
+
+    const disable = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ status: 'disabled' }),
+      }),
+    );
+    expect(disable.status).toBe(409);
+    expect(((await disable.json()) as { message: string }).message).toContain(
+      'Gemini image generation setting',
+    );
+
+    const remove = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'DELETE',
+        headers,
+      }),
+    );
+    expect(remove.status).toBe(409);
+
+    const still = await getPool().query<{ status: string }>(
+      `SELECT status FROM ai_models WHERE id = $1`,
+      [modelId],
+    );
+    expect(still.rows[0]?.status).toBe('active');
+
+    const edit = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ displayName: 'Nano Banana 2.1 (custom)', contextWindow: 2_097_152 }),
+      }),
+    );
+    expect(edit.status).toBe(200);
+    const edited = await getPool().query<{ display_name: string; context_window: number }>(
+      `SELECT display_name, context_window FROM ai_models WHERE id = $1`,
+      [modelId],
+    );
+    expect(edited.rows[0]).toEqual({
+      display_name: 'Nano Banana 2.1 (custom)',
+      context_window: 2_097_152,
+    });
+
+    const untick = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ capabilities: { imageGeneration: null } }),
+      }),
+    );
+    expect(untick.status).toBe(400);
+    expect(((await untick.json()) as { message: string }).message).toContain(
+      'must keep image generation enabled',
+    );
+
+    const retick = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ capabilities: { imageGeneration: { mode: 'tool' } } }),
+      }),
+    );
+    expect(retick.status).toBe(200);
+
+    const resave = await app.request(
+      new Request('http://localhost/api/admin/settings', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          imageGeneration: { schemaVersion: 1, gemini: { modelKey: 'gemini-nano-banana-2.1' } },
+        }),
+      }),
+    );
+    expect(resave.status).toBe(200);
+    const afterResave = await getPool().query<{ display_name: string; context_window: number }>(
+      `SELECT display_name, context_window FROM ai_models WHERE id = $1`,
+      [modelId],
+    );
+    expect(afterResave.rows[0]).toEqual({
+      display_name: 'Nano Banana 2.1 (custom)',
+      context_window: 2_097_152,
+    });
+  });
+
   it('updates settings, records audit rows, and returns enriched updater info', async () => {
     const rootId = await seedUser('super_admin', 'root@corp.example');
     const { cookie, csrfToken } = await loginAs('root@corp.example');
@@ -220,7 +450,6 @@ describe('admin settings HTTP surface (real PostgreSQL)', () => {
     expect(patchBody.data.attachments.value.providerFileRetentionDays).toBe(14);
     expect(patchBody.data.security.value.sessionIdleMinutes).toBe(240);
 
-    // Verify audit log has settings.update events
     const auditRes = await app.request(
       new Request('http://localhost/api/admin/audit-logs?action=settings.update', {
         method: 'GET',

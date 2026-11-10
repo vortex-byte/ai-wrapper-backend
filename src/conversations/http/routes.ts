@@ -23,6 +23,7 @@ import {
   RenameConversationBodySchema,
   RetryMessageBodySchema,
   SendMessageBodySchema,
+  toGenerationOptions,
 } from './schemas.ts';
 
 export interface ConversationRoutesDeps {
@@ -34,9 +35,7 @@ export interface ConversationRoutesDeps {
   readonly rateLimiter: RateLimiter;
 }
 
-/**
- * Every route is scoped to the signed-in user; another user's id yields `404 not_found`.
- */
+/** Every route is scoped to the signed-in user; another user's id yields `404 not_found`. */
 export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
   const { conversations, send, files, auth, config, rateLimiter } = deps;
   const routes = new Hono<AppEnv>();
@@ -141,7 +140,7 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
       idempotencyKey,
       requestId: c.get('requestId'),
       parts: body.parts,
-      options: body.options,
+      options: toGenerationOptions(body.options),
     });
 
     if (result.replayed) {
@@ -163,7 +162,7 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
       userMessageId: c.req.param('mid'),
       idempotencyKey,
       requestId: c.get('requestId'),
-      options: body.options,
+      options: toGenerationOptions(body.options),
     });
 
     if (result.replayed) {

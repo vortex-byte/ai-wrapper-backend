@@ -11,7 +11,6 @@ export function numberFromConfig(
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-/** Health check result when credentials are not configured. */
 export function healthNotConfigured(detail: string): HealthCheckResult {
   return { ok: false, latencyMs: 0, detail };
 }
@@ -36,7 +35,8 @@ export function isChatCapableModelId(id: string): boolean {
     lower.includes('tts') ||
     lower.includes('dall-e') ||
     lower.includes('moderation') ||
-    lower.includes('rerank')
+    lower.includes('rerank') ||
+    lower.startsWith('imagen')
   );
 }
 

@@ -75,6 +75,7 @@ export class CachedModelRegistry implements ModelRegistry {
       (model) =>
         enabled.has(model.providerId) &&
         model.status === 'active' &&
+        model.config['kind'] !== 'image' &&
         conversationCapable(model.capabilities),
     );
   }

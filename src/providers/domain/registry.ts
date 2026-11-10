@@ -1,8 +1,6 @@
 import type { ModelCapabilities } from './capabilities.ts';
 
-/**
- * Registry records as the rest of the app sees them.
- */
+/** Registry records as the rest of the app sees them. */
 
 export type ProviderStatus = 'active' | 'disabled';
 export type ModelStatus = 'active' | 'disabled';
@@ -49,6 +47,13 @@ export function usableForNewConversation(model: Pick<ModelRecord, 'status'>): bo
 /** Only active models can accept new messages in existing conversations. */
 export function sendableInExistingConversation(model: Pick<ModelRecord, 'status'>): boolean {
   return model.status === 'active';
+}
+
+export type ModelKind = 'chat' | 'image';
+
+/** Image models are materialized by the settings page and never offered in the model picker. */
+export function modelKind(model: Pick<ModelRecord, 'config'>): ModelKind {
+  return model.config['kind'] === 'image' ? 'image' : 'chat';
 }
 
 /** Visible in `GET /models` for a new conversation: active models only (disabled hidden). */

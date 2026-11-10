@@ -19,6 +19,7 @@ export const KNOWN_SETTINGS = {
   systemPrompt: 'system.prompt',
   attachments: 'attachments.config',
   security: 'security.config',
+  imageGeneration: 'imageGeneration.config',
 } as const;
 
 export const QuotaTimezoneSchema = z
@@ -37,7 +38,11 @@ export const QuotaTimezoneSchema = z
 export const SystemPromptSchema = z.string().trim().max(10_000);
 
 export const AttachmentsConfigSchema = z.object({
-  maxBytesPerFile: z.number().int().min(1024 * 1024).max(100 * 1024 * 1024),
+  maxBytesPerFile: z
+    .number()
+    .int()
+    .min(1024 * 1024)
+    .max(100 * 1024 * 1024),
   maxFilesPerRequest: z.number().int().min(1).max(20),
   retentionHours: z.number().int().min(1).max(720),
   providerFileRetentionDays: z.number().int().min(1).max(365).default(30),
@@ -51,6 +56,55 @@ export const SecurityConfigSchema = z.object({
 
 export type AttachmentsConfig = z.infer<typeof AttachmentsConfigSchema>;
 export type SecurityConfig = z.infer<typeof SecurityConfigSchema>;
+
+export const IMAGE_ASPECT_RATIOS = [
+  '1:1',
+  '2:3',
+  '3:2',
+  '3:4',
+  '4:3',
+  '4:5',
+  '5:4',
+  '9:16',
+  '16:9',
+  '21:9',
+] as const;
+
+export type ImageAspectRatio = (typeof IMAGE_ASPECT_RATIOS)[number];
+
+export const IMAGE_SIZES = ['1K', '2K', '4K'] as const;
+
+export type ImageSize = (typeof IMAGE_SIZES)[number];
+
+/** Each provider names the one image model for all its conversation models; aspect/size/quality are per-turn user choices, never settings. */
+export const GeminiImageProviderSchema = z
+  .object({
+    modelKey: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const OpenAiImageProviderSchema = z
+  .object({
+    modelKey: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const ImageGenerationConfigSchema = z
+  .object({
+    schemaVersion: z.number().int().positive().default(1),
+    gemini: GeminiImageProviderSchema.optional(),
+    openai: OpenAiImageProviderSchema.optional(),
+  })
+  .strict();
+
+export type GeminiImageProviderConfig = z.infer<typeof GeminiImageProviderSchema>;
+export type OpenAiImageProviderConfig = z.infer<typeof OpenAiImageProviderSchema>;
+export type ImageGenerationConfig = z.infer<typeof ImageGenerationConfigSchema>;
+
+export interface ImageOutputOptions {
+  readonly aspectRatio?: ImageAspectRatio;
+  readonly imageSize?: ImageSize;
+}
 
 export const DEFAULT_SETTINGS = {
   quotaTimezone: 'Asia/Jakarta',
@@ -66,6 +120,11 @@ export const DEFAULT_SETTINGS = {
     loginMaxFailures: 8,
     loginLockoutMinutes: 15,
   },
+  imageGeneration: {
+    schemaVersion: 1,
+    gemini: {},
+    openai: {},
+  },
 } as const;
 
 export function parseSettingValue<T>(key: string, value: unknown): T {
@@ -80,6 +139,9 @@ export function parseSettingValue<T>(key: string, value: unknown): T {
   }
   if (key === KNOWN_SETTINGS.security) {
     return SecurityConfigSchema.parse(value) as T;
+  }
+  if (key === KNOWN_SETTINGS.imageGeneration) {
+    return ImageGenerationConfigSchema.parse(value) as T;
   }
   return value as T;
 }

@@ -202,6 +202,10 @@ export function resolvedImageGenerationOptions(req: NormalizedChatRequest): Reco
 }
 
 export function resolvedImageModel(req: NormalizedChatRequest): string | undefined {
+  const turnModel = req.toolOptions?.imageGeneration?.model;
+  if (turnModel !== undefined && turnModel.trim().length > 0) {
+    return turnModel.trim();
+  }
   const capability = req.model.capabilities.imageGeneration;
   if (capability?.model !== undefined && capability.model.trim().length > 0) {
     return capability.model.trim();

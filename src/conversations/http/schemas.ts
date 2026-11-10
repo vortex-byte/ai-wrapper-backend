@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { decodeSeqCursor } from '@/cursor.ts';
 import { REASONING_EFFORTS } from '@/providers/domain/capabilities.ts';
-
-/** Zod schemas and cursor validators for conversation endpoints. */
+import { IMAGE_ASPECT_RATIOS, IMAGE_SIZES } from '@/settings/domain/settings.ts';
+import type { GenerationOptions } from '@/generations/application/send-service.ts';
 
 const CursorSchema = z
   .string()
@@ -75,6 +75,12 @@ const SendOptionsSchema = z
     maxOutputTokens: z.number().int().min(1).max(1_000_000).optional(),
     tools: z.object({ imageGeneration: z.boolean().optional() }).optional(),
     reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
+    imageOutput: z
+      .object({
+        aspectRatio: z.enum(IMAGE_ASPECT_RATIOS).optional(),
+        imageSize: z.enum(IMAGE_SIZES).optional(),
+      })
+      .optional(),
   })
   .optional();
 
@@ -92,4 +98,35 @@ export const IdempotencyKeySchema = z.uuid();
 export type CreateConversationBody = z.infer<typeof CreateConversationBodySchema>;
 export type RenameConversationBody = z.infer<typeof RenameConversationBodySchema>;
 export type SendMessageBody = z.infer<typeof SendMessageBodySchema>;
+
+/** Zod emits `key?: T | undefined`; the PAL option type is exact under `exactOptionalPropertyTypes`. */
+export function toGenerationOptions(
+  options: z.infer<typeof SendOptionsSchema>,
+): GenerationOptions | undefined {
+  if (options === undefined) return undefined;
+  const imageOutput = options.imageOutput;
+  return {
+    ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
+    ...(options.tools !== undefined
+      ? {
+          tools: {
+            ...(options.tools.imageGeneration !== undefined
+              ? { imageGeneration: options.tools.imageGeneration }
+              : {}),
+          },
+        }
+      : {}),
+    ...(options.reasoningEffort !== undefined ? { reasoningEffort: options.reasoningEffort } : {}),
+    ...(imageOutput !== undefined
+      ? {
+          imageOutput: {
+            ...(imageOutput.aspectRatio !== undefined
+              ? { aspectRatio: imageOutput.aspectRatio }
+              : {}),
+            ...(imageOutput.imageSize !== undefined ? { imageSize: imageOutput.imageSize } : {}),
+          },
+        }
+      : {}),
+  };
+}
 export type RetryMessageBody = z.infer<typeof RetryMessageBodySchema>;

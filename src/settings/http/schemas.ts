@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   AttachmentsConfigSchema,
+  ImageGenerationConfigSchema,
   QuotaTimezoneSchema,
   SecurityConfigSchema,
   SystemPromptSchema,
@@ -12,13 +13,15 @@ export const UpdatePlatformSettingsBodySchema = z
     quotaTimezone: QuotaTimezoneSchema.optional(),
     attachments: AttachmentsConfigSchema.optional(),
     security: SecurityConfigSchema.optional(),
+    imageGeneration: ImageGenerationConfigSchema.optional(),
   })
   .refine(
     (data) =>
       data.systemPrompt !== undefined ||
       data.quotaTimezone !== undefined ||
       data.attachments !== undefined ||
-      data.security !== undefined,
+      data.security !== undefined ||
+      data.imageGeneration !== undefined,
     { message: 'At least one setting must be provided for update.' },
   );
 

@@ -27,7 +27,10 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
     }),
   );
   api.route('/', meRoutes({ auth: services.auth, config }));
-  api.route('/', modelRoutes({ registry: services.registry, auth: services.auth, config }));
+  api.route(
+    '/',
+    modelRoutes({ registry: services.registry, settings: services.settings, auth: services.auth, config }),
+  );
   api.route(
     '/',
     conversationRoutes({
@@ -94,6 +97,10 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
       settings: services.settings,
       auth: services.auth,
       config,
+      registry: services.registry,
+      registryRepository: services.registryRepository,
+      clock: services.clock,
+      idGen: services.idGen,
     }),
   );
 

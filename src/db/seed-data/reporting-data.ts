@@ -142,7 +142,7 @@ export function buildSeedErrorEvents(): SeedErrorEvent[] {
       category: 'upstream_5xx',
       message: 'Upstream 502 Bad Gateway received from Google Gemini endpoint',
       providerKey: 'gemini',
-      apiModelId: 'gemini-2.0-flash',
+      apiModelId: 'gemini-3-flash',
       context: { statusCode: 502, errorBody: 'Server temporarily unavailable' },
     },
     {
@@ -224,7 +224,7 @@ export function buildSeedDailyUsage(): SeedDailyUsage[] {
     { provider: 'openai', model: 'gpt-4o', costPerK: 6 },
     { provider: 'anthropic', model: 'claude-3-5-sonnet-latest', costPerK: 8 },
     { provider: 'openai', model: 'gpt-4o-mini', costPerK: 0.3 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerK: 0.25 },
+    { provider: 'gemini', model: 'gemini-3-flash', costPerK: 0.25 },
   ];
 
   for (let dayOffset = 0; dayOffset < 30; dayOffset++) {

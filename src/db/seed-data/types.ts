@@ -14,6 +14,7 @@ export interface SeedModel {
   readonly description: string;
   readonly status: 'active' | 'disabled';
   readonly capabilities: Record<string, unknown>;
+  readonly config?: Record<string, unknown> | undefined;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
   readonly defaultMaxOutputTokens: number;

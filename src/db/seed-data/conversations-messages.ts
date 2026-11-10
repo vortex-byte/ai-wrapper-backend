@@ -104,7 +104,6 @@ export const SEED_ATTACHMENTS: readonly SeedAttachment[] = [
   },
 ];
 
-// Helper to format 6-digit hex UUID suffix
 function padId(n: number): string {
   return n.toString().padStart(12, '0');
 }
@@ -139,7 +138,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Redis cache-aside with mutex lock vs probabilistic early expiration',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     title: 'Kubernetes Horizontal Pod Autoscaler tuning with custom Prometheus metrics',
@@ -159,7 +158,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Zero-copy streaming pipeline architecture using Web Streams in Bun',
     provider: 'gemini',
-    model: 'gemini-1.5-pro-latest',
+    model: 'gemini-3-pro',
   },
   {
     title: 'Evaluating Vector Indexing: HNSW vs IVFFlat in pgvector',
@@ -189,7 +188,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Benchmarking HTTP routing trees: Radix tree vs linear match in Hono',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     title: 'OpenTelemetry span propagation across asynchronous worker boundaries',
@@ -224,7 +223,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'PostgreSQL connection pool sizing: Little’s Law and PgBouncer thread allocation',
     provider: 'gemini',
-    model: 'gemini-1.5-pro-latest',
+    model: 'gemini-3-pro',
   },
   {
     title: 'Safe zero-downtime column renaming in Drizzle ORM migrations',
@@ -259,7 +258,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Disaster Recovery RPO and RTO validation: Automated PITR drills with WAL archiving',
     provider: 'gemini',
-    model: 'gemini-1.5-pro-latest',
+    model: 'gemini-3-pro',
   },
   {
     title: 'Designing resilient outbound HTTP retry policies: Jittered exponential backoff',
@@ -284,7 +283,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'PostgreSQL autovacuum tuning for append-heavy audit log tables',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     title: 'Secure secret rotation workflow without restarting application containers',
@@ -304,7 +303,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Building a robust dead-letter queue consumer with exponential backoff in Bun',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     title: 'PostgreSQL BRIN vs B-Tree indexes for massive append-only timeseries tables',
@@ -329,7 +328,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Comparative analysis of TypeScript runtime validation libraries: Zod vs TypeBox vs ArkType',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     title: 'Optimizing PDF text extraction pipeline: AnyDoc vs Poppler in serverless environments',
@@ -354,7 +353,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Understanding PostgreSQL MVCC tuple visibility and transaction ID wraparound',
     provider: 'gemini',
-    model: 'gemini-1.5-pro-latest',
+    model: 'gemini-3-pro',
   },
   {
     title: 'Memory profiling with heap snapshots in Bun: Identifying uncollected closures',
@@ -369,7 +368,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'PostgreSQL partitioning by range: Monthly partitions for usage_events',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     title: 'API rate limiting headers: Comparing IETF draft RFC 9205 vs GitHub X-RateLimit',
@@ -384,7 +383,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Evaluating Gemini 2.0 Flash function calling accuracy on nested JSON schemas',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     title: 'Database query timeout best practices: statement_timeout vs lock_timeout',
@@ -414,7 +413,7 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   {
     title: 'Designing high-availability Redis Sentinel clusters with automatic failover',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     title: 'TypeScript 5.8 const type parameters and decorator metadata usage',
@@ -438,7 +437,6 @@ const SARAH_CONVERSATION_TITLES: readonly { title: string; provider: string; mod
   },
 ];
 
-// Additional conversations for other users
 const OTHER_USERS_CONVERSATIONS: readonly {
   userEmail: string;
   title: string;
@@ -461,7 +459,7 @@ const OTHER_USERS_CONVERSATIONS: readonly {
     userEmail: 'david.kim@corp.example',
     title: 'Vector database benchmarks: Milvus vs Qdrant vs pgvector latency comparison',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
   {
     userEmail: 'jordan.taylor@corp.example',
@@ -497,7 +495,7 @@ const OTHER_USERS_CONVERSATIONS: readonly {
     userEmail: 'arjun.mehta@corp.example',
     title: 'Quantization techniques: GGUF vs AWQ vs EXL2 throughput on NVIDIA H100',
     provider: 'gemini',
-    model: 'gemini-1.5-pro-latest',
+    model: 'gemini-3-pro',
   },
   {
     userEmail: 'elena.rostova@corp.example',
@@ -533,14 +531,13 @@ const OTHER_USERS_CONVERSATIONS: readonly {
     userEmail: 'lucas.silva@corp.example',
     title: 'Automating secret injection via HashiCorp Vault agent in Kubernetes pods',
     provider: 'gemini',
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3-flash',
   },
 ];
 
 export function buildSeedConversations(): SeedConversation[] {
   const result: SeedConversation[] = [];
 
-  // 65 conversations for Sarah Chen
   SARAH_CONVERSATION_TITLES.forEach((item, idx) => {
     const num = idx + 1;
     const conversationId = `00000000-0000-7000-8003-${padId(num)}`;
@@ -563,7 +560,6 @@ export function buildSeedConversations(): SeedConversation[] {
     });
   });
 
-  // 15 conversations for other users
   OTHER_USERS_CONVERSATIONS.forEach((item, idx) => {
     const num = 100 + idx + 1;
     const conversationId = `00000000-0000-7000-8003-${padId(num)}`;
@@ -749,7 +745,6 @@ export function buildSeedMessages(): SeedMessage[] {
   const result: SeedMessage[] = [];
   const baseDate = new Date('2026-10-15T09:00:00Z');
 
-  // Flagship conversation: 62 messages (31 turns)
   HOT_CONVERSATION_TURNS.forEach((turn, idx) => {
     const userSeq = idx * 2 + 1;
     const assistantSeq = idx * 2 + 2;

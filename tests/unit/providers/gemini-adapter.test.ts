@@ -100,6 +100,50 @@ describe('GeminiAdapter', () => {
     });
   });
 
+  it('pins image modalities and caller geometry on an image turn', () => {
+    const adapter = new GeminiAdapter();
+    const payload = adapter.toProviderRequest(
+      request({
+        responseModalities: ['text', 'image'],
+        imageOutput: { aspectRatio: '16:9', imageSize: '2K' },
+        reasoningEffort: 'high',
+      }),
+    ) as { generationConfig: Record<string, unknown>; tools?: unknown };
+
+    expect(payload.generationConfig['responseModalities']).toEqual(['TEXT', 'IMAGE']);
+    expect(payload.generationConfig['imageConfig']).toEqual({
+      aspectRatio: '16:9',
+      imageSize: '2K',
+    });
+    expect(payload.generationConfig['thinkingConfig']).toBeUndefined();
+  });
+
+  it('lets the caller override the model-configured geometry', () => {
+    const adapter = new GeminiAdapter();
+    const base = request({
+      responseModalities: ['text', 'image'],
+      imageOutput: { aspectRatio: '9:16' },
+    });
+    const configured: NormalizedChatRequest = {
+      ...base,
+      model: { ...base.model, config: { imageConfig: { aspectRatio: '1:1', imageSize: '4K' } } },
+    };
+
+    const payload = adapter.toProviderRequest(configured) as {
+      generationConfig: Record<string, unknown>;
+    };
+    expect(payload.generationConfig['imageConfig']).toEqual({ aspectRatio: '9:16', imageSize: '4K' });
+  });
+
+  it('omits imageConfig on a text turn', () => {
+    const adapter = new GeminiAdapter();
+    const payload = adapter.toProviderRequest(request()) as {
+      generationConfig: Record<string, unknown>;
+    };
+    expect(payload.generationConfig['responseModalities']).toBeUndefined();
+    expect(payload.generationConfig['imageConfig']).toBeUndefined();
+  });
+
   it('estimates input tokens locally', async () => {
     const adapter = new GeminiAdapter();
     const result = await adapter.estimateInputTokens(request());
@@ -256,8 +300,7 @@ describe('GeminiAdapter', () => {
       mimeType: 'image/png',
     });
     if (artifact && artifact.type === 'artifact_emitted') {
-      // The bytes ride on the event; the handle stays a small label so the payload is never
-      // persisted into `attachments.metadata.providerFileId`.
+      // The bytes ride on the event; the handle stays a small label so the payload is never persisted into `attachments.metadata.providerFileId`.
       expect(artifact.providerFileId).toBe('gemini-inline:0');
       expect(artifact.providerFileId).not.toContain(base64Data);
       expect(artifact.sizeBytes).toBe(Buffer.from(base64Data, 'base64').byteLength);

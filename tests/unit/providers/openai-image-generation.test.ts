@@ -528,6 +528,38 @@ describe('OpenAIAdapter — hosted image generation', () => {
     expect(fake.responsesCalls[0]!['tools']).toEqual([{ type: 'image_generation' }]);
   });
 
+  it('pins the image model the super admin configured for this turn', async () => {
+    const fake = fakeClient(imageTurn());
+    await collect(new OpenAIAdapter(() => fake.client), {
+      ...makeRequest(),
+      toolOptions: { imageGeneration: { model: 'gpt-image-2.5' } },
+    });
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', model: 'gpt-image-2.5' },
+    ]);
+  });
+
+  it('prefers the settings-picked tool model over the capability default', async () => {
+    const fake = fakeClient(imageTurn());
+    const req = makeRequest();
+    await collect(new OpenAIAdapter(() => fake.client), {
+      ...req,
+      model: {
+        ...req.model,
+        capabilities: {
+          ...req.model.capabilities,
+          imageGeneration: { mode: 'tool', model: 'gpt-image-2.5-flare' },
+        },
+      },
+      toolOptions: { imageGeneration: { model: 'gpt-image-2.5' } },
+    });
+
+    expect(fake.responsesCalls[0]!['tools']).toEqual([
+      { type: 'image_generation', model: 'gpt-image-2.5' },
+    ]);
+  });
+
   it('uses provider imageGenerationOptions when the model configures none', async () => {
     const fake = fakeClient(imageTurn());
     const req = withProviderConfig(makeRequest(), {

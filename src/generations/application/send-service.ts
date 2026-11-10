@@ -5,10 +5,26 @@ import { AppError, isUniqueViolationOf } from '@/errors.ts';
 import { withTransaction } from '@/db/tx.ts';
 import { buildContext } from '@/context-builder/context-builder.ts';
 import type { ConversationRepository } from '@/conversations/ports/conversation-repository.ts';
-import type { Conversation, Message, MessagePart } from '@/conversations/domain/conversation.ts';
+import type { Conversation, Message, MessagePart, MessageWithParts } from '@/conversations/domain/conversation.ts';
 import { deriveTitleFromText } from '@/conversations/domain/conversation.ts';
-import type { ModelRegistry } from '@/providers/ports/model-registry.ts';
-import type { NormalizedPart } from '@/providers/domain/pal.ts';
+import type { ModelRegistry, ResolvedModel } from '@/providers/ports/model-registry.ts';
+import type { NormalizedPart, ResolvedFile } from '@/providers/domain/pal.ts';
+import type {
+  ModelRuntimeConfig,
+  ProviderRuntimeConfig,
+} from '@/providers/domain/capabilities.ts';
+import type { ModelRecord, ProviderRecord } from '@/providers/domain/registry.ts';
+import {
+  imageOutputOptionsOf,
+  resolveRoutedImageModel,
+  toolImageModel,
+} from '@/providers/application/image-generation-config.ts';
+import type { SettingsService } from '@/settings/application/settings-service.ts';
+import {
+  KNOWN_SETTINGS,
+  type ImageGenerationConfig,
+  type ImageOutputOptions,
+} from '@/settings/domain/settings.ts';
 import type { GenerationRepository, GenerationRecord } from '../ports/generation-repository.ts';
 import type { QuotaPort } from '../ports/quota-port.ts';
 import type { GenerationEnqueuer, EnqueueGenerationInput } from '../ports/generation-enqueuer.ts';
@@ -22,7 +38,6 @@ import type {
 } from '@/providers/domain/capabilities.ts';
 import { canGenerateImages, conversationCapable, imageToolSupported } from '@/providers/domain/capabilities.ts';
 import { validatePartsForModel } from '@/providers/domain/capability-validation.ts';
-import type { SettingsService } from '@/settings/application/settings-service.ts';
 import type { Finalizer } from './finalizer.ts';
 
 function assertConversationTarget(capabilities: ModelCapabilities): void {
@@ -63,7 +78,107 @@ function resolveImageIntent(
   return requested;
 }
 
-/** Maps attachment-domain resolved parts into normalized PAL parts. */
+/** The model that executes a turn after image routing, plus the tool model and geometry pinned for it. */
+interface ImageExecution {
+  readonly model: ModelRecord;
+  readonly provider: ProviderRecord;
+  readonly runtime: { model: ModelRuntimeConfig; provider: ProviderRuntimeConfig };
+  readonly imageOutput: ImageOutputOptions | undefined;
+  readonly toolImageModel: string | undefined;
+}
+
+/** Resolves stored image bytes for history replay; models without vision never receive them. */
+async function historyImages(
+  deps: SendMessageDeps,
+  history: readonly MessageWithParts[],
+  userId: string,
+): Promise<ResolvedFile[]> {
+  if (deps.attachments === undefined) return [];
+  const ids: string[] = [];
+  for (const item of history) {
+    for (const part of item.parts) {
+      if (part.type === 'image' && part.fileId !== null && !ids.includes(part.fileId)) {
+        ids.push(part.fileId);
+      }
+    }
+  }
+  if (ids.length === 0) return [];
+  const resolved = await deps.attachments.resolveHistoryImages(ids, userId);
+  const files: ResolvedFile[] = [];
+  for (const id of ids) {
+    const file = resolved.get(id);
+    if (file !== undefined) files.push(file);
+  }
+  return files;
+}
+
+/** Image-toggle routing: the whole turn runs on the image model (Gemini) or the tool names it (OpenAI). */
+async function resolveImageExecution(
+  deps: SendMessageDeps,
+  resolved: ResolvedModel,
+  wantsImageOutput: boolean,
+  requested: ImageOutputOptions | undefined,
+): Promise<ImageExecution> {
+  const base: ImageExecution = {
+    model: resolved.model,
+    provider: resolved.provider,
+    runtime: resolved.runtime,
+    imageOutput: undefined,
+    toolImageModel: undefined,
+  };
+  if (!wantsImageOutput) return base;
+
+  const imageGeneration =
+    (await deps.settings?.get<ImageGenerationConfig>(KNOWN_SETTINGS.imageGeneration))?.value ??
+    undefined;
+
+  const routed = await resolveRoutedImageModel({
+    registry: deps.registry,
+    conversationModel: resolved.model,
+    imageGeneration,
+  });
+  if (routed !== null) {
+    const target = await deps.registry.getRuntimeConfig(routed.model.id);
+    if (target === null || target.model.status !== 'active') {
+      throw new AppError('model_unavailable', 'The configured image model is not available.');
+    }
+    const allowed = imageOutputOptionsOf(target.model);
+    if (
+      requested?.aspectRatio !== undefined &&
+      !allowed.aspectRatios.includes(requested.aspectRatio)
+    ) {
+      throw new AppError('invalid_request', 'The selected aspect ratio is not supported.', {
+        details: { availableAspectRatios: allowed.aspectRatios },
+      });
+    }
+    if (requested?.imageSize !== undefined && !allowed.imageSizes.includes(requested.imageSize)) {
+      throw new AppError('invalid_request', 'The selected image size is not supported.', {
+        details: { availableImageSizes: allowed.imageSizes },
+      });
+    }
+    return {
+      model: target.model,
+      provider: target.provider,
+      runtime: target.runtime,
+      imageOutput: {
+        ...routed.options,
+        ...(requested?.aspectRatio !== undefined ? { aspectRatio: requested.aspectRatio } : {}),
+        ...(requested?.imageSize !== undefined ? { imageSize: requested.imageSize } : {}),
+      },
+      toolImageModel: undefined,
+    };
+  }
+
+  return {
+    ...base,
+    toolImageModel: await toolImageModel(
+      deps.registry,
+      resolved.model.providerKey,
+      imageGeneration,
+    ),
+  };
+}
+
 function toPalParts(parts: readonly ResolvedAttachmentPart[]): NormalizedPart[] {
   return parts.map((part) =>
     part.type === 'image'
@@ -100,6 +215,7 @@ export interface GenerationOptions {
   readonly maxOutputTokens?: number | undefined;
   readonly tools?: { readonly imageGeneration?: boolean | undefined } | undefined;
   readonly reasoningEffort?: ReasoningEffort | undefined;
+  readonly imageOutput?: ImageOutputOptions | undefined;
 }
 
 export interface SendMessageInput {
@@ -200,7 +316,6 @@ export function createSendService(deps: SendMessageDeps): SendService {
       if (resolved.model.status !== 'active') {
         throw new AppError('model_unavailable', 'This model is not available.');
       }
-      const { model, provider, runtime } = resolved;
 
       const fileParts = input.parts.filter(
         (part): part is { type: 'file'; fileId: string } => part.type === 'file',
@@ -210,12 +325,24 @@ export function createSendService(deps: SendMessageDeps): SendService {
       }
 
       const wantsImageOutput = resolveImageIntent(
-        model.capabilities,
+        resolved.model.capabilities,
         input.options,
-        model.config,
+        resolved.model.config,
       );
 
+      const execution = await resolveImageExecution(
+        deps,
+        resolved,
+        wantsImageOutput,
+        input.options?.imageOutput,
+      );
+      const model = execution.model;
+      const provider = execution.provider;
+      const runtime = execution.runtime;
+
       const reasoningEffort = resolveReasoningEffort(model, input.options?.reasoningEffort);
+
+      const replayImages = model.capabilities.vision === true;
 
       let resolvedAttachmentParts: NormalizedPart[] = [];
       let resolvedAttachments: Attachment[] = [];
@@ -340,6 +467,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
           ...(wantsImageOutput ? { imageGeneration: true } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
           userRemainingQuota: remainingQuotaTokens,
+          ...(replayImages
+            ? { images: await historyImages(deps, history.items, input.userId) }
+            : {}),
         });
 
         const seqs = await deps.conversations.allocateSeqPair(conversation.id, tx);
@@ -466,8 +596,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
           },
           tx,
         );
-        // When remaining quota is short, the reservation shrinks the output bound.
-        // The provider max_tokens must match so the bound is physically enforced.
+        // When quota is short the reservation shrinks the output bound; provider max_tokens must match so it is enforced.
         const effectiveMaxOutput =
           reservation.effectiveMaxOutputTokens !== null &&
           reservation.effectiveMaxOutputTokens < maxOutputTokens
@@ -499,6 +628,16 @@ export function createSendService(deps: SendMessageDeps): SendService {
             ? { maxOutputTokens: effectiveMaxOutput }
             : {}),
           ...(containerConfig !== undefined ? { container: containerConfig } : {}),
+          ...(execution.imageOutput !== undefined
+            ? { imageOutput: execution.imageOutput }
+            : {}),
+          ...(execution.toolImageModel !== undefined
+            ? {
+                toolOptions: {
+                  imageGeneration: { model: execution.toolImageModel },
+                },
+              }
+            : {}),
         };
         if (effectiveMaxOutput !== maxOutputTokens) {
           await deps.generations.updateMaxOutputTokens(generation.id, effectiveMaxOutput, tx);
@@ -529,6 +668,10 @@ export function createSendService(deps: SendMessageDeps): SendService {
             droppedMessageCount: built.truncation.droppedMessageCount,
             compactedMessageCount: built.truncation.compactedMessageCount,
             ...(built.truncation.reason !== 'none' ? { reason: built.truncation.reason } : {}),
+            ...(execution.imageOutput !== undefined
+              ? { imageOutput: execution.imageOutput }
+              : {}),
+            routedFrom: conversation.modelId,
           },
           ...(modelTimeoutMs !== undefined ? { timeoutMs: modelTimeoutMs } : {}),
         };
@@ -622,15 +765,26 @@ export function createSendService(deps: SendMessageDeps): SendService {
       ) {
         throw new AppError('model_unavailable', 'This model is not available.');
       }
-      const { model, provider, runtime } = resolved;
 
       const wantsImageOutput = resolveImageIntent(
-        model.capabilities,
+        resolved.model.capabilities,
         input.options,
-        model.config,
+        resolved.model.config,
       );
 
+      const execution = await resolveImageExecution(
+        deps,
+        resolved,
+        wantsImageOutput,
+        input.options?.imageOutput,
+      );
+      const model = execution.model;
+      const provider = execution.provider;
+      const runtime = execution.runtime;
+
       const reasoningEffort = resolveReasoningEffort(model, input.options?.reasoningEffort);
+
+      const replayImages = model.capabilities.vision === true;
 
       if (deps.orchestrator?.isDraining) {
         throw new AppError('service_busy', 'Server is shutting down.', {
@@ -649,8 +803,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
         .filter((id): id is string => typeof id === 'string');
       let resolvedFileParts: NormalizedPart[] = [];
       if (fileIdsInRetry.length > 0 && deps.attachments !== undefined) {
-        // Retry re-reads the files the original message already carries, so they stay bound;
-        // only conversation scoping applies.
+        // Retry re-reads the files the original message carries so they stay bound; only conversation scoping applies.
         const resolved = await deps.attachments.resolveParts(fileIdsInRetry, input.userId, {
           conversationId: conversation.id,
         });
@@ -742,6 +895,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
           ...(wantsImageOutput ? { imageGeneration: true } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
           userRemainingQuota: remainingQuotaTokens,
+          ...(replayImages
+            ? { images: await historyImages(deps, history.items, input.userId) }
+            : {}),
         });
 
         const newAssistantSeq = await deps.conversations.allocateSeq(conversation.id, 1, tx);
@@ -861,6 +1017,16 @@ export function createSendService(deps: SendMessageDeps): SendService {
             ? { maxOutputTokens: effectiveMaxOutput }
             : {}),
           ...(containerConfig !== undefined ? { container: containerConfig } : {}),
+          ...(execution.imageOutput !== undefined
+            ? { imageOutput: execution.imageOutput }
+            : {}),
+          ...(execution.toolImageModel !== undefined
+            ? {
+                toolOptions: {
+                  imageGeneration: { model: execution.toolImageModel },
+                },
+              }
+            : {}),
         };
         if (effectiveMaxOutput !== maxOutputTokens) {
           await deps.generations.updateMaxOutputTokens(generation.id, effectiveMaxOutput, tx);
@@ -882,6 +1048,10 @@ export function createSendService(deps: SendMessageDeps): SendService {
             droppedMessageCount: built.truncation.droppedMessageCount,
             compactedMessageCount: built.truncation.compactedMessageCount,
             ...(built.truncation.reason !== 'none' ? { reason: built.truncation.reason } : {}),
+            ...(execution.imageOutput !== undefined
+              ? { imageOutput: execution.imageOutput }
+              : {}),
+            routedFrom: conversation.modelId,
           },
           ...(modelTimeoutMs !== undefined ? { timeoutMs: modelTimeoutMs } : {}),
         };
@@ -972,6 +1142,7 @@ export function canonicalRequestHash(
     ),
     maxOutputTokens: options?.maxOutputTokens ?? null,
     imageGeneration: options?.tools?.imageGeneration === true,
+    imageOutput: options?.imageOutput ?? null,
     reasoningEffort: options?.reasoningEffort ?? null,
   });
   return createHash('sha256').update(canonical).digest('hex');
@@ -998,6 +1169,7 @@ function toStoredOptions(
   return {
     ...(options?.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
     ...(options?.tools !== undefined ? { tools: { ...options.tools } } : {}),
+    ...(options?.imageOutput !== undefined ? { imageOutput: { ...options.imageOutput } } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
   };
 }

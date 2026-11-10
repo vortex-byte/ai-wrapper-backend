@@ -10,11 +10,20 @@ import { requireSuperAdmin } from '@/http/middleware/require-role.ts';
 import { clientIp, requestMeta } from '@/http/request-meta.ts';
 import type { AppEnv } from '@/http/types.ts';
 import { parseJsonBody } from '@/http/validate.ts';
+import type { ModelRegistry } from '@/providers/ports/model-registry.ts';
+import type { RegistryRepository } from '@/providers/ports/registry-repository.ts';
+import { validateImageGenerationConfig } from '@/providers/application/image-generation-config.ts';
+import {
+  syncImageModelCatalog,
+  type SyncImageModelDeps,
+} from '@/providers/application/image-model-sync.ts';
+import type { Clock, IdGenerator } from '@/clock/index.ts';
 import type { SettingsService } from '../application/settings-service.ts';
 import {
   DEFAULT_SETTINGS,
   KNOWN_SETTINGS,
   type AttachmentsConfig,
+  type ImageGenerationConfig,
   type SecurityConfig,
 } from '../domain/settings.ts';
 import { UpdatePlatformSettingsBodySchema } from './schemas.ts';
@@ -23,10 +32,20 @@ export interface SettingsRoutesDeps {
   readonly settings: SettingsService;
   readonly auth: AuthService;
   readonly config: Config;
+  readonly registry: ModelRegistry;
+  readonly registryRepository: RegistryRepository;
+  readonly clock: Clock;
+  readonly idGen: IdGenerator;
 }
 
 export function settingsRoutes(deps: SettingsRoutesDeps): Hono<AppEnv> {
   const { settings, auth, config } = deps;
+  const sync: SyncImageModelDeps = {
+    registry: deps.registry,
+    repository: deps.registryRepository,
+    clock: deps.clock,
+    idGen: deps.idGen,
+  };
   const routes = new Hono<AppEnv>();
 
   routes.use('*', requireCsrf(config));
@@ -81,6 +100,20 @@ export function settingsRoutes(deps: SettingsRoutesDeps): Hono<AppEnv> {
       });
     }
 
+    if (body.imageGeneration !== undefined) {
+      const problem = validateImageGenerationConfig(body.imageGeneration);
+      if (problem !== null) {
+        throw new AppError('invalid_request', problem);
+      }
+      await settings.set({
+        key: KNOWN_SETTINGS.imageGeneration,
+        value: body.imageGeneration,
+        actorUserId: caller.user.id,
+        meta,
+      });
+      await syncImageModelCatalog(sync, body.imageGeneration);
+    }
+
     const data = await buildSettingsView(settings);
     return c.json(ok(data, 'Platform settings updated.'));
   });
@@ -89,13 +122,19 @@ export function settingsRoutes(deps: SettingsRoutesDeps): Hono<AppEnv> {
 }
 
 async function buildSettingsView(settings: SettingsService) {
-  const [systemPromptSetting, quotaTimezoneSetting, attachmentsSetting, securitySetting] =
-    await Promise.all([
-      settings.get<string>(KNOWN_SETTINGS.systemPrompt),
-      settings.get<string>(KNOWN_SETTINGS.quotaTimezone),
-      settings.get<AttachmentsConfig>(KNOWN_SETTINGS.attachments),
-      settings.get<SecurityConfig>(KNOWN_SETTINGS.security),
-    ]);
+  const [
+    systemPromptSetting,
+    quotaTimezoneSetting,
+    attachmentsSetting,
+    securitySetting,
+    imageGenerationSetting,
+  ] = await Promise.all([
+    settings.get<string>(KNOWN_SETTINGS.systemPrompt),
+    settings.get<string>(KNOWN_SETTINGS.quotaTimezone),
+    settings.get<AttachmentsConfig>(KNOWN_SETTINGS.attachments),
+    settings.get<SecurityConfig>(KNOWN_SETTINGS.security),
+    settings.get<ImageGenerationConfig>(KNOWN_SETTINGS.imageGeneration),
+  ]);
 
   return {
     systemPrompt: {
@@ -121,6 +160,12 @@ async function buildSettingsView(settings: SettingsService) {
       version: securitySetting?.version ?? 0,
       updatedAt: securitySetting?.updatedAt.toISOString() ?? null,
       updatedBy: securitySetting?.updatedBy ?? null,
+    },
+    imageGeneration: {
+      value: imageGenerationSetting?.value ?? DEFAULT_SETTINGS.imageGeneration,
+      version: imageGenerationSetting?.version ?? 0,
+      updatedAt: imageGenerationSetting?.updatedAt.toISOString() ?? null,
+      updatedBy: imageGenerationSetting?.updatedBy ?? null,
     },
   };
 }

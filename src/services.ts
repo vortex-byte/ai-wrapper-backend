@@ -8,7 +8,7 @@ import { BunPasswordHasher } from './auth/infrastructure/bun-password-hasher.ts'
 import { DrizzleSessionRepository } from './auth/infrastructure/drizzle-session-repository.ts';
 import { DrizzleUserRepository } from './auth/infrastructure/drizzle-user-repository.ts';
 import { DrizzleAuditLogRepository } from './audit/infrastructure/drizzle-audit-log-repository.ts';
-import { systemClock, uuidv7Generator } from './clock/index.ts';
+import { systemClock, uuidv7Generator, type Clock, type IdGenerator } from './clock/index.ts';
 import type { AdminService } from './admin/application/admin-service.ts';
 import { createAdminService } from './admin/application/admin-service.ts';
 import { DrizzleDivisionRepository } from './admin/infrastructure/drizzle-division-repository.ts';
@@ -22,10 +22,12 @@ import { DrizzleRegistryRepository } from './providers/infrastructure/drizzle-re
 import { CachedModelRegistry } from './providers/infrastructure/cached-registry.ts';
 import { EnvSecretResolver } from './providers/ports/secret-resolver.ts';
 import type { ModelRegistry } from './providers/ports/model-registry.ts';
+import type { RegistryRepository } from './providers/ports/registry-repository.ts';
 import { AdapterProviderFileCleaner } from './providers/infrastructure/adapter-provider-file-cleaner.ts';
 import type { ProviderFileCleaner } from '@/provider-file-cleaner.ts';
 import type { RegistryAdminService } from './providers/application/registry-admin-service.ts';
 import { createRegistryAdminService } from './providers/application/registry-admin-service.ts';
+import { createConfiguredImageModelLookup } from './providers/application/configured-image-model-lookup.ts';
 
 import type { ConversationService } from './conversations/application/conversation-service.ts';
 import { createConversationService } from './conversations/application/conversation-service.ts';
@@ -99,6 +101,9 @@ export interface Services {
   readonly audit: AuditLogRepository;
   readonly providers: ProviderRegistry;
   readonly registry: ModelRegistry;
+  readonly registryRepository: RegistryRepository;
+  readonly clock: Clock;
+  readonly idGen: IdGenerator;
   readonly registryAdmin: RegistryAdminService;
   readonly conversations: ConversationService;
   readonly conversationRepository: ConversationRepository;
@@ -147,8 +152,7 @@ export function createServices(config: Config): Services {
     repository: settingsRepository,
     audit,
   });
-  // TTL-cached reads for hot paths (session resolution, quota periods); writes go through
-  // `settings` itself so the audit row and version bump stay transactional.
+  // TTL-cached reads for hot paths; writes stay on `settings` so the audit row and version bump stay transactional.
   const settingsLookup = createCachedSettingsReader({
     source: settings,
     clock: systemClock,
@@ -187,6 +191,7 @@ export function createServices(config: Config): Services {
     audit,
     clock: systemClock,
     idGen: uuidv7Generator,
+    configuredImageModel: createConfiguredImageModelLookup(settings),
   });
 
   const conversationRepository = new DrizzleConversationRepository();
@@ -363,6 +368,9 @@ export function createServices(config: Config): Services {
     audit,
     providers,
     registry,
+    registryRepository,
+    clock: systemClock,
+    idGen: uuidv7Generator,
     registryAdmin,
     conversations,
     conversationRepository,

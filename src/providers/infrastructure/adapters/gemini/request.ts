@@ -69,7 +69,9 @@ export function assembleRequest(
   req: NormalizedChatRequest,
   contents: unknown[],
 ): Record<string, unknown> {
-  const tools = buildTools(req);
+  const imageRequested = req.responseModalities.includes('image');
+  const tools = imageRequested ? [] : buildTools(req);
+  const imageConfig = imageRequested ? buildImageConfig(req) : undefined;
 
   return {
     ...(req.system !== undefined && req.system.trim().length > 0
@@ -80,7 +82,9 @@ export function assembleRequest(
       maxOutputTokens: req.maxOutputTokens,
       ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
       ...(typeof req.topP === 'number' ? { topP: req.topP } : {}),
-      ...(req.reasoningEffort !== undefined
+      ...(imageRequested ? { responseModalities: ['TEXT', 'IMAGE'] } : {}),
+      ...(imageConfig !== undefined ? { imageConfig } : {}),
+      ...(req.reasoningEffort !== undefined && !imageRequested
         ? {
             thinkingConfig: {
               thinkingBudget: resolveThinkingBudget(
@@ -92,6 +96,27 @@ export function assembleRequest(
         : {}),
     },
     ...(tools.length > 0 ? { tools } : {}),
+  };
+}
+
+function buildImageConfig(
+  req: NormalizedChatRequest,
+): { aspectRatio?: string; imageSize?: string } | undefined {
+  const override = req.model.config['imageConfig'];
+  const configured =
+    typeof override === 'object' && override !== null
+      ? (override as Record<string, unknown>)
+      : {};
+  const aspectRatio =
+    req.imageOutput?.aspectRatio ??
+    (typeof configured['aspectRatio'] === 'string' ? configured['aspectRatio'] : undefined);
+  const imageSize =
+    req.imageOutput?.imageSize ??
+    (typeof configured['imageSize'] === 'string' ? configured['imageSize'] : undefined);
+  if (aspectRatio === undefined && imageSize === undefined) return undefined;
+  return {
+    ...(aspectRatio !== undefined ? { aspectRatio } : {}),
+    ...(imageSize !== undefined ? { imageSize } : {}),
   };
 }
 

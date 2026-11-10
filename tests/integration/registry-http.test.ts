@@ -660,4 +660,74 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
     );
     expect(res.status).toBe(404);
   });
+
+  it('allows super admin to configure and update systemAddendum on provider and model', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const providerRes = await app.request(
+      new Request('http://localhost/api/admin/providers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          key: 'prov-addendum',
+          displayName: 'Provider with addendum',
+          adapter: 'openai',
+          secretRef: 'OPENAI_API_KEY',
+          config: { systemAddendum: 'Default provider instructions.' },
+        }),
+      }),
+    );
+    expect(providerRes.status).toBe(201);
+    const providerData = ((await providerRes.json()) as { data: { id: string; config: Record<string, unknown> } }).data;
+    expect(providerData.config['systemAddendum']).toBe('Default provider instructions.');
+
+    const modelRes = await createModel(cookie, csrfToken, providerData.id, {
+      config: { systemAddendum: 'Model-specific instructions.' },
+    });
+    expect(modelRes.status).toBe(201);
+    const modelData = ((await modelRes.json()) as { data: { id: string; config: Record<string, unknown> } }).data;
+    expect(modelData.config['systemAddendum']).toBe('Model-specific instructions.');
+
+    const updateProvider = await app.request(
+      new Request(`http://localhost/api/admin/providers/${providerData.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          config: { systemAddendum: 'Updated provider instructions.' },
+        }),
+      }),
+    );
+    expect(updateProvider.status).toBe(200);
+    const updatedProvData = ((await updateProvider.json()) as { data: { config: Record<string, unknown> } }).data;
+    expect(updatedProvData.config['systemAddendum']).toBe('Updated provider instructions.');
+
+    const updateModel = await app.request(
+      new Request(`http://localhost/api/admin/models/${modelData.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          config: { systemAddendum: 'Updated model instructions.' },
+        }),
+      }),
+    );
+    expect(updateModel.status).toBe(200);
+    const updatedModelData = ((await updateModel.json()) as { data: { config: Record<string, unknown> } }).data;
+    expect(updatedModelData.config['systemAddendum']).toBe('Updated model instructions.');
+  });
 });

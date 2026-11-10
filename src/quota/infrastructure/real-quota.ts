@@ -21,10 +21,6 @@ import type {
 } from '@/generations/ports/quota-port.ts';
 import type { QuotaTimezoneProvider } from '../ports/quota-timezone.ts';
 
-/**
- * Quota accounting service implementation.
- */
-
 const RESERVATION_TTL_MS = 15 * 60 * 1000;
 
 export interface RealQuotaDeps {
@@ -56,7 +52,6 @@ export class RealQuota implements QuotaPort {
     this.reservationTtlMs = deps.reservationTtlMs ?? RESERVATION_TTL_MS;
   }
 
-  /** Resolve the effective policy for a user (user → division → global, per field). */
   async resolvePolicyForUser(userId: string, tx?: TransactionContext): Promise<ResolvedPolicy> {
     const userPolicyRow = await this.policies.findPolicy('user', userId, tx);
     const divisionId = await this.userDivisionId(userId, tx);
@@ -67,8 +62,7 @@ export class RealQuota implements QuotaPort {
   }
 
   private async userDivisionId(userId: string, tx?: TransactionContext): Promise<string | null> {
-    // Read-only lookup for policy resolution; inside the caller's transaction when given so
-    // concurrent reservations do not check out a second pool connection.
+    // Runs inside the caller's transaction when given, so concurrent reservations do not check out a second pool connection.
     return this.usage.userDivisionId(userId, tx);
   }
 
@@ -145,8 +139,7 @@ export class RealQuota implements QuotaPort {
       });
     }
 
-    // Serialized concurrency check: holding the `quota_accounts` row lock acquired by `reserveAtomic`
-    // guarantees concurrent requests cannot race past this check.
+    // Serialized by the `quota_accounts` row lock from `reserveAtomic`: concurrent requests cannot race past this check.
     const activeCount = await tx.client.query<{ count: string }>(
       `SELECT count(*) AS count FROM generation_jobs
         WHERE user_id = $1 AND id <> $2 AND status IN ('pending','generating')`,

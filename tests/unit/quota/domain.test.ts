@@ -137,8 +137,7 @@ describe('computeReservation', () => {
   });
 
   it('correctly dimensions output clamping when quotaWeight is greater than 1.0', () => {
-    // remaining = 3,000 quota tokens, quotaWeight = 2.0 -> maxAffordableRaw = 1,500
-    // estInputTokens = 1,000 -> affordable output = 500 raw tokens
+    // remaining 3,000, quotaWeight 2.0 -> maxAffordableRaw 1,500; estInput 1,000 -> output 500 raw
     const decision = computeReservation({
       ...baseReservation,
       limitTokens: 3_000,
@@ -153,8 +152,7 @@ describe('computeReservation', () => {
   });
 
   it('correctly dimensions output clamping when quotaWeight is less than 1.0', () => {
-    // remaining = 1,000 quota tokens, quotaWeight = 0.5 -> maxAffordableRaw = 2,000
-    // estInputTokens = 1,000 -> affordable output = 1,000 raw tokens
+    // remaining 1,000, quotaWeight 0.5 -> maxAffordableRaw 2,000; estInput 1,000 -> output 1,000 raw
     const decision = computeReservation({
       ...baseReservation,
       limitTokens: 1_000,

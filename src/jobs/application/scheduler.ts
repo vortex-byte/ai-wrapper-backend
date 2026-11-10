@@ -52,8 +52,7 @@ export class Scheduler {
           return false;
         }
 
-        // Dedupe per interval slot: even if two nodes race the lock, the unique dedupe_key makes
-        // the enqueue idempotent.
+        // Dedupe per interval slot: the unique `dedupe_key` makes the enqueue idempotent even if two nodes race the lock.
         const slot = Math.floor(Date.now() / task.intervalMs);
         const dedupeKey = `${task.jobType}:${slot}`;
 

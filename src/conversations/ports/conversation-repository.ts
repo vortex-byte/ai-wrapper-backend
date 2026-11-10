@@ -9,8 +9,6 @@ import type {
   PartStatus,
 } from '../domain/conversation.ts';
 
-/** Persistence port for conversations, messages, and message parts. */
-
 export interface ListConversationsQuery {
   readonly userId: string;
   readonly limit: number;

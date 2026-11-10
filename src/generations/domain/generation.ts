@@ -13,7 +13,6 @@ export type PartStatus = 'streaming' | 'complete' | 'incomplete' | 'failed';
 
 export type GenerationStatus = 'pending' | 'generating' | 'completed' | 'cancelled' | 'failed';
 
-/** Terminal states are final; `pending`/`generating` are the two live states. */
 export const TERMINAL_STATUSES = ['completed', 'cancelled', 'failed'] as const;
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
 
@@ -40,7 +39,6 @@ export type GenerationFailureCategory =
   | 'incomplete'
   | 'internal_error';
 
-/** Terminal generation outcome model. */
 export type GenerationOutcome =
   | { readonly kind: 'completed'; readonly finishReason: CompletedFinishReason }
   | { readonly kind: 'cancelled'; readonly reason: CancelReason }
@@ -56,7 +54,6 @@ export interface OutcomeMapping {
   readonly finishReason: FinishReason;
   /** Terminal status for parts that were still `streaming` when the run ended. */
   readonly streamingPartStatus: PartStatus;
-  /** Whether the provider accepted the request. */
   readonly providerAccepted: boolean;
 }
 
@@ -101,12 +98,10 @@ export function mapOutcome(
   }
 }
 
-/** `generation_timeout` → `timeout`; everything else that ended in failure → `error`. */
 function failureFinishReason(category: GenerationFailureCategory): FinishReason {
   return category === 'generation_timeout' ? 'timeout' : 'error';
 }
 
-/** Evaluates valid generation status transitions. */
 export function canTransition(from: GenerationStatus, to: GenerationStatus): boolean {
   if (isTerminal(from)) return false;
   if (to === 'pending') return false;

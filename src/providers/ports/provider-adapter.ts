@@ -77,13 +77,11 @@ export interface ProviderAdapter {
   /** Lists the provider's own model catalogue, for the admin model picker. */
   listModels(ctx: HealthCheckContext): Promise<readonly ProviderModelInfo[]>;
 
-  /** Downloads a provider-generated artifact file stream. */
   fetchArtifactStream?(
     providerFileId: string,
     ctx: FilesApiContext,
   ): Promise<ProviderArtifact>;
 
-  /** Uploads an input file to the provider's file storage API for container mounting. */
   uploadInputFile?(
     file: InputFileUpload,
     ctx: FilesApiContext,

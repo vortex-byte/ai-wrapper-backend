@@ -1,6 +1,4 @@
-/**
- * Effective-dated cost estimation.
- */
+/** Effective-dated cost estimation. */
 
 export interface ModelPriceRow {
   readonly inputMicrosPerMtok: number;
@@ -9,7 +7,6 @@ export interface ModelPriceRow {
   readonly currency: string;
 }
 
-/** Calculates micro-currency cost for token counts using model price rates. */
 export function costMicros(
   price: ModelPriceRow,
   inputTokens: number,

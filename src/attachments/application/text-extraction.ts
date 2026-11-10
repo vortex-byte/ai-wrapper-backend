@@ -1,5 +1,3 @@
-/** Text extraction for input documents into bounded Markdown text. */
-
 import { formatFromExtension, toMarkdownBytes } from '@firecrawl/anydoc';
 import type { Format } from '@firecrawl/anydoc';
 import type { SupportedUploadKind } from '../domain/attachment.ts';
@@ -78,8 +76,7 @@ export async function extractTextForKind(input: ExtractInput): Promise<Extractio
     const { text, truncated } = truncate(markdown);
     return { extractor: 'anydoc', text, truncated, pageCount: null, status: 'done' };
   } catch (err) {
-    // anydoc errors carry a `code` (needsOcr, encrypted, resourceLimit, ...). Persisted
-    // as the extraction's error_code; never the document content itself.
+    // anydoc errors carry a `code` (needsOcr, encrypted, ...); persisted as error_code, never the content.
     const code =
       typeof err === 'object' && err !== null && 'code' in err
         ? String((err as { code: unknown }).code)

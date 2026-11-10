@@ -14,7 +14,6 @@ export interface AttachmentRepository {
   /** Owner-scoped batch read; tombstoned rows are included so parts keep their file. */
   findManyByIdsForUser(attachmentIds: readonly string[], userId: string): Promise<Attachment[]>;
 
-  /** Links uploaded attachments to a message. */
   attachToMessage(
     attachmentIds: readonly string[],
     messageId: string,

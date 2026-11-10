@@ -13,11 +13,8 @@ import type { ProviderFileCleaner } from '@/provider-file-cleaner.ts';
 
 /** Hydrates provider-generated binaries into local storage before exposing to clients. */
 
-/** Default retention for generated files (30 days). */
 export const GENERATED_FILE_RETENTION_DAYS = 30;
-/** Hard cap on generated artifact size. */
 export const MAX_GENERATED_ARTIFACT_BYTES = 50 * 1024 * 1024;
-/** Timeout for provider artifact downloads. */
 export const ARTIFACT_FETCH_TIMEOUT_MS = 60_000;
 
 export interface ArtifactHydrationInput {
@@ -37,10 +34,8 @@ export interface ArtifactHydrationInput {
   readonly providerKey?: string | undefined;
 }
 
-/** Fetches provider-side bytes for a generated file. */
 export type ArtifactFetcher = (providerFileId: string) => Promise<ProviderArtifact>;
 
-/** Minimal interface for linking stored artifacts to message parts. */
 export interface ArtifactPartLinker {
   attachPartFile(partId: string, fileId: string, tx?: TransactionContext): Promise<void>;
   updatePart(partId: string, updates: { readonly status: 'failed' }): Promise<void>;
@@ -52,7 +47,6 @@ export interface ArtifactSinkDeps {
   readonly conversations: ArtifactPartLinker;
   readonly clock: Clock;
   readonly idGen: IdGenerator;
-  /** Retention for generated files, in days. */
   readonly retentionDays: number;
   /** Hard cap on a single hydrated artifact; guards against a runaway provider response. */
   readonly maxBytes: number;
@@ -75,7 +69,6 @@ function byteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
-/** Provider errors carry the retry verdict; anything else is treated as transient. */
 function isAbortError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError';
 }
@@ -106,9 +99,7 @@ function kindForMime(mimeType: string | undefined, filename: string): Attachment
 }
 
 function guessMime(mimeType: string | undefined, filename: string): string {
-  // Container downloads often come back as `application/octet-stream`; prefer the type we
-  // derived from the (sanitized) name over that placeholder, so a stored docx/xlsx is served
-  // with its real Content-Type.
+  // Prefer the type derived from the name over an `application/octet-stream` placeholder.
   if (mimeType !== undefined && mimeType !== '' && mimeType !== 'application/octet-stream') {
     return mimeType;
   }
@@ -175,8 +166,7 @@ export class ArtifactSink {
         // The run was cancelled/timed out/shut down: retrying a download whose signal is
         // already aborted would only stall cancellation for the remaining backoff window.
         if (isAbortError(err)) break;
-        // A permanent failure (404, bad handle) must not cost two more attempts inside the
-        // stream loop.
+        // A permanent failure (404, bad handle) must not cost two more retry attempts.
         if (isNonRetryableProviderError(err)) break;
         const backoff = backoffMs[attempt];
         if (backoff !== undefined && attempt < DOWNLOAD_ATTEMPTS - 1) {
@@ -278,10 +268,7 @@ export class ArtifactSink {
     return { attachmentId: id };
   }
 
-  /**
-   * Drops the provider-side copy after the bytes are safely local. Runs only after the row is
-   * committed: every later turn is rebuilt from local storage, so nothing reads it again.
-   */
+  /** Runs only after the row commits; later turns rebuild from local storage, so nothing reads it again. */
   private async deleteProviderCopy(input: ArtifactHydrationInput): Promise<void> {
     if (this.deps.providerFiles === undefined) return;
     if (input.providerFileId === '') return;

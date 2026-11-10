@@ -22,9 +22,7 @@ export interface ResolvedPolicy {
   readonly allowedModelIds: readonly string[] | null;
 }
 
-/**
- * Platform defaults used when a policy field is not configured at any scope.
- */
+/** Platform defaults used when a policy field is not configured at any scope. */
 export const PLATFORM_DEFAULT_POLICY: ResolvedPolicy = {
   monthlyTokens: 500_000,
   maxInputTokensPerRequest: 190_000,
@@ -33,7 +31,6 @@ export const PLATFORM_DEFAULT_POLICY: ResolvedPolicy = {
   allowedModelIds: null,
 };
 
-/** Resolves effective quota policy across user, division, and global layers. */
 export function resolvePolicy(
   userPolicy: QuotaPolicyRow | null,
   divisionPolicy: QuotaPolicyRow | null,

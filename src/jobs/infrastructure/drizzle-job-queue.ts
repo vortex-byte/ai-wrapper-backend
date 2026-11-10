@@ -175,9 +175,7 @@ export class DrizzleJobQueue implements JobQueue {
         })
         .where(eq(jobs.id, id));
     } else {
-      // Exponential backoff with full jitter, capped (AWS-recommended): `base * 2^(attempts-1)`
-      // bounded at 5 minutes. Plain linear/multiplied delays synchronize retries of jobs that
-      // failed together and hammer a recovering dependency, so spread them out.
+      // Full-jitter exponential backoff (AWS-recommended), capped at 5 min: synchronized retries would hammer a recovering dependency.
       const BASE_MS = 5_000;
       const CAP_MS = 300_000;
       const exponential = Math.min(BASE_MS * 2 ** (job.attempts - 1), CAP_MS);

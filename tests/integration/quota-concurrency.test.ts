@@ -12,10 +12,6 @@ import { withTransaction } from '@/db/tx.ts';
 import { AppError } from '@/errors.ts';
 import { resetDatabase } from './helpers/reset.ts';
 
-/**
- * Quota accounting integration tests against PostgreSQL.
- */
-
 const accounts = new DrizzleQuotaAccountRepository();
 const policies = new DrizzleQuotaPolicyRepository();
 const usage = new DrizzleUsageRepository();
@@ -140,8 +136,7 @@ describe('quota reservation concurrency', () => {
       Array.from({ length: 50 }, () => seedGeneration(userId, modelId, providerId)),
     );
 
-    // All 50 reserve 20,000 concurrently (10k input + 10k output). The account row's
-    // conditional UPDATE serializes them.
+    // All 50 reserve 20,000 concurrently (10k input + 10k output); the account row's conditional UPDATE serializes them.
     const results = await Promise.allSettled(
       generationIds.map((generationId) =>
         withTransaction(reserveFor(userId, generationId, modelId, providerId, 10_000, 10_000, 10_000)),
@@ -223,7 +218,6 @@ describe('quota reservation concurrency', () => {
     expect(account?.reservedTokens).toBe(0);
     expect(account?.usedTokens).toBe(12_000);
 
-    // Usage event written once, with overshoot.
     const event = await getPool().query<{ quota_tokens: string; overshoot_tokens: string; usage_source: string }>(
       `SELECT quota_tokens, overshoot_tokens, usage_source FROM usage_events WHERE generation_id = $1`,
       [generationId],
@@ -441,7 +435,6 @@ describe('quota reservation concurrency', () => {
       [Bun.randomUUIDv7()],
     );
     const genActive = await seedGeneration(userId, modelId, providerId);
-    // Reserve tokens but leave it active (in-flight generation)
     await withTransaction(reserveFor(userId, genActive, modelId, providerId, 2_000, 2_000));
 
     const run = await reconciliationHandler();
@@ -478,13 +471,11 @@ describe('quota reservation concurrency', () => {
     await getPool().query(`UPDATE users SET division_id = $1 WHERE id = $2`, [divA, userA]);
     await getPool().query(`UPDATE users SET division_id = $1 WHERE id = $2`, [divB, userB]);
 
-    // Create current accounts for both users
     const genA = await seedGeneration(userA, modelId, providerId);
     const genB = await seedGeneration(userB, modelId, providerId);
     await withTransaction(reserveFor(userA, genA, modelId, providerId, 100, 100));
     await withTransaction(reserveFor(userB, genB, modelId, providerId, 100, 100));
 
-    // Update Div A policy with applyToCurrentPeriod
     await quotaService.updatePolicy({
       scope: 'division',
       targetId: divA,
@@ -502,7 +493,6 @@ describe('quota reservation concurrency', () => {
 
   it('precreatePeriodsHandler resolves user effective policy instead of hardcoding defaults', async () => {
     const { userId } = await seedUserAndModel();
-    // Insert a custom user policy with 2,000,000 tokens
     await getPool().query(
       `INSERT INTO quota_policies (id, scope, user_id, monthly_tokens, max_concurrent_generations)
        VALUES ($1, 'user', $2, 2000000, 5)`,
@@ -600,7 +590,6 @@ describe('quota reservation concurrency', () => {
   it('merges policy updates with tri-state semantics and rebases user account directly', async () => {
     const { userId, modelId, providerId } = await seedUserAndModel();
 
-    // 1. Initial policy update for user: set both monthlyTokens and maxInputTokensPerRequest
     await quotaService.updatePolicy({
       scope: 'user',
       targetId: userId,
@@ -613,14 +602,12 @@ describe('quota reservation concurrency', () => {
       actorUserId: userId,
     });
 
-    // Create current account via reservation
     const gen = await seedGeneration(userId, modelId, providerId);
     await withTransaction(reserveFor(userId, gen, modelId, providerId, 100, 100));
 
     let acc = await accounts.findCurrentAccount(userId, new Date());
     expect(acc?.baseLimitTokens).toBe(500_000);
 
-    // 2. Partial update: modify monthlyTokens to 750k; leave maxInputTokensPerRequest as undefined
     await quotaService.updatePolicy({
       scope: 'user',
       targetId: userId,
@@ -640,7 +627,6 @@ describe('quota reservation concurrency', () => {
     acc = await accounts.findCurrentAccount(userId, new Date());
     expect(acc?.baseLimitTokens).toBe(750_000);
 
-    // 3. Unset maxInputTokensPerRequest with null
     await quotaService.updatePolicy({
       scope: 'user',
       targetId: userId,

@@ -14,7 +14,6 @@ export interface StorageReconcileResult {
   readonly orphanedBlobsDeleted: number;
   /** Database records whose storage blob is missing (reported). */
   readonly missingBlobs: number;
-  /** Storage keys scanned under prefix. */
   readonly scannedKeys: number;
 }
 

@@ -35,8 +35,7 @@ export class LocalStorageProvider implements StorageProviderPort, StorageHealthP
   ): Promise<PutStreamResult> {
     void options.contentType;
     const full = this.pathFor(key);
-    // A unique per-writer temp name: two concurrent puts of the same key must never share (and
-    // then delete) one another's partial file.
+    // Unique per-writer temp name: concurrent puts of one key must never share a partial file.
     const tmp = `${full}.${process.pid}.${randomUUID()}.tmp`;
     await fs.mkdir(path.dirname(full), { recursive: true });
 
@@ -155,8 +154,7 @@ export class LocalStorageProvider implements StorageProviderPort, StorageHealthP
       if (entry.isDirectory()) {
         await this.collectKeys(full, keys);
       } else if (entry.isFile()) {
-        // In-flight writes are `<key>.<pid>.<uuid>.tmp`; never report (and let the sweep
-        // delete) a blob that is still being written.
+        // In-flight writes are `<key>.<pid>.<uuid>.tmp`; never report a blob still being written.
         if (entry.name.endsWith('.tmp')) continue;
         keys.push(path.relative(this.root, full).split(path.sep).join('/'));
       }

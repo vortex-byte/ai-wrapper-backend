@@ -18,7 +18,6 @@ function assertTestDatabaseUrl(url: string | undefined): void {
   }
 }
 
-/** Resets identity and conversational data between tests while preserving seed settings. */
 const RESET_STATEMENTS = [
   'DELETE FROM audit_logs',
   'DELETE FROM error_events',

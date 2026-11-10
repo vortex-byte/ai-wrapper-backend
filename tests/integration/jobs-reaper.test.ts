@@ -332,8 +332,7 @@ describe('Jobs Runtime & Reaper (P2-8)', () => {
       maxAttempts: 3,
     });
 
-    // Claim once (attempt 1) then fail: run_at must be pushed out, and the delay must be bounded
-    // by the exponentially-growing cap, not a fixed linear step.
+    // Claim once (attempt 1) then fail: run_at must be pushed out and bounded by the exponential cap, not a fixed linear step.
     const claimed = await services.jobQueue.claim('worker-test');
     expect(claimed.some((j) => j.id === jobId)).toBe(true);
 
@@ -379,8 +378,7 @@ describe('Jobs Runtime & Reaper (P2-8)', () => {
     );
     expect(rows[0]?.count).toBe('1');
 
-    // The transaction-scoped advisory lock must be released when the transaction ends: a fresh
-    // call still acquires it (a session-level leak would block this after the first call).
+    // The transaction-scoped advisory lock must be released when the transaction ends: a fresh call still acquires it (a session-level leak would block this).
     const third = await scheduler.scheduleTask(task);
     expect(third).toBe(true);
   });

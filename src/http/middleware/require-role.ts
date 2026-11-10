@@ -3,7 +3,6 @@ import type { UserRole } from '@/auth/domain/user.ts';
 import { AppError } from '@/errors.ts';
 import type { AppEnv } from '../types.ts';
 
-/** Enforces required user roles for authenticated requests. */
 export function requireRole(...roles: readonly UserRole[]): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const auth = c.get('auth');

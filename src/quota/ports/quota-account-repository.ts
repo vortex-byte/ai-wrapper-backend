@@ -71,17 +71,13 @@ export interface ReserveAtomicResult {
 }
 
 export interface QuotaAccountRepository {
-  /**
-   * Lazy period creation: inserts or returns existing account for the user's current period.
-   */
+  /** Lazy period creation: inserts or returns the existing account for the user's current period. */
   getOrCreateAccount(
     input: GetOrCreateAccountInput,
     tx: TransactionContext,
   ): Promise<QuotaAccountRow>;
 
-  /**
-   * Atomic reservation via conditional UPDATE. Returns reserved = false when over limit.
-   */
+  /** Atomic reservation via conditional UPDATE. Returns reserved = false when over limit. */
   reserveAtomic(
     accountId: string,
     reserveTokens: number,
@@ -168,9 +164,7 @@ export interface QuotaAccountRepository {
     }[]
   >;
 
-  /**
-   * Reconciliation inputs: ledger-derived used/adjustment totals and live reserved sum for an account.
-   */
+  /** Reconciliation inputs: ledger-derived used/adjustment totals and live reserved sum for an account. */
   reconciliationTotals(
     accountId: string,
     tx?: TransactionContext,

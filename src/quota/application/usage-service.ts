@@ -1,9 +1,5 @@
 import type { UsageRepository } from '../ports/usage-repository.ts';
 
-/**
- * Usage reporting service.
- */
-
 export interface UsageServiceDeps {
   readonly usage: UsageRepository;
 }

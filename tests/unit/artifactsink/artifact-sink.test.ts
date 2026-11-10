@@ -247,8 +247,7 @@ describe('ArtifactSink', () => {
     const conversations = new FakeConversationRepo();
     const sink = sinkWith({ storage, attachments, conversations });
 
-    // Container downloads commonly report `application/octet-stream`; the real type is known
-    // from the sanitized filename and must not be lost.
+    // Container downloads commonly report `application/octet-stream`; the real type is known from the sanitized filename and must not be lost.
     await sink.hydrate(input, async () => ({
       stream: new Blob([bytes('xlsx')]).stream(),
       mimeType: 'application/octet-stream',

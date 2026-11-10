@@ -12,10 +12,6 @@ import type {
   ReserveAtomicResult,
 } from '../ports/quota-account-repository.ts';
 
-/**
- * Implementation of the quota accounting aggregate.
- */
-
 const NULL_SCOPE_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
 interface AccountRowShape {

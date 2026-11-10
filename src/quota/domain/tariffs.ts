@@ -15,7 +15,6 @@ export function toolTariff(toolName: string): ToolTariff | null {
   return TOOL_TOKEN_TARIFF[toolName] ?? null;
 }
 
-/** Verifies remaining quota against tool tariff. */
 export function checkToolQuota(
   toolName: string,
   remainingTokens: number,

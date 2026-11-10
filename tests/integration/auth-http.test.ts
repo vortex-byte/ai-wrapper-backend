@@ -49,7 +49,6 @@ function post(path: string, body: unknown, headers: Record<string, string> = {})
   });
 }
 
-/** Extracts the `__Host-session` cookie pair from a response, if set. */
 function sessionCookie(res: Response): string | null {
   const setCookie = res.headers.get('set-cookie');
   if (setCookie === null) return null;
@@ -178,8 +177,7 @@ describe('auth HTTP surface (real PostgreSQL)', () => {
     const meBody = (await me.json()) as { data: { mustChangePassword: boolean } };
     expect(meBody.data.mustChangePassword).toBe(true);
 
-    // A representative gated route wired exactly as future feature routers will be:
-    // requireAuth → requirePasswordChanged. This proves the gate yields 403, not 401.
+    // A representative gated route wired as future routers will be (requireAuth → requirePasswordChanged): proves the gate yields 403, not 401.
     const gatedApp = new Hono<AppEnv>();
     gatedApp.onError(onError(config));
     gatedApp.use('/api/*', requireAuth(services.auth, config));

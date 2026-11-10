@@ -10,7 +10,6 @@ export interface CapabilityCheckResult {
   readonly violation?: CapabilityViolation;
 }
 
-/** Validate a request's parts against the model's declared capabilities. */
 export function validatePartsForModel(
   capabilities: ModelCapabilities,
   parts: readonly NormalizedPart[],

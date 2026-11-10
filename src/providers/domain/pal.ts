@@ -50,10 +50,7 @@ export interface ToolResultPart {
   readonly isError?: boolean;
 }
 
-/**
- * A provider-side compaction block that stands in for the turns it summarizes. The payload is
- * provider-owned and must be replayed verbatim (Anthropic's summary text, OpenAI's encrypted item).
- */
+/** A provider-side compaction block standing in for the turns it summarizes; payload is provider-owned and must be replayed verbatim. */
 export interface CompactionPart {
   readonly type: 'compaction';
   readonly provider: string;

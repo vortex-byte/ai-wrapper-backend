@@ -13,9 +13,7 @@ export interface SafeguardCheckInput {
   readonly activeSuperAdminCount: number;
 }
 
-/**
- * Domain invariant: cannot disable or demote the last active super_admin.
- */
+/** Domain invariant: cannot disable or demote the last active super_admin. */
 export function canUpdateUserRoleOrStatus(input: SafeguardCheckInput): boolean {
   const { targetUser, newRole, newStatus, activeSuperAdminCount } = input;
 

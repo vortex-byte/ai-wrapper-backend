@@ -104,18 +104,13 @@ export function* sweepImages(
   }
 }
 
-/** Whether the request has already produced its allowed number of images. */
 export function reachedImageCap(req: NormalizedChatRequest, state: ExecutionState): boolean {
   const cap = req.model.capabilities.maxImagesPerRequest;
   if (cap === undefined) return false;
   return state.imageCount >= cap;
 }
 
-/**
- * Streams a partial preview as its own artifact so the UI can render progressively. Partials
- * bypass both the image cap and the container-artifact budget: they are one per
- * `partial_image_index` of a given image call, not the final output.
- */
+/** Streams a partial preview as its own artifact; partials bypass the image cap and artifact budget (one per `partial_image_index`, not the final output). */
 export function* partialImageArtifact(
   event: {
     readonly item_id?: string;

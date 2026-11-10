@@ -1,5 +1,3 @@
-/** Storage port for persisting, reading, and listing binary artifact streams. */
-
 export interface PutStreamResult {
   readonly key: string;
   readonly sizeBytes: number;

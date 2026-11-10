@@ -1,5 +1,3 @@
-/** Attachment domain: limits, formats, content sniffing, and validation. */
-
 export class AttachmentValidationError extends Error {
   readonly code: 'unsupported_file_type' | 'file_too_large';
   readonly status: number;
@@ -158,8 +156,7 @@ export function sanitizeDisplayName(raw: string): string {
     .replace(/[/\\]/g, '')
     // Strip bidi/zero-width characters that can spoof extensions.
     .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '')
-    // Collapse `..` runs and drop leading/trailing dots: no traversal fragments survive even
-    // after separators are removed (`../../etc/passwd` → `etcpasswd`).
+    // Collapse `..` runs and drop leading/trailing dots: no traversal fragments survive.
     .replace(/\.{2,}/g, '.')
     .replace(/^[.\s]+/, '')
     .replace(/[.\s]+$/, '')
@@ -387,8 +384,7 @@ export function inspectPdf(bytes: Uint8Array): PdfInspection {
     normalized.includes('/Encrypt') && !/\/EncryptMetadata\s+false(?![A-Za-z0-9])/.test(normalized)
       ? true
       : /\/Filter\s*\/Standard/.test(normalized);
-  // `/JS` is the script entry key; `/JavaScript` is the action type. Names end at delimiters,
-  // so a following alphanumeric means a different name (`/JSFoo`) and must not match.
+  // `/JS` and `/JavaScript` are distinct keys; a following alphanumeric (`/JSFoo`) must not match.
   const hasJavascript = /\/(?:JavaScript|JS)(?![A-Za-z0-9])/.test(normalized);
 
   // Count /Type /Page (not /Pages) markers in the tail where the page tree lives.
@@ -422,7 +418,6 @@ function isMimeCompatible(declared: string, detected: string): boolean {
   return false;
 }
 
-/** Validates upload bytes, size limits, dimensions, and MIME consistency. */
 export function validateUpload(request: UploadValidationRequest): UploadValidationResult {
   const { kind, bytes } = request;
 

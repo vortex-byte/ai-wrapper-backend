@@ -57,7 +57,6 @@ export function errorEnvelope(input: ErrorEnvelopeInput): ErrorEnvelope {
   return body;
 }
 
-/** Maps an error to a structured error envelope. */
 export function envelopeFromError(
   error: unknown,
   options: { includeTrace: boolean; trace?: string | undefined } = { includeTrace: false },

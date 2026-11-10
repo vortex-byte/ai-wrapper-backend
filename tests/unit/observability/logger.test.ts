@@ -181,8 +181,7 @@ describe('renderTextLine', () => {
 describe('createLogger console transport', () => {
   it('writes plain-text lines to stdout, not JSON, and keeps errors off stderr', async () => {
     setConfigForTests(configWith({ NODE_ENV: 'development', LOG_TO_FILES: 'false' }));
-    // The console transport caches `console._stdout` at construction, ahead of `process.stdout`.
-    // `_stdout` is not in the public `Console` type, hence the cast.
+    // Console transport caches _stdout at construction; not in the public type, hence the cast.
     const sink = (console as unknown as { _stdout: NodeJS.WriteStream })._stdout;
     const writes: string[] = [];
     const original = sink.write.bind(sink);

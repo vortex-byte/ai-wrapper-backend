@@ -26,9 +26,7 @@ export interface GenerationRoutesDeps {
   readonly rateLimiter: RateLimiter;
 }
 
-/**
- * Generation status, cancel, and SSE stream API.
- */
+/** Generation status, cancel, and SSE stream API. */
 export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
   const { generations, conversations, orchestrator, finalizer, auth, config, rateLimiter } = deps;
   const routes = new Hono<AppEnv>();
@@ -87,13 +85,11 @@ export function generationRoutes(deps: GenerationRoutesDeps): Hono<AppEnv> {
       throw new AppError('not_found', 'Generation not found.');
     }
 
-    // Attempt in-memory cancellation if a local run exists. When it does, the run's own lifecycle
-    // finalizes the generation with accumulated text and captured provider usage.
+    // If a local run exists, its own lifecycle finalizes the generation with accumulated text and captured usage.
     const cancelledLiveRun = orchestrator.cancel(id, 'user_cancel');
 
     if (!cancelledLiveRun && (record.status === 'pending' || record.status === 'generating')) {
-      // Orphaned generation (no in-memory run, e.g. another node crashed or this node restarted):
-      // finalize it here so the conversation is not blocked until the reaper sweeps it.
+      // Orphaned generation (no in-memory run, e.g. after a crash/restart): finalize here so the conversation isn't blocked until the reaper.
       await finalizer.finalize({
         generationId: id,
         status: 'cancelled',

@@ -484,7 +484,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
 
       const { cookie, csrfToken } = await loginAs('divadmin@corp.example');
 
-      // 1. List users: only sees own division users (divAdmin and userDiv1), not userDiv2
       const listRes = await app.request(
         new Request('http://localhost/api/admin/users', {
           headers: { Cookie: cookie },
@@ -526,7 +525,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
       );
       expect(patchCrossRes.status).toBe(404);
 
-      // 3. Create user forces divisionId to caller's division, and role must be 'user'
       const createEscalateRes = await app.request(
         new Request('http://localhost/api/admin/users', {
           method: 'POST',
@@ -568,7 +566,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
       const createdUser = (await createValidRes.json()) as { data: { divisionId: string } };
       expect(createdUser.data.divisionId).toBe(div1Id);
 
-      // 4. Forbid changing role or division on own-division user
       const patchRoleRes = await app.request(
         new Request(`http://localhost/api/admin/users/${userDiv1.id}`, {
           method: 'PATCH',
@@ -597,7 +594,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
       );
       expect(patchDivRes.status).toBe(403);
 
-      // 5. Forbid self-disabling
       const selfDisableRes = await app.request(
         new Request(`http://localhost/api/admin/users/${divAdmin.id}`, {
           method: 'PATCH',
@@ -612,7 +608,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
       );
       expect(selfDisableRes.status).toBe(403);
 
-      // 6. Division admin cannot access super_admin routes (e.g. /api/admin/divisions)
       const divisionsRes = await app.request(
         new Request('http://localhost/api/admin/divisions', {
           headers: { Cookie: cookie },
@@ -662,7 +657,6 @@ describe('admin HTTP surface & RBAC (real PostgreSQL)', () => {
       );
       expect(resetSuperRes.status).toBe(404);
 
-      // 8. Non-UUID path parameters return 400 invalid_request instead of 500
       const malformedIdRes = await app.request(
         new Request('http://localhost/api/admin/users/not-a-uuid', {
           headers: { Cookie: cookie },

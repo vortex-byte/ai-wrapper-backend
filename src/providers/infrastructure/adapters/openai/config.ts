@@ -28,7 +28,6 @@ export const MAX_IMAGE_ARTIFACT_BYTES = 50 * 1024 * 1024;
 
 export const MAX_IMAGE_BASE64_LENGTH = Math.ceil((MAX_IMAGE_ARTIFACT_BYTES * 4) / 3);
 
-/** Prefix for inline generated image file identifiers. */
 export const IMAGE_FILE_PREFIX = 'image:';
 
 /** Prefix for streamed partial-preview identifiers; a partial is never the final artifact. */

@@ -30,7 +30,6 @@ export interface ModelRegistry {
   /** Resolve one provider, or `null` when unknown. */
   getProvider(providerId: string): Promise<ProviderRecord | null>;
 
-  /** Resolves runtime model and provider configuration for execution. */
   getRuntimeConfig(modelId: string): Promise<ResolvedModel | null>;
 
   /** Drop the in-process cache (called after an admin write in the same process). */

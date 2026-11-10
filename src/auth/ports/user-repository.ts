@@ -53,7 +53,7 @@ export interface UpdateUserInput {
   readonly at?: Date | undefined;
 }
 
-/** Persistence port for users. Methods return domain entities. */
+/** Methods return domain entities. */
 export interface UserRepository {
   findById(id: string, tx?: TransactionContext): Promise<User | null>;
   findByEmail(email: string, tx?: TransactionContext): Promise<User | null>;

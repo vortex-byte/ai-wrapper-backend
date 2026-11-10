@@ -1,6 +1,5 @@
 import { checkToolQuota, type ToolTariff } from '../domain/tariffs.ts';
 
-/** Enforces token tariffs on tool calls before execution. */
 export interface ToolCallVerdict {
   readonly allowed: boolean;
   readonly toolName: string;

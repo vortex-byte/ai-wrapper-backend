@@ -87,9 +87,7 @@ export interface GenerationRepository {
   /** Inserts a generation in pending status. */
   insert(input: InsertGenerationInput, tx: TransactionContext): Promise<GenerationRecord>;
 
-  /**
-   * Updates `max_output_tokens` on a generation row when output clamping applies.
-   */
+  /** Updates `max_output_tokens` when output clamping applies. */
   updateMaxOutputTokens(id: string, maxOutputTokens: number, tx: TransactionContext): Promise<void>;
 
   /** Scoped to the owner; another user's id returns `null` (mapped to 404). */

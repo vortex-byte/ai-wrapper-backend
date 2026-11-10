@@ -190,7 +190,6 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     expect(body.data.generation.streamUrl).toBe(
       `/api/generations/${body.data.generation.id}/stream`,
     );
-    // Quota reports the reservation and remaining balance.
     expect(body.data.quota).not.toBeNull();
     expect(body.data.quota?.reservedTokens).toBeGreaterThan(0);
     expect(body.data.quota?.remainingTokens).toBeGreaterThanOrEqual(0);
@@ -486,8 +485,7 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     });
     expect(empty.status).toBe(400);
 
-    // Attachments are wired in this build, so a file id that is not the caller's (or does not
-    // exist) resolves to `not_found` — never 403, never a silent drop.
+    // A file id that is not the caller's (or does not exist) resolves to `not_found` — never 403, never a silent drop.
     const file = await send(convId, auth.cookie, auth.csrfToken, {
       key: Bun.randomUUIDv7(),
       body: { parts: [{ type: 'file', fileId: Bun.randomUUIDv7() }] },
@@ -596,8 +594,7 @@ describe('Send message — transactional & idempotent (real PostgreSQL)', () => 
     const body2 = (await res2.json()) as { code: string };
     expect(body2.code).toBe('service_busy');
 
-    // This refusal came from the pre-transaction DB count gate: nothing was committed,
-    // so no generation row exists for the second conversation.
+    // The refusal came from the pre-transaction DB count gate: nothing was committed, so no generation row exists.
     const { rows: genRows } = await getPool().query(
       'SELECT id FROM generation_jobs WHERE conversation_id = $1',
       [convId2],

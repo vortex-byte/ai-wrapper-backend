@@ -75,7 +75,6 @@ describe('enterprise seed data volumes and constraints', () => {
       expect(['user', 'admin', 'super_admin']).toContain(user.role);
       expect(['active', 'disabled']).toContain(user.status);
 
-      // Invariant: admin role requires a division
       if (user.role === 'admin') {
         expect(user.divisionName).toBeTruthy();
       }
@@ -99,7 +98,6 @@ describe('enterprise seed data volumes and constraints', () => {
     const flagshipConvs = conversations.filter((c) => c.userEmail === FLAGSHIP_USER_EMAIL);
     expect(flagshipConvs.length).toBeGreaterThan(50);
 
-    // Ensure IDs are unique
     const convIds = new Set(conversations.map((c) => c.id));
     expect(convIds.size).toBe(conversations.length);
   });
@@ -110,7 +108,6 @@ describe('enterprise seed data volumes and constraints', () => {
     const flagshipMessages = messages.filter((m) => m.conversationId === FLAGSHIP_CONVERSATION_ID);
     expect(flagshipMessages.length).toBeGreaterThan(50);
 
-    // Verify monotonic seq
     for (let i = 0; i < flagshipMessages.length; i++) {
       expect(flagshipMessages[i]!.seq).toBe(i + 1);
       if (i % 2 === 0) {

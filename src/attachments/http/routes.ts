@@ -98,7 +98,6 @@ export function attachmentRoutes(input: {
     message: 'Too many uploads. Try again shortly.',
   });
 
-  /** Uploads one or more attachments to a conversation. */
   routes.post(
     '/conversations/:id/attachments',
     requireAuth(input.auth, input.config),
@@ -126,8 +125,7 @@ export function attachmentRoutes(input: {
         );
       }
 
-      // The cap applies to the cumulative request, not each file alone. Checked before any bytes
-      // are read so an oversized body is rejected up front.
+      // The cap is cumulative across the request's files, checked before any bytes are read.
       const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
       if (totalBytes > FILE_LIMITS.maxBytes) {
         throw new AppError('file_too_large');

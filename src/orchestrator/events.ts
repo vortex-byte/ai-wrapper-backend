@@ -1,6 +1,4 @@
-/**
- * SSE Event types and wire shapes for generation streaming.
- */
+/** SSE Event types and wire shapes for generation streaming. */
 
 export type SSEEventType =
   | 'generation.state'
@@ -118,9 +116,7 @@ export interface SSEFrame {
   readonly event: SSEEventType;
   readonly data: string;
   readonly byteLength: number;
-  /**
-   * When true, this is an SSE comment keep-alive (`:heartbeat`) rather than a named event.
-   */
+  /** When true, this is an SSE comment keep-alive (`:heartbeat`) rather than a named event. */
   readonly comment?: boolean | undefined;
 }
 

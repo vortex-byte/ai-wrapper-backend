@@ -4,7 +4,6 @@ import { runMigrations } from '@/db/migrate.ts';
 import { getMigrationState } from '@/db/migrations.ts';
 import { resetDatabase } from './helpers/reset.ts';
 
-/** Integration tests for migration baseline and triggers against real PostgreSQL. */
 describe('migration baseline', () => {
   beforeAll(async () => {
     await resetDatabase();
@@ -82,7 +81,6 @@ describe('migration baseline', () => {
       await resetDatabase();
     });
 
-    /** Insert a user + provider + model and return the ids needed by the trigger. */
     async function seedConversationFixture(): Promise<{
       userId: string;
       modelA: string;
@@ -167,7 +165,6 @@ describe('migration baseline', () => {
       await resetDatabase();
     });
 
-    /** A minimal user → provider → model → conversation → assistant message chain. */
     async function seedGenerationFixture(): Promise<{
       userId: string;
       modelId: string;

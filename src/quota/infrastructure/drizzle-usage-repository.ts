@@ -9,9 +9,6 @@ import type {
   UsageRepository,
 } from '../ports/usage-repository.ts';
 
-/**
- * Drizzle implementation for usage events and read aggregations.
- */
 export class DrizzleUsageRepository implements UsageRepository {
   async insertUsageEvent(input: UsageEventInput, tx: TransactionContext): Promise<void> {
     await runDb(tx)

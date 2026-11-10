@@ -7,9 +7,7 @@ export interface ReserveContext {
   readonly generationId: string;
   readonly providerId: string;
   readonly modelId: string;
-  /**
-   * Raw estimated input tokens from the context builder before estimation margin is applied.
-   */
+  /** Raw estimated input tokens from the context builder, before estimation margin is applied. */
   readonly estimatedInputTokens: number;
   /** Worst-case output requested for this call (already clamped to model caps by the caller). */
   readonly requestedMaxOutputTokens: number;
@@ -31,9 +29,7 @@ export interface ReservationHandle {
   readonly generationId: string;
   readonly reservedTokens: number;
   readonly accountId: string | null;
-  /**
-   * Effective output bound after clamping; reduced when remaining quota is low.
-   */
+  /** Effective output bound after clamping; reduced when remaining quota is low. */
   readonly effectiveMaxOutputTokens: number | null;
   /** Quota tokens still available after this reservation. */
   readonly remainingTokens: number | null;
@@ -68,8 +64,6 @@ export interface QuotaPort {
   /** Settle (consume) or release (give back) the reservation, keyed by generation. Idempotent. */
   settleOrRelease(settlement: Settlement, tx: TransactionContext): Promise<void>;
 
-  /**
-   * Live tokens remaining for a user. Returns null when no current-period account exists.
-   */
+  /** Live tokens remaining for a user; null when no current-period account exists. */
   remainingTokens(userId: string): Promise<number | null>;
 }

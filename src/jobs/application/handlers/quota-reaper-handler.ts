@@ -10,9 +10,7 @@ export interface QuotaReaperHandlerDeps {
   readonly clock: Clock;
 }
 
-/**
- * Sweeps active reservations past their expiration timestamp.
- */
+/** Sweeps active reservations past their expiration timestamp. */
 export function createQuotaReaperHandler(deps: QuotaReaperHandlerDeps) {
   return async (): Promise<{ reapedCount: number; expiredCount: number }> => {
     const now = deps.clock.now();

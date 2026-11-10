@@ -254,8 +254,7 @@ describe('Generation HTTP Surface & Streaming (P2-5 & P2-6)', () => {
     );
     expect(cancelRes2.status).toBe(202);
 
-    // Wait for the background execution/finalizer to complete. Finalization is asynchronous now:
-    // the route only signals the abort and the run owns the terminal write with the real usage.
+    // Finalization is asynchronous: the route only signals the abort and the run owns the terminal write, so poll for it.
     const pool = getPool();
     let row: { status: string; cancel_reason: string } | undefined;
     for (let attempt = 0; attempt < 50; attempt++) {
@@ -359,8 +358,7 @@ describe('Generation HTTP Surface & Streaming (P2-5 & P2-6)', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    // Keep failing so the retried assistant messages stay retryable (the point of this test is the
-    // supersession chain, not the success path).
+    // Keep failing so the retried assistant messages stay retryable — the point is the supersession chain, not the success path.
     (services.providers.get('fake') as unknown as { scenario: string }).scenario = 'error_before_output';
 
     const retryRes = await app.request(
@@ -398,7 +396,6 @@ describe('Generation HTTP Surface & Streaming (P2-5 & P2-6)', () => {
     );
     expect(oldRows[0]?.superseded_by).toBe(newAssistantId);
 
-    // List messages - superseded message must be hidden by default
     const listRes = await app.request(
       new Request(`http://localhost/api/conversations/${convId}/messages`, {
         headers: { Cookie: auth.cookie },

@@ -278,7 +278,6 @@ describe('admin service', () => {
         makeUser({ id: 'admin-div-1', role: 'admin', divisionId: 'div-1', status: 'active' }),
       );
 
-      // Attempt to create super_admin or admin fails with forbidden
       await expect(
         admin.createUser({
           email: 'admin2@corp.example',
@@ -289,7 +288,6 @@ describe('admin service', () => {
         }),
       ).rejects.toThrow('Division administrators can only provision users with the user role.');
 
-      // Valid creation forces divisionId = caller.divisionId
       const created = await admin.createUser({
         email: 'user-in-div1@corp.example',
         displayName: 'User In Div 1',
@@ -312,10 +310,8 @@ describe('admin service', () => {
         makeUser({ id: 'user-div-2', role: 'user', divisionId: 'div-2', status: 'active' }),
       );
 
-      // getUser returns 404
       await expect(admin.getUser('user-div-2', div1Caller)).rejects.toThrow('User not found.');
 
-      // updateUser returns 404
       await expect(
         admin.updateUser({
           id: 'user-div-2',
@@ -324,7 +320,6 @@ describe('admin service', () => {
         }),
       ).rejects.toThrow('User not found.');
 
-      // resetUserPassword returns 404
       await expect(
         admin.resetUserPassword({
           id: 'user-div-2',

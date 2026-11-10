@@ -36,8 +36,7 @@ describe('extractTextForKind (anydoc)', () => {
   });
 
   it('maps anydoc failures to a failed result instead of throwing', async () => {
-    // Not valid CSV content? CSV is signature-less: anydoc will still parse it as text-ish
-    // or fail gracefully — either way extractTextForKind must not throw.
+    // CSV is signature-less: anydoc will parse it as text-ish or fail gracefully — either way extractTextForKind must not throw.
     const result = await extractTextForKind({ kind: 'csv', bytes: new Uint8Array([0xff, 0xfe, 0x00, 0x01]) });
     expect(['done', 'failed']).toContain(result.status);
   });

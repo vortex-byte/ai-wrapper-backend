@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { interceptToolCall } from '@/quota/application/tool-interceptor.ts';
 
-/** Tests tool call quota interception before provider billing execution. */
 describe('interceptToolCall (pre-execution tool quota gate)', () => {
   it('allows a tariffed tool when remaining quota covers the tariff', () => {
     const verdict = interceptToolCall('image_generation', 3_500);
@@ -20,8 +19,6 @@ describe('interceptToolCall (pre-execution tool quota gate)', () => {
   });
 
   it('intercepts search grounding below its own (smaller) tariff', () => {
-    // 3,000 remaining covers a 3,500-token image but not... wait — it does not; verify
-    // the search tariff (500) independently.
     expect(interceptToolCall('web_search', 500).allowed).toBe(true);
     const blocked = interceptToolCall('web_search', 499);
     expect(blocked.allowed).toBe(false);

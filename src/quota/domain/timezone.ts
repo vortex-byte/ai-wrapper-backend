@@ -1,6 +1,4 @@
-/**
- * Calendar-month quota period boundaries in the configured quota timezone.
- */
+/** Calendar-month quota period boundaries in the configured quota timezone. */
 
 /** The pieces `Intl.DateTimeFormat` gives us, as numbers, from a UTC instant. */
 interface ZoneParts {

@@ -301,7 +301,6 @@ export const fileExtractions = pgTable('file_extractions', {
     .default(sql`now()`),
 });
 
-/** Generation jobs and execution records. */
 export const generationJobs = pgTable('generation_jobs', {
   id: uuid('id').primaryKey(),
   requestId: text('request_id').notNull().unique(),

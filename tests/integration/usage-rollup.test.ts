@@ -132,7 +132,6 @@ describe('UsageRepository.rollupDay integration test', () => {
     const ctx = await seedPrerequisites();
     const day = '2026-10-21';
 
-    // Seed two events on the same day for the same user and model
     await seedGenerationAndUsageEvent(ctx, {
       day,
       outcome: 'completed',
@@ -157,7 +156,6 @@ describe('UsageRepository.rollupDay integration test', () => {
     const rolled = await usageRepo.rollupDay(day);
     expect(rolled).toBe(1);
 
-    // Verify row in usage_daily
     const pool = getPool();
     const res = await pool.query<{
       day: string;

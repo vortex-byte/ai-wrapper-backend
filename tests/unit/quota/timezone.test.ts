@@ -31,8 +31,7 @@ describe('quota period boundaries', () => {
   });
 
   it('handles a DST-observing zone across a spring-forward boundary', () => {
-    // America/New_York: March 2026 — DST starts Mar 8; month start is local midnight Mar 1
-    // = 05:00Z (EST, UTC-5); April 1 = 04:00Z (EDT, UTC-4).
+    // America/New_York: local midnight is 05:00Z in March (EST), 04:00Z in April (EDT).
     const march = new Date('2026-03-15T12:00:00Z');
     const april = new Date('2026-04-15T12:00:00Z');
     expect(periodStartFor(march, 'America/New_York').toISOString()).toBe(

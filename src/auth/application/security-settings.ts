@@ -13,11 +13,7 @@ export interface SessionPolicies {
   readonly sessionPolicy: SessionPolicy;
 }
 
-/**
- * Builds the policies a login/session resolution needs, falling back per-field to
- * `DEFAULT_SETTINGS.security` when the setting row is missing or predates a field.
- * `absoluteMinutes` stays boot-time configuration — it caps the cookie lifetime.
- */
+/** Falls back per-field to `DEFAULT_SETTINGS.security`; `absoluteMinutes` stays boot-time config (caps the cookie lifetime). */
 export function buildSessionPolicies(
   stored: Partial<SecurityConfig> | undefined,
   absoluteMinutes: number,

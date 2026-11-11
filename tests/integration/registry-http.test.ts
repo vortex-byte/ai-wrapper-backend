@@ -60,7 +60,12 @@ const CAPABILITIES = {
   documents: { pdf: true },
 };
 
-async function createProvider(cookie: string, csrfToken: string, key = 'openai-main') {
+async function createProvider(
+  cookie: string,
+  csrfToken: string,
+  key = 'openai-main',
+  displayName = 'OpenAI (main)',
+) {
   const res = await app.request(
     new Request('http://localhost/api/admin/providers', {
       method: 'POST',
@@ -72,7 +77,7 @@ async function createProvider(cookie: string, csrfToken: string, key = 'openai-m
       },
       body: JSON.stringify({
         key,
-        displayName: 'OpenAI (main)',
+        displayName,
         adapter: 'openai',
         secretRef: 'OPENAI_API_KEY',
         status: 'active',
@@ -108,6 +113,43 @@ async function createModel(
     }),
   );
   return res;
+}
+
+async function readId(res: Response): Promise<string> {
+  return ((await res.json()) as { data: { id: string } }).data.id;
+}
+
+interface WireModelRow {
+  readonly id: string;
+  readonly providerId: string;
+  readonly displayName: string;
+  readonly kind: string;
+  readonly status: string;
+}
+
+async function listModels(
+  cookie: string,
+  params: Record<string, string> = {},
+): Promise<{
+  res: Response;
+  body: {
+    status: string;
+    code?: string;
+    data: { items: WireModelRow[]; nextCursor: string | null };
+  };
+}> {
+  const search = new URLSearchParams(params).toString();
+  const res = await app.request(
+    new Request(`http://localhost/api/admin/models${search === '' ? '' : `?${search}`}`, {
+      headers: { Cookie: cookie },
+    }),
+  );
+  const body = (await res.json()) as {
+    status: string;
+    code?: string;
+    data: { items: WireModelRow[]; nextCursor: string | null };
+  };
+  return { res, body };
 }
 
 describe('registry admin HTTP surface (real PostgreSQL)', () => {
@@ -320,6 +362,128 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
       `SELECT action FROM audit_logs ORDER BY id`,
     );
     expect(rows.map((row) => row.action)).toContain('model.delete');
+  });
+
+  it('filters the model list by provider, kind, and status', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const openaiId = await readId(await createProvider(cookie, csrfToken, 'openai-main', 'OpenAI'));
+    const anthropicId = await readId(
+      await createProvider(cookie, csrfToken, 'anthropic-main', 'Anthropic'),
+    );
+
+    await createModel(cookie, csrfToken, openaiId, {
+      apiModelId: 'gpt-4o',
+      displayName: 'GPT-4o',
+    });
+    await createModel(cookie, csrfToken, openaiId, {
+      apiModelId: 'gpt-4o-mini',
+      displayName: 'GPT-4o mini',
+      status: 'disabled',
+    });
+    await createModel(cookie, csrfToken, anthropicId, {
+      apiModelId: 'dall-e-3',
+      displayName: 'DALL-E 3',
+      config: { kind: 'image' },
+    });
+
+    const byProvider = await listModels(cookie, { providerId: openaiId });
+    expect(byProvider.body.data.items).toHaveLength(2);
+    expect(byProvider.body.data.items.every((model) => model.providerId === openaiId)).toBe(true);
+
+    const images = await listModels(cookie, { kind: 'image' });
+    expect(images.body.data.items.map((model) => model.displayName)).toEqual(['DALL-E 3']);
+
+    const chats = await listModels(cookie, { kind: 'chat' });
+    expect(chats.body.data.items).toHaveLength(2);
+
+    const disabled = await listModels(cookie, { status: 'disabled' });
+    expect(disabled.body.data.items.map((model) => model.displayName)).toEqual(['GPT-4o mini']);
+
+    const combined = await listModels(cookie, {
+      providerId: openaiId,
+      kind: 'chat',
+      status: 'active',
+    });
+    expect(combined.body.data.items.map((model) => model.displayName)).toEqual(['GPT-4o']);
+  });
+
+  it('searches the model list across display name, api id, and provider', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const openaiId = await readId(await createProvider(cookie, csrfToken, 'openai-main', 'OpenAI'));
+    const anthropicId = await readId(
+      await createProvider(cookie, csrfToken, 'anthropic-main', 'Anthropic'),
+    );
+    await createModel(cookie, csrfToken, openaiId, {
+      apiModelId: 'gpt-4o',
+      displayName: 'GPT-4o',
+    });
+    await createModel(cookie, csrfToken, openaiId, {
+      apiModelId: 'gpt-4o-mini',
+      displayName: 'GPT-4o mini',
+    });
+    await createModel(cookie, csrfToken, anthropicId, {
+      apiModelId: 'dall-e-3',
+      displayName: 'DALL-E 3',
+    });
+
+    const byProvider = await listModels(cookie, { query: 'anthro' });
+    expect(byProvider.body.data.items.map((model) => model.displayName)).toEqual(['DALL-E 3']);
+
+    const byDisplayName = await listModels(cookie, { query: 'mini' });
+    expect(byDisplayName.body.data.items.map((model) => model.displayName)).toEqual(['GPT-4o mini']);
+
+    const byApiId = await listModels(cookie, { query: 'dall-e' });
+    expect(byApiId.body.data.items.map((model) => model.displayName)).toEqual(['DALL-E 3']);
+  });
+
+  it('paginates the model list with a keyset cursor', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    const providerId = await readId(await createProvider(cookie, csrfToken));
+
+    for (const suffix of ['a', 'b', 'c']) {
+      expect(
+        (
+          await createModel(cookie, csrfToken, providerId, {
+            apiModelId: `model-${suffix}`,
+            displayName: `Model ${suffix}`,
+          })
+        ).status,
+      ).toBe(201);
+    }
+
+    const first = await listModels(cookie, { limit: '2' });
+    expect(first.body.data.items).toHaveLength(2);
+    const cursor = first.body.data.nextCursor;
+    expect(cursor).not.toBeNull();
+
+    const second = await listModels(cookie, { limit: '2', cursor: cursor ?? '' });
+    expect(second.body.data.items).toHaveLength(1);
+    expect(second.body.data.nextCursor).toBeNull();
+
+    const all = await listModels(cookie);
+    expect([...first.body.data.items, ...second.body.data.items].map((model) => model.id)).toEqual(
+      all.body.data.items.map((model) => model.id),
+    );
+    expect(new Set(all.body.data.items.map((model) => model.id)).size).toBe(3);
+  });
+
+  it('rejects an invalid kind or cursor with 400 invalid_request', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+    expect((await createProvider(cookie, csrfToken)).status).toBe(201);
+
+    const badKind = await listModels(cookie, { kind: 'video' });
+    expect(badKind.res.status).toBe(400);
+    expect(badKind.body.code).toBe('invalid_request');
+
+    const badCursor = await listModels(cookie, { cursor: 'not-a-cursor' });
+    expect(badCursor.res.status).toBe(400);
+    expect(badCursor.body.code).toBe('invalid_request');
   });
 
   it('allows deleting a provider once its last model is removed', async () => {

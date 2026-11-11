@@ -76,6 +76,9 @@ class CountingRepository implements RegistryRepository {
   async findAllModels(): Promise<ModelRecord[]> {
     return this.models;
   }
+  async findModels(): Promise<{ items: ModelRecord[]; nextCursor: null }> {
+    return { items: this.models, nextCursor: null };
+  }
   async findProviderById(id: string): Promise<ProviderRecord | null> {
     return this.providers.find((p) => p.id === id) ?? null;
   }

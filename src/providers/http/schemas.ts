@@ -106,6 +106,33 @@ export const UpdateModelBodySchema = z
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Provide at least one field.' });
 
+const ModelKindSchema = z.enum(['chat', 'image']);
+
+/** Validates `base64url("<sort-order>|<uuid>")` cursor format. */
+const ModelCursorSchema = z
+  .string()
+  .refine((value) => {
+    try {
+      const decoded = Buffer.from(value, 'base64url').toString('utf8');
+      const [sortOrder, id] = decoded.split('|');
+      if (sortOrder === undefined || id === undefined) return false;
+      if (!/^\d+$/.test(sortOrder)) return false;
+      return z.uuid().safeParse(id).success;
+    } catch {
+      return false;
+    }
+  }, 'The cursor is invalid or expired.')
+  .optional();
+
+export const ListModelsQuerySchema = z.object({
+  query: z.string().trim().optional(),
+  providerId: z.uuid().optional(),
+  kind: ModelKindSchema.optional(),
+  status: ModelStatusSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: ModelCursorSchema,
+});
+
 export const SetPriceBodySchema = z.object({
   effectiveFrom: z.iso.datetime().optional(),
   inputMicrosPerMtok: z.number().int().min(0).max(1_000_000_000_000),

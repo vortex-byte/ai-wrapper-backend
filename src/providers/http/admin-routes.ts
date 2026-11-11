@@ -20,6 +20,7 @@ import type { RegistryAdminService } from '../application/registry-admin-service
 import {
   CreateModelBodySchema,
   CreateProviderBodySchema,
+  ListModelsQuerySchema,
   SetPriceBodySchema,
   UpdateModelBodySchema,
   UpdateProviderBodySchema,
@@ -119,8 +120,12 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
   });
 
   routes.get('/models', async (c) => {
-    const models = await registryAdmin.listModels();
-    return c.json(ok({ items: models.map(toWireModel) }));
+    const parsed = ListModelsQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) {
+      throw new AppError('invalid_request', 'Invalid query parameters.');
+    }
+    const result = await registryAdmin.listModels(parsed.data);
+    return c.json(ok({ items: result.items.map(toWireModel), nextCursor: result.nextCursor }));
   });
 
   routes.post('/models', async (c) => {

@@ -1,13 +1,32 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, ilike, or, sql, type SQL } from 'drizzle-orm';
 import { runDb } from '@/db/client.ts';
-import { aiModelPrices, aiModels, aiProviders, conversations, generationJobs, usageEvents } from '@/db/schema.ts';
+import { AppError } from '@/errors.ts';
+import {
+  aiModelPrices,
+  aiModels,
+  aiProviders,
+  conversations,
+  generationJobs,
+  usageEvents,
+} from '@/db/schema.ts';
 import type { TransactionContext } from '@/db/tx.ts';
 import type { ModelCapabilities } from '../domain/capabilities.ts';
-import { parseCapabilities, parseConfig, toCapabilitiesJson } from '../domain/capabilities-schema.ts';
-import type { ModelRecord, ModelStatus, ProviderRecord, ProviderStatus } from '../domain/registry.ts';
+import {
+  parseCapabilities,
+  parseConfig,
+  toCapabilitiesJson,
+} from '../domain/capabilities-schema.ts';
+import type {
+  ModelRecord,
+  ModelStatus,
+  ProviderRecord,
+  ProviderStatus,
+} from '../domain/registry.ts';
 import type {
   CreateModelInput,
   CreateProviderInput,
+  ListModelsQuery,
+  ListModelsResult,
   ModelPrice,
   RegistryRepository,
   UpdateModelInput,
@@ -131,11 +150,28 @@ function toModel(row: ModelRow): ModelRecord {
 
 /** Model columns joined with the provider columns the registry records carry. */
 function modelSelect(db: ReturnType<typeof runDb>) {
-  return db.select(modelColumns).from(aiModels).innerJoin(aiProviders, eq(aiModels.providerId, aiProviders.id));
+  return db
+    .select(modelColumns)
+    .from(aiModels)
+    .innerJoin(aiProviders, eq(aiModels.providerId, aiProviders.id));
 }
 
 function capabilitiesToJson(capabilities: ModelCapabilities): Record<string, unknown> {
   return toCapabilitiesJson(capabilities);
+}
+
+function encodeModelCursor(sortOrder: number, id: string): string {
+  return Buffer.from(`${sortOrder}|${id}`).toString('base64url');
+}
+
+function decodeModelCursor(cursor: string): { sortOrder: number; id: string } {
+  const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+  const [sortOrder, id] = decoded.split('|');
+  const parsed = sortOrder === undefined ? Number.NaN : Number.parseInt(sortOrder, 10);
+  if (sortOrder === undefined || id === undefined || Number.isNaN(parsed)) {
+    throw new AppError('invalid_request', 'Invalid keyset cursor');
+  }
+  return { sortOrder: parsed, id };
 }
 
 export class DrizzleRegistryRepository implements RegistryRepository {
@@ -226,9 +262,56 @@ export class DrizzleRegistryRepository implements RegistryRepository {
   }
 
   async findAllModels(tx?: TransactionContext): Promise<ModelRecord[]> {
-    const rows = await modelSelect(runDb(tx))
-      .orderBy(asc(aiModels.sortOrder), asc(aiModels.id));
+    const rows = await modelSelect(runDb(tx)).orderBy(asc(aiModels.sortOrder), asc(aiModels.id));
     return rows.map(toModel);
+  }
+
+  async findModels(query: ListModelsQuery, tx?: TransactionContext): Promise<ListModelsResult> {
+    const limit = Math.min(query.limit ?? 50, 100);
+    const conditions: SQL[] = [];
+
+    if (query.providerId !== undefined) {
+      conditions.push(eq(aiModels.providerId, query.providerId));
+    }
+    if (query.status !== undefined) {
+      conditions.push(eq(aiModels.status, query.status));
+    }
+    if (query.kind === 'image') {
+      conditions.push(sql`(${aiModels.config} ->> 'kind') = 'image'`);
+    } else if (query.kind === 'chat') {
+      conditions.push(sql`(${aiModels.config} ->> 'kind') IS DISTINCT FROM 'image'`);
+    }
+    if (query.query !== undefined) {
+      const pattern = `%${query.query.trim()}%`;
+      const search = or(
+        ilike(aiModels.displayName, pattern),
+        ilike(aiModels.apiModelId, pattern),
+        ilike(aiProviders.displayName, pattern),
+        ilike(aiProviders.key, pattern),
+      );
+      if (search !== undefined) conditions.push(search);
+    }
+    if (query.cursor !== undefined) {
+      const parsed = decodeModelCursor(query.cursor);
+      const keyset = or(
+        gt(aiModels.sortOrder, parsed.sortOrder),
+        and(eq(aiModels.sortOrder, parsed.sortOrder), gt(aiModels.id, parsed.id)),
+      );
+      if (keyset !== undefined) conditions.push(keyset);
+    }
+
+    const rows = await modelSelect(runDb(tx))
+      .where(and(...conditions))
+      .orderBy(asc(aiModels.sortOrder), asc(aiModels.id))
+      .limit(limit + 1);
+
+    const hasNext = rows.length > limit;
+    const itemRows = hasNext ? rows.slice(0, limit) : rows;
+    const last = itemRows[itemRows.length - 1];
+    const nextCursor =
+      hasNext && last !== undefined ? encodeModelCursor(last.sortOrder, last.id) : null;
+
+    return { items: itemRows.map(toModel), nextCursor };
   }
 
   async findModelById(id: string, tx?: TransactionContext): Promise<ModelRecord | null> {
@@ -278,7 +361,8 @@ export class DrizzleRegistryRepository implements RegistryRepository {
     if (input.displayName !== undefined) updates.displayName = input.displayName;
     if (input.description !== undefined) updates.description = input.description;
     if (input.status !== undefined) updates.status = input.status;
-    if (input.capabilities !== undefined) updates.capabilities = capabilitiesToJson(input.capabilities);
+    if (input.capabilities !== undefined)
+      updates.capabilities = capabilitiesToJson(input.capabilities);
     if (input.contextWindow !== undefined) updates.contextWindow = input.contextWindow;
     if (input.maxOutputTokens !== undefined) updates.maxOutputTokens = input.maxOutputTokens;
     if (input.defaultMaxOutputTokens !== undefined) {

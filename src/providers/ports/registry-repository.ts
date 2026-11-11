@@ -1,5 +1,5 @@
 import type { TransactionContext } from '@/db/tx.ts';
-import type { ModelRecord, ProviderRecord } from '../domain/registry.ts';
+import type { ModelKind, ModelRecord, ModelStatus, ProviderRecord } from '../domain/registry.ts';
 import type { ModelCapabilities } from '../domain/capabilities.ts';
 
 /** Persistence port for provider and model registry entities. */
@@ -54,6 +54,20 @@ export interface UpdateModelInput {
   readonly sortOrder?: number;
 }
 
+export interface ListModelsQuery {
+  readonly query?: string | undefined;
+  readonly providerId?: string | undefined;
+  readonly kind?: ModelKind | undefined;
+  readonly status?: ModelStatus | undefined;
+  readonly limit?: number | undefined;
+  readonly cursor?: string | undefined;
+}
+
+export interface ListModelsResult {
+  readonly items: ModelRecord[];
+  readonly nextCursor: string | null;
+}
+
 export interface UpsertPriceInput {
   readonly id: string;
   readonly modelId: string;
@@ -85,6 +99,8 @@ export interface RegistryRepository {
 
   /** Every model joined with its provider (the shape the registry cache stores). */
   findAllModels(tx?: TransactionContext): Promise<ModelRecord[]>;
+  /** Filtered, keyset-paginated model listing for the admin surface. */
+  findModels(query: ListModelsQuery, tx?: TransactionContext): Promise<ListModelsResult>;
   findModelById(id: string, tx?: TransactionContext): Promise<ModelRecord | null>;
   findModelByProviderAndApiId(
     providerId: string,

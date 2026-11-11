@@ -23,7 +23,7 @@ import type {
 import type { ModelRegistry } from '../ports/model-registry.ts';
 import type { ProviderAdapter, ProviderModelInfo } from '../ports/provider-adapter.ts';
 import type { ProviderRegistry } from '../ports/provider-registry.ts';
-import type { ModelPrice, RegistryRepository } from '../ports/registry-repository.ts';
+import type { ModelPrice, ListModelsQuery, ListModelsResult, RegistryRepository } from '../ports/registry-repository.ts';
 import type { SecretResolver } from '../ports/secret-resolver.ts';
 
 /** Admin service for managing providers, models, pricing, and health checks. */
@@ -129,7 +129,7 @@ export interface ProviderHealth {
 
 export interface RegistryAdminService {
   listProviders(): Promise<readonly ProviderRecord[]>;
-  listModels(): Promise<readonly ModelRecord[]>;
+  listModels(query: ListModelsQuery): Promise<ListModelsResult>;
   listPrices(modelId: string): Promise<readonly ModelPrice[]>;
   createProvider(input: CreateProviderInput): Promise<ProviderRecord>;
   updateProvider(input: UpdateProviderInput): Promise<ProviderRecord>;
@@ -207,8 +207,8 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       return deps.repository.findAllProviders();
     },
 
-    async listModels() {
-      return deps.repository.findAllModels();
+    async listModels(query) {
+      return deps.repository.findModels(query);
     },
 
     async listPrices(modelId) {

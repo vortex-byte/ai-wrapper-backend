@@ -1453,6 +1453,17 @@ Writes an `audit_logs` row (`action: "provider.delete"`) and invalidates the reg
 ```
 
 `GET /api/admin/models` (`200`):
+
+**Query parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `query` | string | No | Case-insensitive match on model display name, API model ID, provider display name, or provider key. |
+| `providerId` | string (UUIDv7) | No | Only models belonging to this provider. |
+| `kind` | string (`chat` \| `image`) | No | Only models of this kind. `chat` matches every model whose `config.kind` is not `"image"`. |
+| `status` | string (`active` \| `disabled`) | No | Only models with this status. |
+| `limit` | integer (1–100) | No | Page size (default `50`). |
+| `cursor` | string | No | Keyset cursor from a previous `nextCursor`; ordered by `sortOrder`, then `id`. |
+
 ```json
 { "status": "ok", "message": "", "data": {
     "items": [
@@ -1462,7 +1473,8 @@ Writes an `audit_logs` row (`action: "provider.delete"`) and invalidates the reg
                                               "contextWindow": 200000, "maxOutputTokens": 8192, "schemaVersion": 1 },
         "contextWindow": 200000, "maxOutputTokens": 8192, "defaultMaxOutputTokens": 4096,
         "quotaWeight": 1.0, "sortOrder": 1 }
-    ] } }
+    ],
+    "nextCursor": null } }
 ```
 
 `PATCH /api/admin/models/:id` (`200`):

@@ -23,6 +23,8 @@ import {
   numberFromConfig,
   requireApiKey,
 } from '../shared.ts';
+import { getLogger } from '@/observability/logger.ts';
+import { MAX_FILE_EXPIRY_SECONDS } from './config.ts';
 import {
   apiBase,
   defaultClientFactory,
@@ -173,8 +175,20 @@ export class OpenAIAdapter implements ProviderAdapter {
     form.append('file', new Blob([file.bytes], { type: file.mimeType }), file.filename);
     // Without an explicit policy, `user_data` files persist until deleted manually.
     if (ctx.fileRetentionDays !== undefined && ctx.fileRetentionDays > 0) {
+      const requestedSeconds = ctx.fileRetentionDays * 86_400;
+      const seconds = Math.min(requestedSeconds, MAX_FILE_EXPIRY_SECONDS);
+      if (seconds < requestedSeconds) {
+        getLogger().warn(
+          {
+            component: 'provider.openai',
+            requestedSeconds,
+            cappedSeconds: seconds,
+          },
+          'capped the provider file expiry at the API maximum',
+        );
+      }
       form.append('expires_after[anchor]', 'created_at');
-      form.append('expires_after[seconds]', String(ctx.fileRetentionDays * 86_400));
+      form.append('expires_after[seconds]', String(seconds));
     }
 
     const response = await fetch(`${apiBase(ctx.provider)}/files`, {

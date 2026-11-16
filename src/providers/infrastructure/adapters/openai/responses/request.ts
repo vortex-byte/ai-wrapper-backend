@@ -4,10 +4,12 @@ import {
   CURATED_SKILL_IDS,
   IMAGE_GENERATION_OPTION_KEYS,
   IMAGE_GENERATION_OPTION_VALUES,
+  MAX_CONTAINER_FILE_IDS,
   MAX_OUTPUT_COMPRESSION,
   MAX_PARTIAL_IMAGES,
   MIN_OUTPUT_COMPRESSION,
   OPENAI_OUTPUT_DIR,
+  resolveReasoningEffort,
 } from '../config.ts';
 import { getLogger } from '@/observability/logger.ts';
 import { supportsSamplingParams } from '../chat/request.ts';
@@ -287,7 +289,19 @@ function buildResponsesTools(req: NormalizedChatRequest): unknown[] {
   const container = req.container;
   if (container === undefined) return tools;
 
-  const fileIds = (req.inputFiles ?? []).map((file) => file.providerFileId);
+  const configuredFileIds = (req.inputFiles ?? []).map((file) => file.providerFileId);
+  if (configuredFileIds.length > MAX_CONTAINER_FILE_IDS) {
+    getLogger().warn(
+      {
+        component: 'provider.openai',
+        providerId: req.provider.providerId,
+        modelId: req.model.modelId,
+        dropped: configuredFileIds.length - MAX_CONTAINER_FILE_IDS,
+      },
+      'dropped input files beyond the container limit',
+    );
+  }
+  const fileIds = configuredFileIds.slice(0, MAX_CONTAINER_FILE_IDS);
   const skills = resolveSkills(req);
   const wantsShell = skills.length > 0 && supportsSkillsShell(req);
 
@@ -315,7 +329,7 @@ function buildResponsesTools(req: NormalizedChatRequest): unknown[] {
 export async function buildResponsesRequest(
   req: NormalizedChatRequest,
 ): Promise<Record<string, unknown>> {
-  const reasoningEffort = req.reasoningEffort ?? req.model.config['reasoningEffort'];
+  const reasoningEffort = resolveReasoningEffort(req);
   const sampling = supportsSamplingParams(req.model, reasoningEffort);
   const tools = buildResponsesTools(req);
 

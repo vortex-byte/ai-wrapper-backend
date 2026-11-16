@@ -62,6 +62,28 @@ describe('chat/request — request shape', () => {
     expect(params['temperature']).toBeUndefined();
   });
 
+  it('drops a registry reasoning effort the provider would reject', () => {
+    const req = makeOpenAIRequest({ temperature: 0.4 });
+    const params = buildRequest(
+      { ...req, model: { ...req.model, config: { reasoningEffort: 'ultra' } } },
+      buildMessages(req),
+    ) as Record<string, unknown>;
+
+    expect(params['reasoning_effort']).toBeUndefined();
+    expect(params['temperature']).toBe(0.4);
+  });
+
+  it('forwards none because it keeps sampling available', () => {
+    const req = makeOpenAIRequest({ temperature: 0.4 });
+    const params = buildRequest(
+      { ...req, model: { ...req.model, config: { reasoningEffort: 'none' } } },
+      buildMessages(req),
+    ) as Record<string, unknown>;
+
+    expect(params['reasoning_effort']).toBe('none');
+    expect(params['temperature']).toBe(0.4);
+  });
+
   it('exposes the same shape through the adapter port', () => {
     const adapter = new OpenAIAdapter(() => mockChatClient([]));
     const params = adapter.toProviderRequest(makeOpenAIRequest()) as Record<string, unknown>;

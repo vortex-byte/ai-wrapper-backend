@@ -1,11 +1,12 @@
 import type { ModelRuntimeConfig, NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import { isAllowedReasoningEffort, resolveReasoningEffort } from '../config.ts';
 import type { FinishReason, OpenAIContentPart, OpenAIMessage } from '../types.ts';
 
 export function supportsSamplingParams(model: ModelRuntimeConfig, effort?: unknown): boolean {
   const override = model.config['supportsSamplingParams'];
   if (typeof override === 'boolean') return override;
   const effectiveEffort = effort === undefined ? model.config['reasoningEffort'] : effort;
-  if (typeof effectiveEffort === 'string' && effectiveEffort !== 'none') return false;
+  if (isAllowedReasoningEffort(effectiveEffort) && effectiveEffort !== 'none') return false;
   return !/^(o[0-9]|gpt-[56])/.test(model.apiModelId);
 }
 
@@ -38,7 +39,7 @@ export function buildRequest(
   req: NormalizedChatRequest,
   messages: OpenAIMessage[],
 ): Record<string, unknown> {
-  const reasoningEffort = req.reasoningEffort ?? req.model.config['reasoningEffort'];
+  const reasoningEffort = resolveReasoningEffort(req);
   const sampling = supportsSamplingParams(req.model, reasoningEffort);
 
   return {

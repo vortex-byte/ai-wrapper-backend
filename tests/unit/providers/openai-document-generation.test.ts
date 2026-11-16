@@ -171,6 +171,55 @@ describe('OpenAIAdapter — document generation (Unit)', () => {
     expect(params['stream']).toBe(true);
   });
 
+  it('drops a registry reasoning effort the provider would reject', async () => {
+    const fake = fakeClient(textTurn);
+    const adapter = new OpenAIAdapter(() => fake.client);
+    const base = makeRequest({ container: { codeExecution: true } });
+
+    await collect(adapter, {
+      ...base,
+      model: { ...base.model, config: { reasoningEffort: 'ultra' } },
+    });
+
+    expect((fake.responsesCalls[0] ?? {})['reasoning']).toBeUndefined();
+  });
+
+  it('caps the container file ids at the provider limit', async () => {
+    const fake = fakeClient(textTurn);
+    const adapter = new OpenAIAdapter(() => fake.client);
+    const inputFiles = Array.from({ length: 51 }, (_, index) => ({
+      providerFileId: `file-${index}`,
+      filename: `doc-${index}.csv`,
+      mimeType: 'text/csv',
+    }));
+
+    await collect(adapter, makeRequest({ container: { codeExecution: true }, inputFiles }));
+
+    const tools = (fake.responsesCalls[0]?.['tools'] ?? []) as Array<Record<string, unknown>>;
+    expect((tools[0]?.['container'] as Record<string, unknown>)['file_ids']).toHaveLength(50);
+  });
+
+  it('caps the shell environment file ids at the provider limit', async () => {
+    const fake = fakeClient(textTurn);
+    const adapter = new OpenAIAdapter(() => fake.client);
+    const inputFiles = Array.from({ length: 51 }, (_, index) => ({
+      providerFileId: `file-${index}`,
+      filename: `doc-${index}.csv`,
+      mimeType: 'text/csv',
+    }));
+
+    await collect(
+      adapter,
+      withSkillsShell(
+        makeRequest({ container: { codeExecution: true, skills: ['xlsx'] }, inputFiles }),
+      ),
+    );
+
+    const tools = (fake.responsesCalls[0]?.['tools'] ?? []) as Array<Record<string, unknown>>;
+    const environment = tools[0]?.['environment'] as Record<string, unknown>;
+    expect(environment['file_ids']).toHaveLength(50);
+  });
+
   it('falls back to code_interpreter when no skill maps to an OpenAI skill id', async () => {
     const fake = fakeClient(textTurn);
     const adapter = new OpenAIAdapter(() => fake.client);
@@ -513,6 +562,47 @@ describe('OpenAIAdapter — document generation (Unit)', () => {
         filename: 'summary.docx',
         sizeBytes: 512,
         mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      },
+    ]);
+  });
+
+  it('only sweeps container files the assistant created', async () => {
+    stubFetch(() =>
+      jsonResponse({
+        data: [
+          { id: 'cfile_in', path: '/mnt/data/input.csv', source: 'user', bytes: 10 },
+          { id: 'cfile_orphan', path: '/mnt/data/orphan.txt', bytes: 12 },
+          { id: 'cfile_ok', path: '/mnt/data/report.csv', source: 'assistant', bytes: 20 },
+        ],
+      }),
+    );
+
+    const fake = fakeClient([
+      { type: 'response.created', response: { id: 'resp_src' } },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: {
+          id: 'ci_1',
+          type: 'code_interpreter_call',
+          container_id: 'cntr_1',
+          status: 'completed',
+        },
+      },
+      { type: 'response.completed', response: { id: 'resp_src', output: [] } },
+    ]);
+    const adapter = new OpenAIAdapter(() => fake.client);
+
+    const events = await collect(adapter, makeRequest({ container: { codeExecution: true } }));
+    const artifacts = events.filter((event) => event.type === 'artifact_emitted');
+
+    expect(artifacts).toEqual([
+      {
+        type: 'artifact_emitted',
+        providerFileId: containerFileHandle('cntr_1', 'cfile_ok'),
+        filename: 'report.csv',
+        sizeBytes: 20,
+        mimeType: 'text/csv',
       },
     ]);
   });

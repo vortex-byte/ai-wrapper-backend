@@ -1,3 +1,7 @@
+import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import { REASONING_EFFORTS } from '@/providers/domain/capabilities.ts';
+import { getLogger } from '@/observability/logger.ts';
+
 export const OPENAI_OUTPUT_DIR = '/mnt/data';
 
 export const CURATED_SKILL_IDS: Readonly<Record<string, string>> = {
@@ -23,6 +27,35 @@ export const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 };
 
 export const MAX_CONTAINER_ARTIFACTS = 20;
+
+export const MAX_CONTAINER_FILE_IDS = 50;
+
+/** Files API hard cap for `expires_after.seconds` (30 days). */
+export const MAX_FILE_EXPIRY_SECONDS = 2_592_000;
+
+/** `none` is included because it turns reasoning off, which keeps sampling parameters valid. */
+const CONFIG_REASONING_EFFORTS: readonly string[] = [...REASONING_EFFORTS, 'none'];
+
+export function isAllowedReasoningEffort(value: unknown): value is string {
+  return typeof value === 'string' && CONFIG_REASONING_EFFORTS.includes(value);
+}
+
+export function resolveReasoningEffort(req: NormalizedChatRequest): string | undefined {
+  const effort = req.reasoningEffort ?? req.model.config['reasoningEffort'];
+  if (effort === undefined || effort === null) return undefined;
+  if (isAllowedReasoningEffort(effort)) return effort;
+  getLogger().warn(
+    {
+      component: 'provider.openai',
+      providerId: req.provider.providerId,
+      modelId: req.model.modelId,
+      option: 'reasoningEffort',
+      value: effort,
+    },
+    'dropped a reasoning effort the provider would reject',
+  );
+  return undefined;
+}
 
 export const MAX_IMAGE_ARTIFACT_BYTES = 50 * 1024 * 1024;
 

@@ -202,7 +202,7 @@ export async function* emitContainerArtifacts(
     }
     for (const file of files) {
       if (state.emitted.size >= MAX_CONTAINER_ARTIFACTS) return;
-      if (file.source !== undefined && file.source !== 'assistant') continue;
+      if (file.source !== 'assistant') continue;
       yield* artifactEvent(state, containerId, file.id, file.filename, file.bytes);
     }
   }

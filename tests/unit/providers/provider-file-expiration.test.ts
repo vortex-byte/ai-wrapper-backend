@@ -100,6 +100,20 @@ describe('OpenAI file expiration', () => {
     expect(bodies[0]?.get('expires_after[seconds]')).toBe(String(7 * 86_400));
   });
 
+  it('caps the expiry at the provider maximum', async () => {
+    const { bodies } = stubFetch({ id: 'file-123' });
+    const adapter = new OpenAIAdapter();
+
+    await adapter.uploadInputFile(upload, {
+      provider: providerRuntime({ key: 'openai-main', adapter: 'openai' }),
+      signal: AbortSignal.timeout(1000),
+      fileRetentionDays: 365,
+    });
+
+    expect(bodies[0]?.get('expires_after[anchor]')).toBe('created_at');
+    expect(bodies[0]?.get('expires_after[seconds]')).toBe('2592000');
+  });
+
   it('deletes a plain file', async () => {
     const { calls } = stubFetch({});
     const adapter = new OpenAIAdapter();

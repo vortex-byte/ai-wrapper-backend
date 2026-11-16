@@ -4,6 +4,7 @@ import type {
 } from '@/providers/domain/capabilities.ts';
 import {
   COMPACTION_EDIT_TYPE,
+  DEFAULT_ANTHROPIC_VERSION,
   DEFAULT_CODE_EXECUTION_TOOL_TYPE,
   DEFAULT_OUTPUT_DIR_ENV,
   MIN_COMPACTION_TRIGGER,
@@ -151,7 +152,10 @@ export function buildMessages(
       .join('');
 
     const mounts =
-      index === lastUserIndex && message.role === 'user' && (req.inputFiles?.length ?? 0) > 0
+      containerEnabled(req) &&
+      index === lastUserIndex &&
+      message.role === 'user' &&
+      (req.inputFiles?.length ?? 0) > 0
         ? (req.inputFiles ?? [])
         : [];
     const inline = media[index] ?? [];
@@ -224,7 +228,7 @@ export function toProviderRequest(
   const compaction = compactionEdit(req);
   const cachingEnabled = isPromptCachingEnabled(req);
   const version = resolveAnthropicVersion(req.provider);
-  const isLegacyVersion = version !== '2026-10-21';
+  const isLegacyVersion = version !== DEFAULT_ANTHROPIC_VERSION;
   const sampling = isLegacyVersion && !isModern && thinking === undefined;
 
   return {

@@ -158,6 +158,19 @@ describe('AnthropicAdapter — container & skills request shaping', () => {
     // Earlier turns are never re-mounted.
     expect(JSON.stringify(params.messages[0])).not.toContain('container_upload');
   });
+
+  it('does not mount input files without the code-execution container', () => {
+    const adapter = new AnthropicAdapter(() => scriptedClient([textStream]).client);
+    const params = adapter.toProviderRequest(
+      request({
+        messages: [{ role: 'user', parts: [{ type: 'text', text: 'use the csv' }] }],
+        inputFiles: [{ providerFileId: 'file_011ABC', filename: 'data.csv', mimeType: 'text/csv' }],
+      }),
+    ) as { tools?: unknown; messages: Array<Record<string, unknown>> };
+
+    expect(params.tools).toBeUndefined();
+    expect(JSON.stringify(params.messages)).not.toContain('container_upload');
+  });
 });
 
 describe('AnthropicAdapter — tool & artifact stream mapping', () => {
@@ -390,9 +403,73 @@ describe('AnthropicAdapter — Files API', () => {
     );
 
     expect(result.providerFileId).toBe('file_uploaded');
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { method: string }];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      { method: string; headers: Record<string, string> },
+    ];
     expect(url).toContain('/v1/files');
     expect(init.method).toBe('POST');
+    expect(init.headers['x-api-key']).toBe('sk-test');
+    expect(init.headers['anthropic-version']).toBe('2026-10-21');
+  });
+
+  it('deletes a provider file with the version header', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const adapter = new AnthropicAdapter(() => scriptedClient([textStream]).client);
+    await adapter.deleteProviderFile('file_018XYZ', {
+      provider: request().provider,
+      signal: new AbortController().signal,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      { method: string; headers: Record<string, string> },
+    ];
+    expect(url).toContain('/v1/files/file_018XYZ');
+    expect(init.method).toBe('DELETE');
+    expect(init.headers['x-api-key']).toBe('sk-test');
+    expect(init.headers['anthropic-version']).toBe('2026-10-21');
+  });
+
+  it('treats a 404 when deleting a provider file as already gone', async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(null, { status: 404 }),
+    ) as unknown as typeof fetch;
+
+    const adapter = new AnthropicAdapter(() => scriptedClient([textStream]).client);
+    await expect(
+      adapter.deleteProviderFile('file_missing', {
+        provider: request().provider,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('maps a failed provider file deletion to a retryable provider error', async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(null, { status: 500 }),
+    ) as unknown as typeof fetch;
+
+    const adapter = new AnthropicAdapter(() => scriptedClient([textStream]).client);
+    await expect(
+      adapter.deleteProviderFile('file_x', {
+        provider: request().provider,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toMatchObject({ category: 'provider_unavailable', retryable: true });
+  });
+
+  it('refuses to delete a provider file without a configured key', async () => {
+    const adapter = new AnthropicAdapter(() => scriptedClient([textStream]).client);
+    await expect(
+      adapter.deleteProviderFile('file_x', {
+        provider: { ...request().provider, secrets: {} },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toMatchObject({ category: 'provider_unavailable', retryable: false });
   });
 
   it('supplies default anthropic-version 2026-10-21 to the SDK client factory', async () => {

@@ -361,8 +361,9 @@ export class DrizzleRegistryRepository implements RegistryRepository {
     if (input.displayName !== undefined) updates.displayName = input.displayName;
     if (input.description !== undefined) updates.description = input.description;
     if (input.status !== undefined) updates.status = input.status;
-    if (input.capabilities !== undefined)
+    if (input.capabilities !== undefined) {
       updates.capabilities = capabilitiesToJson(input.capabilities);
+    }
     if (input.contextWindow !== undefined) updates.contextWindow = input.contextWindow;
     if (input.maxOutputTokens !== undefined) updates.maxOutputTokens = input.maxOutputTokens;
     if (input.defaultMaxOutputTokens !== undefined) {

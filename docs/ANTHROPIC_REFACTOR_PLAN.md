@@ -47,7 +47,7 @@ This document outlines:
 * **Fix Action:**
   1. Resolve the effective API version via `resolveAnthropicVersion(provider)`.
   2. If the active version is `2026-10-21` (the platform default), suppress `temperature` and `top_p` across all requests.
-  3. Only allow `temperature` and `top_p` if a legacy version (e.g. `2023-06-01`) is explicitly configured in `provider.config['anthropicVersion']` and extended thinking is inactive.
+  3. Only allow `temperature` and `top_p` if a legacy version (e.g. `2023-06-01`) is explicitly configured in `provider.config['anthropicVersion']`, the model is **not** a modern effort model (Claude 4.7+ only ever samples at defaults, so sampling overrides are suppressed for them on any version), and extended thinking is inactive.
 
 #### Fix API-02: Enable Adaptive Thinking for Modern Effort Models (Opus 4.7 / 4.8)
 * **Root Cause:** Modern Claude models (Claude Opus 4.7, 4.8, 5.x) require `thinking: { type: 'adaptive' }` to activate reasoning when `output_config.effort` is provided. The current implementation only populates `output_config: { effort }` while leaving `thinking: undefined`, which leaves thinking inactive on Opus 4.7/4.8.
@@ -104,7 +104,7 @@ src/providers/infrastructure/adapters/anthropic/
 ├── client.ts           # SDK client factory, version resolution, default headers, apiBase
 ├── config.ts           # Model family detection, beta headers, thinking budgets, constants
 ├── errors.ts           # Anthropic error translation, secret scrubbing, status code mapping
-├── estimate.ts         # Character-based input token estimation fallback
+├── estimate.ts         # Tiktoken (o200k_base) input token estimate with character-based fallback
 ├── media.ts            # Base64 media block formatting (image and PDF document blocks)
 ├── types.ts            # Stream event shapes, RunState, OutgoingBlock, ReplayBlock types
 ├── request.ts          # toProviderRequest, buildMessages, buildSystem, buildContainer, compactionEdit
@@ -121,10 +121,10 @@ src/providers/infrastructure/adapters/anthropic/
 | `config.ts` | Version constants, model detection, beta header definitions, budget constants. | `isModernEffortModel`, `DEFAULT_ANTHROPIC_VERSION`, `ON_DEMAND_COMPACTION_BETA`, `THRESHOLD_COMPACTION_BETA` |
 | `client.ts` | Anthropic SDK client instantiation and HTTP header builders. | `buildClient`, `resolveAnthropicVersion`, `requestHeaders`, `filesHeaders`, `apiBase` |
 | `errors.ts` | Maps Anthropic API errors and HTTP status codes to internal `ProviderError`. | `translateError` |
-| `estimate.ts` | Rough heuristic token estimation for quota checks before dispatch. | `estimateInputTokens` |
+| `estimate.ts` | Rough heuristic token estimation for quota checks before dispatch, using tiktoken `o200k_base` with a character-based fallback. | `estimateInputTokens` |
 | `media.ts` | Transforms binary attachments into Anthropic image and PDF content blocks. | `resolveMediaBlocks` |
 | `request.ts` | Assembles the complete Messages API request payload. | `toProviderRequest`, `buildMessages`, `buildSystem`, `buildContainer`, `buildThinking`, `compactionEdit` |
-| `usage.ts` | Calculates token accounting, prompt cache hits, and iteration metrics. | `accumulateInputUsage`, `resetTurnUsage` |
+| `usage.ts` | Calculates token accounting, prompt cache hits, and iteration metrics. | `createRunState`, `resetTurn`, `accumulateInputUsage` |
 | `stream.ts` | Coordinates streaming consumption, event translation to `GenerationEvent`, and `pause_turn` loops. | `executeStream`, `handleBlockStart`, `handleBlockDelta`, `handleBlockStop` |
 | `files.ts` | Manages Files API integration (metadata lookup, streaming download, multipart upload). | `fetchArtifactStream`, `uploadInputFile`, `parseFilenameFromContentDisposition` |
 | `adapter.ts` | Composition root implementing `ProviderAdapter`. Delegates to submodules. | `AnthropicAdapter` |
@@ -133,14 +133,22 @@ src/providers/infrastructure/adapters/anthropic/
 Imports point strictly inward:
 ```
 adapter.ts
-  ├──> client.ts ──> config.ts
-  ├──> request.ts ──> media.ts, config.ts, types.ts
-  ├──> stream.ts ──> usage.ts, config.ts, errors.ts, types.ts
-  ├──> files.ts ──> client.ts, errors.ts
-  └──> estimate.ts
+  ├──> client.ts ──> config.ts, types.ts
+  ├──> request.ts ──> client.ts, config.ts, types.ts
+  ├──> stream.ts ──> client.ts, request.ts, files.ts, usage.ts, config.ts, errors.ts, types.ts
+  ├──> files.ts ──> client.ts, types.ts, @/providers/domain/errors.ts
+  ├──> media.ts ──> types.ts        (invoked by `execute`, not by `request.ts`)
+  └──> estimate.ts ──> ../shared.ts
 ```
+`client.ts` and `estimate.ts` also import `../shared.ts` helpers.
 - No submodule imports outside `src/providers/` except standard library and platform utilities (`scrubSecrets`, ports).
 - Strictly passes `depcruise src` with zero dependency violations.
+
+### Known Limitations
+`req.inputFiles` / `uploadInputFile` are port-level only: nothing in `src/` populates
+`MountedInputFile` today, so the `container_upload` mount path is exercised by unit tests
+only. `buildMessages` mounts input files only when `containerEnabled(req)` is true, because a
+`container_upload` block without the `code_execution` tool is rejected by the API.
 
 ---
 
@@ -200,8 +208,8 @@ adapter.ts
      ```
 4. **Dot-Notation Model Version Test (`anthropic-adapter.test.ts`):**
    - Test `isModernEffortModel` against:
-     - `claude-opus-4.7`, `claude-sonnet-4.8`, `claude-haiku-5.5` (must return `true`)
-     - `claude-sonnet-4-6`, `claude-3-5-sonnet-20241022` (must return `false`)
+     - `claude-opus-4.7`, `claude-sonnet-4.8`, `claude-haiku-5.5`, `claude-sonnet-4-6` (must return `true`)
+     - `claude-3-5-sonnet-20241022` (must return `false`)
 5. **Compaction Signature Streaming Test (`anthropic-adapter.test.ts`):**
    - Script a stream where `content_block_start` (compaction), `content_block_delta` (compaction_delta), `content_block_delta` (signature_delta), and `content_block_stop` arrive in sequence.
    - Assert that exactly one `compaction` event is emitted, and its payload includes the cryptographic `signature`.

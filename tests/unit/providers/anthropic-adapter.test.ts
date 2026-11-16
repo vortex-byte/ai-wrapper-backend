@@ -774,6 +774,51 @@ describe('AnthropicAdapter (Unit)', () => {
     expect(capturedHeaders?.['anthropic-beta']).toContain('compact-2026-09-04');
   });
 
+  it('attaches the compaction beta headers from the capability when the window is too small for an edit', async () => {
+    let capturedParams: Record<string, unknown> | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
+
+    const adapter = new AnthropicAdapter(() => ({
+      models: {
+        async list() {
+          return { data: [] };
+        },
+      },
+      messages: {
+        async create(params: unknown, options?: { headers?: Record<string, string> }) {
+          capturedParams = params as Record<string, unknown>;
+          capturedHeaders = options?.headers;
+          return (async function* () {
+            yield {
+              type: 'message_delta',
+              delta: { stop_reason: 'end_turn' },
+              usage: { output_tokens: 1 },
+            };
+          })();
+        },
+      },
+    }));
+
+    const base = makeAnthropicRequest();
+    const req = makeAnthropicRequest({
+      model: {
+        ...base.model,
+        capabilities: { ...base.model.capabilities, contextWindow: 60_000, compaction: {} },
+      },
+    });
+
+    for await (const event of adapter.execute(req, {
+      signal: new AbortController().signal,
+      deadline: Date.now() + 5000,
+    })) {
+      void event;
+    }
+
+    expect(capturedParams?.['context_management']).toBeUndefined();
+    expect(capturedHeaders?.['anthropic-beta']).toContain('compact-2026-01-12');
+    expect(capturedHeaders?.['anthropic-beta']).toContain('compact-2026-09-04');
+  });
+
   it('emits a compaction event and keeps generating after it', async () => {
     const mockEvents = [
       {

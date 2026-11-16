@@ -60,7 +60,11 @@ export function requestHeaders(
   const hasCompactionMessage = req.messages.some((m) =>
     m.parts.some((p) => p.type === 'compaction'),
   );
-  if (hasCompactionMessage || compactionActive) {
+  if (
+    hasCompactionMessage ||
+    compactionActive ||
+    req.model.capabilities.compaction !== undefined
+  ) {
     if (!betas.includes(ON_DEMAND_COMPACTION_BETA)) {
       betas.push(ON_DEMAND_COMPACTION_BETA);
     }

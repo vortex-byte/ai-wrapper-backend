@@ -740,7 +740,7 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
         if (detail === 'model_catalogue_unavailable') {
           throw new AppError(
             'invalid_request',
-            `"${provider.displayName}" has no model catalogue endpoint; add models manually.`,
+            `"${provider.displayName}" has no model catalogue endpoint; enter the model ID manually.`,
             { cause: error },
           );
         }

@@ -21,6 +21,33 @@ export function healthFailed(error: unknown, latencyMs = 0): HealthCheckResult {
   return { ok: false, latencyMs, detail };
 }
 
+function errorHttpStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  if (!('status' in error)) return undefined;
+  const status: unknown = error.status;
+  return typeof status === 'number' ? status : undefined;
+}
+
+export function isModelsEndpointMissing(error: unknown): boolean {
+  const status = errorHttpStatus(error);
+  return status === 404 || status === 405;
+}
+
+/** Maps a missing models endpoint to the sentinel the admin service turns into a manual-entry hint. */
+export async function listProviderModels<T>(
+  list: () => Promise<{ readonly data: readonly T[] }>,
+): Promise<readonly T[]> {
+  try {
+    const result = await list();
+    return result.data;
+  } catch (error) {
+    if (isModelsEndpointMissing(error)) {
+      throw new Error('model_catalogue_unavailable', { cause: error });
+    }
+    throw error;
+  }
+}
+
 export function approximateEstimate(textLength: number): EstimateResult {
   return { tokens: Math.ceil(textLength / 4) + 8, confidence: 'approx' };
 }

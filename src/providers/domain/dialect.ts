@@ -151,7 +151,8 @@ function baseDialect(adapter: string, firstParty: boolean): ProviderDialect {
       return {
         chat: true,
         responses: firstParty,
-        modelCatalogue: firstParty,
+        // Compatible endpoints expose the same /v1/models; a missing one is detected at request time.
+        modelCatalogue: true,
         healthProbe: firstParty ? 'models' : 'chat',
         files: { download: firstParty, delete: firstParty },
         containers: firstParty,
@@ -165,7 +166,7 @@ function baseDialect(adapter: string, firstParty: boolean): ProviderDialect {
       return {
         chat: true,
         responses: false,
-        modelCatalogue: firstParty,
+        modelCatalogue: true,
         healthProbe: firstParty ? 'models' : 'chat',
         files: { download: firstParty, delete: firstParty },
         containers: firstParty,

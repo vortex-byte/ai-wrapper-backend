@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import OpenAI from 'openai';
 import { OpenAIAdapter } from '@/providers/infrastructure/adapters/openai/adapter.ts';
 import type { OpenAIClientLike } from '@/providers/infrastructure/adapters/openai/adapter.ts';
 import { buildMessages, buildRequest } from '@/providers/infrastructure/adapters/openai/chat/request.ts';
 import { getTiktoken } from '@/providers/infrastructure/adapters/openai/estimate.ts';
-import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import type {
+  NormalizedChatRequest,
+  ProviderRuntimeConfig,
+} from '@/providers/domain/capabilities.ts';
 import type { GenerationEvent } from '@/providers/domain/pal.ts';
 import {
   collect,
@@ -12,6 +15,7 @@ import {
   mockChatClient as createMockOpenAIClient,
   resolvedFile,
 } from './openai/fixtures.ts';
+import { jsonResponse, stubFetch } from './fetch-stub.ts';
 
 describe('OpenAIAdapter (Unit)', () => {
   it('converts normalized request and streams chunks with usage', async () => {
@@ -512,6 +516,145 @@ describe('OpenAIAdapter — multimodal input and reasoning config', () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow('secret_not_configured');
+  });
+});
+
+describe('OpenAIAdapter — model catalogue', () => {
+  const COMPAT_BASE_URL = 'https://llm.internal.example/v1';
+
+  const compatProvider = (config: Record<string, unknown> = {}): ProviderRuntimeConfig => ({
+    providerId: 'p-compat',
+    key: 'compat',
+    adapter: 'openai',
+    baseUrl: COMPAT_BASE_URL,
+    config,
+    secrets: { apiKey: 'sk-compat-key-01234567890123456789' },
+  });
+
+  const firstPartyProvider = (): ProviderRuntimeConfig => ({
+    providerId: 'p-openai',
+    key: 'openai',
+    adapter: 'openai',
+    config: {},
+    secrets: { apiKey: 'sk-test-key-01234567890123456789' },
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('asks a compatible endpoint for the same /v1/models catalogue as first-party', async () => {
+    const requested: string[] = [];
+    stubFetch((url) => {
+      requested.push(url);
+      return jsonResponse({ data: [{ id: 'gpt-4o' }] });
+    });
+
+    const adapter = new OpenAIAdapter();
+    await adapter.listModels({
+      provider: firstPartyProvider(),
+      signal: new AbortController().signal,
+    });
+    await adapter.listModels({
+      provider: compatProvider(),
+      signal: new AbortController().signal,
+    });
+
+    expect(requested).toHaveLength(2);
+    expect(new URL(requested[0] ?? '').pathname).toBe('/v1/models');
+    expect(new URL(requested[1] ?? '').pathname).toBe('/v1/models');
+  });
+
+  it('maps a missing models endpoint to the catalogue sentinel', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'not found' } }, 404));
+
+    const adapter = new OpenAIAdapter();
+    await expect(
+      adapter.listModels({
+        provider: compatProvider(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('model_catalogue_unavailable');
+  });
+
+  it('maps a non-listable models endpoint to the catalogue sentinel', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'method not allowed' } }, 405));
+
+    const adapter = new OpenAIAdapter();
+    await expect(
+      adapter.listModels({
+        provider: compatProvider(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('model_catalogue_unavailable');
+  });
+
+  it('propagates other catalogue failures unchanged', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'upstream boom' } }, 500));
+
+    const adapter = new OpenAIAdapter();
+    await expect(
+      adapter.listModels({
+        provider: compatProvider({ maxRetries: 0 }),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/500/);
+  });
+
+  it('reports a missing models endpoint as healthy with a manual-add hint', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'not found' } }, 404));
+
+    const adapter = new OpenAIAdapter();
+    const result = await adapter.healthCheck({
+      provider: compatProvider(),
+      signal: new AbortController().signal,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.detail).toBe('models endpoint unavailable; add models manually');
+  });
+
+  it('reports a non-listable models endpoint as healthy with a manual-add hint', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'method not allowed' } }, 405));
+
+    const adapter = new OpenAIAdapter();
+    const result = await adapter.healthCheck({
+      provider: compatProvider(),
+      signal: new AbortController().signal,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.detail).toBe('models endpoint unavailable; add models manually');
+  });
+
+  it('keeps other catalogue failures unhealthy', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'upstream boom' } }, 500));
+
+    const adapter = new OpenAIAdapter();
+    const result = await adapter.healthCheck({
+      provider: compatProvider({ maxRetries: 0 }),
+      signal: new AbortController().signal,
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('skips the catalogue entirely when an admin disabled it', async () => {
+    let requests = 0;
+    stubFetch(() => {
+      requests += 1;
+      return jsonResponse({ data: [] });
+    });
+
+    const adapter = new OpenAIAdapter();
+    await expect(
+      adapter.listModels({
+        provider: compatProvider({ dialect: { modelCatalogue: false } }),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('model_catalogue_unavailable');
+
+    expect(requests).toBe(0);
   });
 });
 

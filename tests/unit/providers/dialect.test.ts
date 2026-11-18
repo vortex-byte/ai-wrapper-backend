@@ -31,7 +31,6 @@ describe('resolveDialect', () => {
     const dialect = resolveDialect(provider({ baseUrl: 'https://llm.internal.example/v1' }));
 
     expect(dialect.responses).toBe(false);
-    expect(dialect.modelCatalogue).toBe(false);
     expect(dialect.healthProbe).toBe('chat');
     expect(dialect.files).toEqual({ download: false, delete: false });
     expect(dialect.containers).toBe(false);
@@ -40,6 +39,27 @@ describe('resolveDialect', () => {
     expect(dialect.chatPayload.maxTokens).toBe('max_tokens');
     expect(dialect.chatPayload.sendSafetyIdentifier).toBe(false);
     expect(dialect.chatPayload.strictRetry).toBe(true);
+  });
+
+  it('keeps the model catalogue enabled for compatible endpoints', () => {
+    const openai = resolveDialect(provider({ baseUrl: 'https://llm.internal.example/v1' }));
+    const anthropic = resolveDialect(
+      provider({ adapter: 'anthropic', baseUrl: 'https://anthropic.internal.example' }),
+    );
+
+    expect(openai.modelCatalogue).toBe(true);
+    expect(anthropic.modelCatalogue).toBe(true);
+  });
+
+  it('lets an admin disable the model catalogue explicitly', () => {
+    const dialect = resolveDialect(
+      provider({
+        baseUrl: 'https://llm.internal.example/v1',
+        config: { dialect: { modelCatalogue: false } },
+      }),
+    );
+
+    expect(dialect.modelCatalogue).toBe(false);
   });
 
   it('uses the broadly supported Anthropic version for compatible endpoints', () => {

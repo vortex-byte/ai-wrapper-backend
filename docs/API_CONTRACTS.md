@@ -1354,8 +1354,10 @@ environment variable** that holds it.
 
 `config.dialect` declares what the deployment actually implements. It is optional: the server
 derives a conservative default from `adapter` + `baseUrl` (a non-first-party `baseUrl` disables
-Responses, containers, compaction, prompt caching, native PDF input and the model catalogue).
-Override only the keys that differ:
+Responses, containers, compaction, prompt caching and native PDF input). The model catalogue is
+**always** attempted for the `openai`, `anthropic` and `gemini` adapters — a missing catalogue
+endpoint is detected at request time (`404`/`405`), not assumed from the base URL. Override only
+the keys that differ:
 
 ```json
 { "config": { "dialect": {
@@ -1590,6 +1592,8 @@ Runs a cheap health check now (must not consume meaningful tokens). `200`:
 ```json
 { "status": "ok", "message": "", "data": { "ok": true, "latencyMs": 230, "detail": "models.list ok" } }
 ```
+When the upstream models endpoint answers `404`/`405` (no catalogue on that deployment) the check
+still succeeds with `detail: "models endpoint unavailable; add models manually"`.
 
 ### 11.6 `GET /api/admin/providers/:id/models`
 
@@ -1609,9 +1613,10 @@ image models) are filtered out.
 ```
 
 `404 not_found` when the provider does not exist. `400 invalid_request` when the adapter is not
-registered or `secretRef` is not configured in the environment. `503 provider_unavailable` with
-`retryable: true` when the upstream call fails. The response is never cached server-side — callers
-should refetch when opening the picker.
+registered or `secretRef` is not configured in the environment, or when the upstream catalogue
+endpoint is missing (`404`/`405`) — the message then tells the admin to enter the model ID manually.
+`503 provider_unavailable` with `retryable: true` when the upstream call fails. The response is
+never cached server-side — callers should refetch when opening the picker.
 
 ---
 

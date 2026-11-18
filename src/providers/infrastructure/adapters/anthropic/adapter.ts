@@ -15,6 +15,8 @@ import {
   healthFailed,
   healthNotConfigured,
   isChatCapableModelId,
+  isModelsEndpointMissing,
+  listProviderModels,
   requireApiKey,
 } from '../shared.ts';
 import { buildClient, defaultFactory } from './client.ts';
@@ -93,8 +95,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         detail: `models.list ok (${result.data.length})`,
       };
     } catch (error) {
-      const status = (error as { status?: number }).status;
-      if (!resolveDialect(provider).modelCatalogue && (status === 404 || status === 405)) {
+      if (isModelsEndpointMissing(error)) {
         return {
           ok: true,
           latencyMs: Date.now() - startedAt,
@@ -111,8 +112,8 @@ export class AnthropicAdapter implements ProviderAdapter {
       throw new Error('model_catalogue_unavailable');
     }
     const client = buildClient(this.clientFactory, provider, requireApiKey(provider.secrets));
-    const result = await client.models.list(undefined, { signal });
-    return result.data
+    const models = await listProviderModels(() => client.models.list(undefined, { signal }));
+    return models
       .map((model) => ({ id: model.id }))
       .filter((model) => isChatCapableModelId(model.id))
       .sort((a, b) => a.id.localeCompare(b.id));

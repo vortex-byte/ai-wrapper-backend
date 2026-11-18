@@ -5,10 +5,10 @@ import { parseRetryAfter } from '../shared.ts';
 
 export interface OpenAIClientLike {
   models: {
-    list(
-      params?: unknown,
-      options?: { signal?: AbortSignal },
-    ): Promise<{ data: readonly { id: string; shutdown_date?: string | null | undefined }[] }>;
+    // The OpenAI SDK ignores a second argument here, so the abort signal must come first.
+    list(options?: {
+      signal?: AbortSignal;
+    }): Promise<{ data: readonly { id: string; shutdown_date?: string | null | undefined }[] }>;
   };
   chat: {
     completions: {

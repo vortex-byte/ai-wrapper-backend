@@ -18,6 +18,8 @@ import {
   healthFailed,
   healthNotConfigured,
   isChatCapableModelId,
+  isModelsEndpointMissing,
+  listProviderModels,
   numberFromConfig,
   requireApiKey,
 } from '../shared.ts';
@@ -104,15 +106,14 @@ export class OpenAIAdapter implements ProviderAdapter {
     const startedAt = Date.now();
     try {
       const client = this.client(provider, apiKey);
-      const result = await client.models.list(undefined, { signal });
+      const result = await client.models.list({ signal });
       return {
         ok: true,
         latencyMs: Date.now() - startedAt,
         detail: `models.list ok (${result.data.length})`,
       };
     } catch (error) {
-      const status = (error as { status?: number }).status;
-      if (!resolveDialect(provider).modelCatalogue && (status === 404 || status === 405)) {
+      if (isModelsEndpointMissing(error)) {
         return {
           ok: true,
           latencyMs: Date.now() - startedAt,
@@ -129,8 +130,8 @@ export class OpenAIAdapter implements ProviderAdapter {
       throw new Error('model_catalogue_unavailable');
     }
     const client = this.client(provider, requireApiKey(provider.secrets));
-    const result = await client.models.list(undefined, { signal });
-    return result.data
+    const models = await listProviderModels(() => client.models.list({ signal }));
+    return models
       .filter((model) => model.shutdown_date === null || model.shutdown_date === undefined)
       .filter((model) => isChatCapableModelId(model.id))
       .map((model) => ({ id: model.id }))

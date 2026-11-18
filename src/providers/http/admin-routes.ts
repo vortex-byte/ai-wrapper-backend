@@ -44,7 +44,14 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
 
   routes.get('/providers', async (c) => {
     const providers = await registryAdmin.listProviders();
-    return c.json(ok({ items: providers.map(toWireProvider) }));
+    return c.json(
+      ok({
+        items: providers.map((provider) => ({
+          ...toWireProvider(provider),
+          dialect: registryAdmin.providerDialect(provider),
+        })),
+      }),
+    );
   });
 
   routes.post('/providers', async (c) => {

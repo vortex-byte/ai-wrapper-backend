@@ -1,3 +1,4 @@
+import { resolveDialect, type ProviderDialect, type ProviderDialectInput } from '../domain/dialect.ts';
 import type { ProviderAdapter } from '../ports/provider-adapter.ts';
 import type { ProviderRegistry } from '../ports/provider-registry.ts';
 
@@ -19,5 +20,9 @@ export class InMemoryProviderRegistry implements ProviderRegistry {
 
   keys(): readonly string[] {
     return [...this.adapters.keys()];
+  }
+
+  dialect(provider: ProviderDialectInput): ProviderDialect {
+    return resolveDialect(provider);
   }
 }

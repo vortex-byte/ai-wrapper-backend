@@ -1352,6 +1352,28 @@ environment variable** that holds it.
 | `status` | string (`active` \| `disabled`) | No | Provider operational status (default `active`). |
 | `config` | object | No | Adapter-specific JSON configuration object (e.g. `maxConcurrency`, `connectTimeoutMs`). |
 
+`config.dialect` declares what the deployment actually implements. It is optional: the server
+derives a conservative default from `adapter` + `baseUrl` (a non-first-party `baseUrl` disables
+Responses, containers, compaction, prompt caching, native PDF input and the model catalogue).
+Override only the keys that differ:
+
+```json
+{ "config": { "dialect": {
+    "responses": false,
+    "modelCatalogue": false,
+    "containers": false,
+    "serverCompaction": false,
+    "promptCaching": false,
+    "reasoning": "effort",
+    "documentInput": { "pdf": "text" },
+    "chatPayload": { "maxTokens": "max_tokens", "strictRetry": true },
+    "anthropic": { "version": "2023-06-01", "reasoningMode": "auto" }
+} } }
+```
+`reasoning` is `native` \| `effort` \| `none`; `documentInput.pdf` is `native` \| `text`;
+`chatPayload.maxTokens` is `max_tokens` \| `max_completion_tokens`; `anthropic.reasoningMode` is
+`auto` \| `adaptive` \| `budget`. An invalid dialect block is rejected with `400 invalid_request`.
+
 `PATCH /api/admin/providers/:id`:
 ```json
 { "displayName": "Anthropic", "secretRef": "ANTHROPIC_API_KEY", "status": "active",
@@ -1370,9 +1392,17 @@ environment variable** that holds it.
 { "status": "ok", "message": "", "data": { "items": [
     { "id": "0192…", "key": "anthropic", "displayName": "Anthropic", "adapter": "anthropic",
       "baseUrl": null, "secretRef": "ANTHROPIC_API_KEY", "status": "active",
-      "config": { "maxConcurrency": 8 }, "configVersion": 4, "updatedAt": "2026-10-08T09:00:00Z" }
+      "config": { "maxConcurrency": 8 }, "configVersion": 4, "updatedAt": "2026-10-08T09:00:00Z",
+      "dialect": { "chat": true, "responses": true, "modelCatalogue": true, "healthProbe": "models",
+        "files": { "download": true, "delete": true }, "containers": true,
+        "serverCompaction": true, "promptCaching": true, "reasoning": "native",
+        "documentInput": { "pdf": "native" },
+        "chatPayload": { "maxTokens": "max_tokens", "sendSafetyIdentifier": true,
+          "sendStreamUsageOption": true, "strictRetry": false } } }
 ] } }
 ```
+`dialect` is the **effective** feature set (defaults merged with `config.dialect`) and is exposed on
+`GET` list items only; it is derived, never stored.
 `PATCH /api/admin/providers/:id` response (`200`):
 ```json
 { "status": "ok", "message": "", "data": {
@@ -1415,6 +1445,13 @@ Writes an `audit_logs` row (`action: "provider.delete"`) and invalidates the reg
 | `defaultMaxOutputTokens` | integer | Conditional | Default max output tokens (required on `POST`, optional on `PATCH`). |
 | `quotaWeight` | number (float) | No | Quota token multiplier weight (default `1.0`). |
 | `config` | object | No | Execution configuration object (e.g. `timeoutMs`, reasoning effort). |
+
+`POST`/`PATCH` validate `capabilities` against the provider's effective dialect and reject the whole
+request with `400 invalid_request` (one entry per offending field in `details.fields`) when the
+provider cannot serve a declared feature: `documentGeneration` needs `containers`, `compaction` needs
+`serverCompaction`, `promptCaching` needs `promptCaching`, `reasoning` needs a non-`none` mode,
+`imageGeneration.mode: "tool"` needs `responses`, and `documents.pdf` needs native PDF input. The
+same check runs when a provider's `baseUrl`/`config.dialect` is patched against its existing models.
 
 **Provider-hosted tool keys inside `config`:**
 

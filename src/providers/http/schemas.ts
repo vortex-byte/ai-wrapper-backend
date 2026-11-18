@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PartialModelCapabilitiesSchema } from '@/providers/domain/capabilities-schema.ts';
+import { ProviderConfigSchema } from '@/providers/domain/dialect.ts';
 
 /** Zod schemas for provider and model administration endpoints. */
 
@@ -54,7 +55,7 @@ export const CreateProviderBodySchema = z.object({
   baseUrl: BaseUrlSchema,
   secretRef: SecretRefSchema,
   status: ProviderStatusSchema.optional(),
-  config: ConfigSchema.optional(),
+  config: ProviderConfigSchema.optional(),
 });
 
 export const UpdateProviderBodySchema = z
@@ -63,7 +64,7 @@ export const UpdateProviderBodySchema = z
     baseUrl: BaseUrlSchema,
     secretRef: SecretRefSchema.optional(),
     status: ProviderStatusSchema.optional(),
-    config: ConfigSchema.optional(),
+    config: ProviderConfigSchema.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Provide at least one field.' });
 

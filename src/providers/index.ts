@@ -44,6 +44,19 @@ export {
   visibleInModelPicker,
 } from './domain/registry.ts';
 export { validatePartsForModel, violationMessage } from './domain/capability-validation.ts';
+export type {
+  ProviderDialect,
+  ProviderDialectInput,
+  ProviderDialectOverride,
+  DialectViolation,
+} from './domain/dialect.ts';
+export {
+  COMPAT_ANTHROPIC_VERSION,
+  ProviderConfigSchema,
+  parseProviderDialectOverride,
+  resolveDialect,
+  validateCapabilitiesForDialect,
+} from './domain/dialect.ts';
 
 export type {
   CreateModelInput,

@@ -5,6 +5,7 @@ import { loadConfig } from '@/config/env.ts';
 import type { ProviderAdapter } from '@/providers/ports/provider-adapter.ts';
 import type { ProviderRegistry } from '@/providers/ports/provider-registry.ts';
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import type {
   GenerationRecord,
   GenerationRepository,
@@ -92,6 +93,7 @@ describe('GenerationManager', () => {
     get: (key) => (key === 'fake' ? new FakeProvider({ chunkDelayMs: 10 }) : null),
     has: (key) => key === 'fake',
     keys: () => ['fake'],
+    dialect: resolveDialect,
   };
 
   it('enqueues a generation, manages active count, and cleans up on completion', async () => {
@@ -206,6 +208,7 @@ describe('GenerationManager', () => {
       get: () => new FakeProvider({ chunks: ['Hello'] }),
       has: () => true,
       keys: () => ['fake'],
+      dialect: resolveDialect,
     };
 
     try {
@@ -275,6 +278,7 @@ describe('GenerationManager', () => {
         get: () => silentAdapter,
         has: () => true,
         keys: () => ['silent'],
+        dialect: resolveDialect,
       };
 
       const config = loadConfig({

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ProviderConfigSchema } from './dialect.ts';
 import type {
   ModelCapabilities,
   PartialModelCapabilities,
@@ -169,7 +170,7 @@ export type CapabilitiesInput = z.input<typeof ModelCapabilitiesSchema>;
 
 const EmptyObject = z.record(z.string(), z.unknown());
 
-export const ProviderConfigSchema = EmptyObject;
+export { ProviderConfigSchema };
 export const ModelConfigSchema = EmptyObject;
 
 export function parseCapabilities(
@@ -317,8 +318,13 @@ export function parsePartialCapabilities(value: unknown): PartialModelCapabiliti
   };
 }
 
+/** Reads stay resilient: a stored `dialect` that no longer validates is dropped, not thrown. */
 export function parseConfig(value: unknown): Readonly<Record<string, unknown>> {
-  return ProviderConfigSchema.parse(value ?? {});
+  const raw = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  const parsed = ProviderConfigSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const { dialect: _dialect, ...rest } = raw;
+  return rest;
 }
 
 export function toCapabilitiesJson(capabilities: ModelCapabilities): Record<string, unknown> {

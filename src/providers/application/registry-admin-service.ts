@@ -6,6 +6,8 @@ import { withTransaction } from '@/db/index.ts';
 import { AppError, isUniqueViolation } from '@/errors.ts';
 import type { RequestMeta } from '@/request-context.ts';
 import { parseCapabilities } from '../domain/capabilities-schema.ts';
+import { validateCapabilitiesForDialect } from '../domain/dialect.ts';
+import type { ProviderDialect } from '../domain/dialect.ts';
 import type {
   ModelCapabilities,
   PartialModelCapabilities,
@@ -129,6 +131,7 @@ export interface ProviderHealth {
 
 export interface RegistryAdminService {
   listProviders(): Promise<readonly ProviderRecord[]>;
+  providerDialect(provider: ProviderRecord): ProviderDialect;
   listModels(query: ListModelsQuery): Promise<ListModelsResult>;
   listPrices(modelId: string): Promise<readonly ModelPrice[]>;
   createProvider(input: CreateProviderInput): Promise<ProviderRecord>;
@@ -157,6 +160,30 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
         details: { fields: [{ field: 'adapter', message: 'No such adapter is registered.' }] },
       });
     }
+  }
+
+  function dialectFor(provider: ProviderRecord) {
+    return deps.adapters.dialect({
+      adapter: provider.adapter,
+      ...(provider.baseUrl !== null ? { baseUrl: provider.baseUrl } : {}),
+      config: provider.config,
+    });
+  }
+
+  function assertDialectCapabilities(
+    provider: ProviderRecord,
+    capabilities: Parameters<typeof validateCapabilitiesForDialect>[0],
+  ): void {
+    const violations = validateCapabilitiesForDialect(capabilities, dialectFor(provider));
+    if (violations.length === 0) return;
+    throw new AppError('invalid_request', violations[0]?.message ?? 'Invalid capabilities.', {
+      details: {
+        fields: violations.map((violation) => ({
+          field: violation.field,
+          message: violation.message,
+        })),
+      },
+    });
   }
 
   function assertOutputTokenBounds(input: {
@@ -205,6 +232,10 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
   return {
     async listProviders() {
       return deps.repository.findAllProviders();
+    },
+
+    providerDialect(provider) {
+      return dialectFor(provider);
     },
 
     async listModels(query) {
@@ -275,6 +306,23 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
     async updateProvider(input) {
       const existing = await deps.repository.findProviderById(input.id);
       if (!existing) throw new AppError('not_found', 'Provider not found.');
+
+      const prospective: ProviderRecord = {
+        ...existing,
+        ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
+        ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+        ...(input.secretRef !== undefined ? { secretRef: input.secretRef } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.config !== undefined ? { config: input.config } : {}),
+      };
+      if (input.config !== undefined || input.baseUrl !== undefined) {
+        const models = (await deps.repository.findAllModels()).filter(
+          (model) => model.providerId === existing.id,
+        );
+        for (const model of models) {
+          assertDialectCapabilities(prospective, model.capabilities);
+        }
+      }
 
       const updated = await withTransaction(async (tx) => {
         const result = await deps.repository.updateProvider(
@@ -352,6 +400,7 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
         });
       }
       const capabilities = input.capabilities;
+      assertDialectCapabilities(provider, capabilities);
       const contextWindow = input.contextWindow ?? capabilities.contextWindow;
       const maxOutputTokens = input.maxOutputTokens ?? capabilities.maxOutputTokens;
       const defaultMaxOutputTokens = input.defaultMaxOutputTokens ?? capabilities.maxOutputTokens;
@@ -534,6 +583,11 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
             })()
           : undefined;
 
+      if (mergedCapabilities !== undefined) {
+        const provider = await deps.repository.findProviderById(existing.providerId);
+        if (provider !== null) assertDialectCapabilities(provider, mergedCapabilities);
+      }
+
       const updated = await withTransaction(async (tx) => {
         const result = await deps.repository.updateModel(
           {
@@ -680,6 +734,13 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
           throw new AppError(
             'invalid_request',
             `Secret "${provider.secretRef}" is not configured for this provider.`,
+            { cause: error },
+          );
+        }
+        if (detail === 'model_catalogue_unavailable') {
+          throw new AppError(
+            'invalid_request',
+            `"${provider.displayName}" has no model catalogue endpoint; add models manually.`,
             { cause: error },
           );
         }

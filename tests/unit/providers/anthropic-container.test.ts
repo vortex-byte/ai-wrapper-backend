@@ -390,29 +390,6 @@ describe('AnthropicAdapter — Files API', () => {
     ).rejects.toMatchObject({ category: 'provider_unavailable' });
   });
 
-  it('uploads an input file to the Files API and returns the provider id', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ id: 'file_uploaded' }), { status: 200 }),
-    );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    const adapter = new AnthropicAdapter(() => scriptedClient([textStream]).client);
-    const result = await adapter.uploadInputFile(
-      { filename: 'data.csv', mimeType: 'text/csv', bytes: new Uint8Array([1]) },
-      { provider: request().provider, signal: new AbortController().signal },
-    );
-
-    expect(result.providerFileId).toBe('file_uploaded');
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [
-      string,
-      { method: string; headers: Record<string, string> },
-    ];
-    expect(url).toContain('/v1/files');
-    expect(init.method).toBe('POST');
-    expect(init.headers['x-api-key']).toBe('sk-test');
-    expect(init.headers['anthropic-version']).toBe('2026-10-21');
-  });
-
   it('deletes a provider file with the version header', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;

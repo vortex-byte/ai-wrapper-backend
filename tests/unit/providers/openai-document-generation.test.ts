@@ -723,25 +723,6 @@ describe('OpenAIAdapter — document generation (Unit)', () => {
     expect(artifact.sizeBytes).toBe(3);
     expect(artifact.mimeType).toBe('application/pdf');
   });
-
-  it('uploads input files with purpose user_data', async () => {
-    let body: unknown;
-    stubFetch((url, init) => {
-      expect(url).toBe('https://api.openai.com/v1/files');
-      body = init?.body;
-      return jsonResponse({ id: 'file-abc' });
-    });
-
-    const adapter = new OpenAIAdapter();
-    const uploaded = await adapter.uploadInputFile(
-      { filename: 'data.csv', mimeType: 'text/csv', bytes: new Uint8Array([1, 2]) },
-      { provider: makeRequest().provider, signal: new AbortController().signal },
-    );
-
-    expect(uploaded).toEqual({ providerFileId: 'file-abc' });
-    expect(body).toBeInstanceOf(FormData);
-    expect((body as FormData).get('purpose')).toBe('user_data');
-  });
 });
 
 describe('container file handles', () => {

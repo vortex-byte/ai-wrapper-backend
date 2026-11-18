@@ -7,11 +7,9 @@ import type {
   FilesApiContext,
   HealthCheckContext,
   HealthCheckResult,
-  InputFileUpload,
   ProviderAdapter,
   ProviderArtifact,
   ProviderModelInfo,
-  UploadedInputFile,
 } from '@/providers/ports/provider-adapter.ts';
 import {
   healthFailed,
@@ -22,7 +20,8 @@ import {
 import { buildClient, defaultFactory } from './client.ts';
 import { translateError } from './errors.ts';
 import { estimateInputTokens } from './estimate.ts';
-import { fetchArtifactStream, uploadInputFile, deleteProviderFile } from './files.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
+import { fetchArtifactStream, deleteProviderFile } from './files.ts';
 import { resolveMediaBlocks } from './media.ts';
 import { buildMessages, toProviderRequest } from './request.ts';
 import { executeStream } from './stream.ts';
@@ -94,12 +93,23 @@ export class AnthropicAdapter implements ProviderAdapter {
         detail: `models.list ok (${result.data.length})`,
       };
     } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (!resolveDialect(provider).modelCatalogue && (status === 404 || status === 405)) {
+        return {
+          ok: true,
+          latencyMs: Date.now() - startedAt,
+          detail: 'models endpoint unavailable; add models manually',
+        };
+      }
       return healthFailed(error, Date.now() - startedAt);
     }
   }
 
   async listModels(ctx: HealthCheckContext): Promise<readonly ProviderModelInfo[]> {
     const { provider, signal } = ctx;
+    if (!resolveDialect(provider).modelCatalogue) {
+      throw new Error('model_catalogue_unavailable');
+    }
     const client = buildClient(this.clientFactory, provider, requireApiKey(provider.secrets));
     const result = await client.models.list(undefined, { signal });
     return result.data
@@ -112,14 +122,16 @@ export class AnthropicAdapter implements ProviderAdapter {
     providerFileId: string,
     ctx: FilesApiContext,
   ): Promise<ProviderArtifact> {
+    if (!resolveDialect(ctx.provider).files.download) {
+      throw providerError('provider_unavailable', 'This provider has no artifact download API.', {
+        retryable: false,
+      });
+    }
     return fetchArtifactStream(providerFileId, ctx);
   }
 
-  async uploadInputFile(file: InputFileUpload, ctx: FilesApiContext): Promise<UploadedInputFile> {
-    return uploadInputFile(file, ctx);
-  }
-
   async deleteProviderFile(providerFileId: string, ctx: FilesApiContext): Promise<void> {
+    if (!resolveDialect(ctx.provider).files.delete) return;
     return deleteProviderFile(providerFileId, ctx);
   }
 }

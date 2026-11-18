@@ -22,54 +22,21 @@ interface CapturedCall {
 
 function stubFetch(response: unknown) {
   const calls: CapturedCall[] = [];
-  const bodies: Array<FormData | undefined> = [];
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     calls.push({ url: String(url), method: init.method ?? 'GET' });
-    bodies.push(init.body instanceof FormData ? init.body : undefined);
     return new Response(JSON.stringify(response), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
   });
-  return { calls, bodies };
+  return { calls };
 }
-
-const upload = {
-  filename: 'report.pdf',
-  mimeType: 'application/pdf',
-  bytes: new TextEncoder().encode('pdf'),
-};
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('Anthropic file expiration', () => {
-  it('sends expires_in_seconds derived from the configured retention', async () => {
-    const { bodies } = stubFetch({ id: 'file_123' });
-    const adapter = new AnthropicAdapter();
-
-    await adapter.uploadInputFile(upload, {
-      provider: providerRuntime(),
-      signal: AbortSignal.timeout(1000),
-      fileRetentionDays: 30,
-    });
-
-    expect(bodies[0]?.get('expires_in_seconds')).toBe(String(30 * 86_400));
-  });
-
-  it('omits the expiration field when no retention is configured', async () => {
-    const { bodies } = stubFetch({ id: 'file_123' });
-    const adapter = new AnthropicAdapter();
-
-    await adapter.uploadInputFile(upload, {
-      provider: providerRuntime(),
-      signal: AbortSignal.timeout(1000),
-    });
-
-    expect(bodies[0]?.has('expires_in_seconds')).toBe(false);
-  });
-
+describe('Anthropic file cleanup', () => {
   it('deletes a provider file with DELETE', async () => {
     const { calls } = stubFetch({});
     const adapter = new AnthropicAdapter();
@@ -85,35 +52,7 @@ describe('Anthropic file expiration', () => {
   });
 });
 
-describe('OpenAI file expiration', () => {
-  it('sends an expires_after policy anchored at creation', async () => {
-    const { bodies } = stubFetch({ id: 'file-123' });
-    const adapter = new OpenAIAdapter();
-
-    await adapter.uploadInputFile(upload, {
-      provider: providerRuntime({ key: 'openai-main', adapter: 'openai' }),
-      signal: AbortSignal.timeout(1000),
-      fileRetentionDays: 7,
-    });
-
-    expect(bodies[0]?.get('expires_after[anchor]')).toBe('created_at');
-    expect(bodies[0]?.get('expires_after[seconds]')).toBe(String(7 * 86_400));
-  });
-
-  it('caps the expiry at the provider maximum', async () => {
-    const { bodies } = stubFetch({ id: 'file-123' });
-    const adapter = new OpenAIAdapter();
-
-    await adapter.uploadInputFile(upload, {
-      provider: providerRuntime({ key: 'openai-main', adapter: 'openai' }),
-      signal: AbortSignal.timeout(1000),
-      fileRetentionDays: 365,
-    });
-
-    expect(bodies[0]?.get('expires_after[anchor]')).toBe('created_at');
-    expect(bodies[0]?.get('expires_after[seconds]')).toBe('2592000');
-  });
-
+describe('OpenAI file cleanup', () => {
   it('deletes a plain file', async () => {
     const { calls } = stubFetch({});
     const adapter = new OpenAIAdapter();

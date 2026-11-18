@@ -30,9 +30,6 @@ export const MAX_CONTAINER_ARTIFACTS = 20;
 
 export const MAX_CONTAINER_FILE_IDS = 50;
 
-/** Files API hard cap for `expires_after.seconds` (30 days). */
-export const MAX_FILE_EXPIRY_SECONDS = 2_592_000;
-
 /** `none` is included because it turns reasoning off, which keeps sampling parameters valid. */
 const CONFIG_REASONING_EFFORTS: readonly string[] = [...REASONING_EFFORTS, 'none'];
 

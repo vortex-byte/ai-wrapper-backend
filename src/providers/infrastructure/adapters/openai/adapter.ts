@@ -10,11 +10,9 @@ import type {
   FilesApiContext,
   HealthCheckContext,
   HealthCheckResult,
-  InputFileUpload,
   ProviderAdapter,
   ProviderArtifact,
   ProviderModelInfo,
-  UploadedInputFile,
 } from '@/providers/ports/provider-adapter.ts';
 import {
   healthFailed,
@@ -23,8 +21,7 @@ import {
   numberFromConfig,
   requireApiKey,
 } from '../shared.ts';
-import { getLogger } from '@/observability/logger.ts';
-import { MAX_FILE_EXPIRY_SECONDS } from './config.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import {
   apiBase,
   defaultClientFactory,
@@ -114,12 +111,23 @@ export class OpenAIAdapter implements ProviderAdapter {
         detail: `models.list ok (${result.data.length})`,
       };
     } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (!resolveDialect(provider).modelCatalogue && (status === 404 || status === 405)) {
+        return {
+          ok: true,
+          latencyMs: Date.now() - startedAt,
+          detail: 'models endpoint unavailable; add models manually',
+        };
+      }
       return healthFailed(error, Date.now() - startedAt);
     }
   }
 
   async listModels(ctx: HealthCheckContext): Promise<readonly ProviderModelInfo[]> {
     const { provider, signal } = ctx;
+    if (!resolveDialect(provider).modelCatalogue) {
+      throw new Error('model_catalogue_unavailable');
+    }
     const client = this.client(provider, requireApiKey(provider.secrets));
     const result = await client.models.list(undefined, { signal });
     return result.data
@@ -133,6 +141,11 @@ export class OpenAIAdapter implements ProviderAdapter {
     providerFileId: string,
     ctx: FilesApiContext,
   ): Promise<ProviderArtifact> {
+    if (!resolveDialect(ctx.provider).files.download) {
+      throw providerError('provider_unavailable', 'This provider has no artifact download API.', {
+        retryable: false,
+      });
+    }
     const apiKey = requireProviderApiKey(ctx.provider);
 
     const containerFile = parseContainerFileHandle(providerFileId);
@@ -167,55 +180,8 @@ export class OpenAIAdapter implements ProviderAdapter {
     };
   }
 
-  async uploadInputFile(file: InputFileUpload, ctx: FilesApiContext): Promise<UploadedInputFile> {
-    const apiKey = requireProviderApiKey(ctx.provider);
-
-    const form = new FormData();
-    form.append('purpose', 'user_data');
-    form.append('file', new Blob([file.bytes], { type: file.mimeType }), file.filename);
-    // Without an explicit policy, `user_data` files persist until deleted manually.
-    if (ctx.fileRetentionDays !== undefined && ctx.fileRetentionDays > 0) {
-      const requestedSeconds = ctx.fileRetentionDays * 86_400;
-      const seconds = Math.min(requestedSeconds, MAX_FILE_EXPIRY_SECONDS);
-      if (seconds < requestedSeconds) {
-        getLogger().warn(
-          {
-            component: 'provider.openai',
-            requestedSeconds,
-            cappedSeconds: seconds,
-          },
-          'capped the provider file expiry at the API maximum',
-        );
-      }
-      form.append('expires_after[anchor]', 'created_at');
-      form.append('expires_after[seconds]', String(seconds));
-    }
-
-    const response = await fetch(`${apiBase(ctx.provider)}/files`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${apiKey}` },
-      body: form,
-      signal: ctx.signal,
-    });
-
-    if (!response.ok) {
-      throw providerError('provider_unavailable', 'Could not upload the input file.', {
-        retryable: response.status >= 500 || response.status === 429,
-        providerStatus: response.status,
-      });
-    }
-
-    const payload = (await response.json()) as { id?: unknown };
-    if (typeof payload.id !== 'string' || payload.id.length === 0) {
-      throw providerError('provider_unavailable', 'The provider did not return a file id.', {
-        retryable: true,
-      });
-    }
-
-    return { providerFileId: payload.id };
-  }
-
   async deleteProviderFile(providerFileId: string, ctx: FilesApiContext): Promise<void> {
+    if (!resolveDialect(ctx.provider).files.delete) return;
     const apiKey = requireProviderApiKey(ctx.provider);
 
     const containerFile = parseContainerFileHandle(providerFileId);

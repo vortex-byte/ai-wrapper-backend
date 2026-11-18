@@ -40,23 +40,12 @@ export interface ProviderArtifact {
   readonly filename?: string | undefined;
 }
 
-/** Context for Files-API calls (artifact download, input upload). */
+/** Context for Files-API calls (artifact download). */
 export interface FilesApiContext {
   readonly provider: ProviderRuntimeConfig;
   readonly signal: AbortSignal;
   /** Provider-hosted file lifetime, so uploads expire instead of accumulating. */
   readonly fileRetentionDays?: number | undefined;
-}
-
-/** An input binary the platform wants the provider to mount into its cloud container. */
-export interface InputFileUpload {
-  readonly filename: string;
-  readonly mimeType: string;
-  readonly bytes: Uint8Array;
-}
-
-export interface UploadedInputFile {
-  readonly providerFileId: string;
 }
 
 /** Provider adapter contract implemented by each upstream model provider. */
@@ -81,11 +70,6 @@ export interface ProviderAdapter {
     providerFileId: string,
     ctx: FilesApiContext,
   ): Promise<ProviderArtifact>;
-
-  uploadInputFile?(
-    file: InputFileUpload,
-    ctx: FilesApiContext,
-  ): Promise<UploadedInputFile>;
 
   /** Deletes a provider-hosted file. Absent ⇒ the adapter has no deletable file storage. */
   deleteProviderFile?(providerFileId: string, ctx: FilesApiContext): Promise<void>;

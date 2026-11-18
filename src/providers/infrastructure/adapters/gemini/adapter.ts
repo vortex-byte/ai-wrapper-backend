@@ -7,11 +7,9 @@ import type {
   FilesApiContext,
   HealthCheckContext,
   HealthCheckResult,
-  InputFileUpload,
   ProviderAdapter,
   ProviderArtifact,
   ProviderModelInfo,
-  UploadedInputFile,
 } from '@/providers/ports/provider-adapter.ts';
 import {
   healthFailed,
@@ -27,7 +25,7 @@ import {
 } from './client.ts';
 import { translateError } from './errors.ts';
 import { estimateInputTokens } from './estimate.ts';
-import { fetchArtifactStream, uploadInputFile } from './files.ts';
+import { fetchArtifactStream } from './files.ts';
 import { toProviderRequest } from './request.ts';
 import { executeStream } from './stream.ts';
 import type { GeminiClientFactory } from './types.ts';
@@ -108,10 +106,6 @@ export class GeminiAdapter implements ProviderAdapter {
     ctx: FilesApiContext,
   ): Promise<ProviderArtifact> {
     return fetchArtifactStream(providerFileId, ctx, this.clientFactory);
-  }
-
-  async uploadInputFile(file: InputFileUpload, ctx: FilesApiContext): Promise<UploadedInputFile> {
-    return uploadInputFile(file, ctx, this.clientFactory);
   }
 
   /** Gemini Files uploads expire automatically (48 h, not configurable) and expose no delete endpoint, so there is nothing to clean up. */

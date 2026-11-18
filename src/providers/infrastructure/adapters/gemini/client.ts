@@ -56,10 +56,6 @@ export function fileDownloadUrl(provider: ProviderRuntimeConfig, providerFileId:
   return `${apiBase(provider)}/${API_VERSION}/files/${encodeURIComponent(id)}?alt=media`;
 }
 
-export function filesUploadUrl(provider: ProviderRuntimeConfig): string {
-  return `${apiBase(provider)}/${API_VERSION}/files`;
-}
-
 export function jsonHeaders(apiKey: string): Record<string, string> {
   return { 'x-goog-api-key': apiKey, 'content-type': 'application/json' };
 }

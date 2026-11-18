@@ -1,10 +1,5 @@
 import { providerError } from '@/providers/domain/errors.ts';
-import type {
-  FilesApiContext,
-  InputFileUpload,
-  ProviderArtifact,
-  UploadedInputFile,
-} from '@/providers/ports/provider-adapter.ts';
+import type { FilesApiContext, ProviderArtifact } from '@/providers/ports/provider-adapter.ts';
 import { apiBase, filesHeaders } from './client.ts';
 import type { RawAnthropicStreamEvent } from './types.ts';
 
@@ -153,47 +148,6 @@ export async function fetchArtifactStream(
     ...(mimeType !== undefined ? { mimeType } : {}),
     ...(sizeBytes !== undefined ? { sizeBytes } : {}),
   };
-}
-
-export async function uploadInputFile(
-  file: InputFileUpload,
-  ctx: FilesApiContext,
-): Promise<UploadedInputFile> {
-  const apiKey = ctx.provider.secrets['apiKey'];
-  if (apiKey === undefined || apiKey === '') {
-    throw providerError('provider_unavailable', 'Anthropic API key is not configured.', {
-      retryable: false,
-    });
-  }
-
-  const form = new FormData();
-  form.append('file', new Blob([file.bytes], { type: file.mimeType }), file.filename);
-  if (ctx.fileRetentionDays !== undefined && ctx.fileRetentionDays > 0) {
-    form.append('expires_in_seconds', String(ctx.fileRetentionDays * 86_400));
-  }
-
-  const response = await fetch(`${apiBase(ctx.provider)}/v1/files`, {
-    method: 'POST',
-    headers: filesHeaders(ctx.provider, apiKey),
-    body: form,
-    signal: ctx.signal,
-  });
-
-  if (!response.ok) {
-    throw providerError('provider_unavailable', 'Could not upload the input file.', {
-      retryable: response.status >= 500 || response.status === 429,
-      providerStatus: response.status,
-    });
-  }
-
-  const payload = (await response.json()) as { id?: unknown };
-  if (typeof payload.id !== 'string' || payload.id.length === 0) {
-    throw providerError('provider_unavailable', 'The provider did not return a file id.', {
-      retryable: true,
-    });
-  }
-
-  return { providerFileId: payload.id };
 }
 
 export async function deleteProviderFile(

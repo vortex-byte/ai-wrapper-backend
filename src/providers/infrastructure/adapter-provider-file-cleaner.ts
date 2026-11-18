@@ -3,12 +3,14 @@ import type { ProviderRuntimeConfig } from '../domain/capabilities.ts';
 import type { ModelRegistry } from '../ports/model-registry.ts';
 import type { ProviderFileCleaner, ProviderFileRef } from '@/provider-file-cleaner.ts';
 import type { ProviderRegistry } from '../ports/provider-registry.ts';
+import type { SecretResolver } from '../ports/secret-resolver.ts';
 
 /** Deletes provider-hosted files through the adapter that owns them. */
 
 export interface AdapterProviderFileCleanerDeps {
   readonly adapters: ProviderRegistry;
   readonly providers: ModelRegistry;
+  readonly secrets: SecretResolver;
   readonly timeoutMs?: number;
 }
 
@@ -26,13 +28,14 @@ export class AdapterProviderFileCleaner implements ProviderFileCleaner {
       return false;
     }
 
+    const secret = this.deps.secrets.resolve(providerRecord.secretRef);
     const runtime: ProviderRuntimeConfig = {
       providerId: providerRecord.id,
       key: providerRecord.key,
       adapter: providerRecord.adapter,
       ...(providerRecord.baseUrl !== null ? { baseUrl: providerRecord.baseUrl } : {}),
       config: providerRecord.config,
-      secrets: {},
+      secrets: secret === null ? {} : { apiKey: secret },
     };
 
     try {

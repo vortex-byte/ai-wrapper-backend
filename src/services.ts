@@ -145,6 +145,7 @@ export function createServices(config: Config): Services {
   const providerFiles: ProviderFileCleaner = new AdapterProviderFileCleaner({
     adapters: providers,
     providers: registry,
+    secrets,
   });
 
   const settingsRepository = new DrizzleSettingsRepository();

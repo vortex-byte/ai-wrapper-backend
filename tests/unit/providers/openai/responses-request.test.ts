@@ -41,6 +41,46 @@ describe('responses/request — routing', () => {
   });
 });
 
+describe('responses/request — compatible endpoints', () => {
+  const compatProvider = {
+    ...makeOpenAIRequest().provider,
+    key: 'compat',
+    baseUrl: 'https://llm.internal.example/v1',
+  };
+
+  it('never routes a compatible endpoint to Responses', () => {
+    const req = makeOpenAIRequest({
+      provider: compatProvider,
+      model: openAIModel({
+        capabilities: {
+          ...openAIModel().capabilities,
+          compaction: {},
+          imageGeneration: { mode: 'tool' },
+        },
+      }),
+      responseModalities: ['image'],
+    });
+
+    expect(responsesEnabled(req)).toBe(false);
+    expect(compactionConfig(req)).toBeUndefined();
+  });
+
+  it('lets an explicit dialect override opt back in', () => {
+    const req = makeOpenAIRequest({
+      provider: {
+        ...compatProvider,
+        config: { dialect: { responses: true, serverCompaction: true } },
+      },
+      model: openAIModel({
+        capabilities: { ...openAIModel().capabilities, compaction: {} },
+      }),
+    });
+
+    expect(responsesEnabled(req)).toBe(true);
+    expect(compactionConfig(req)).toBeDefined();
+  });
+});
+
 describe('responses/request — compaction config', () => {
   it('defaults the threshold to 80% of the context window', () => {
     const req = makeOpenAIRequest({

@@ -1,4 +1,5 @@
 import type { ModelRuntimeConfig, NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import { resolveDialect, type ProviderDialect } from '@/providers/domain/dialect.ts';
 import { isAllowedReasoningEffort, resolveReasoningEffort } from '../config.ts';
 import type { FinishReason, OpenAIContentPart, OpenAIMessage } from '../types.ts';
 
@@ -38,6 +39,8 @@ function mergeOpenAIContent(
 export function buildRequest(
   req: NormalizedChatRequest,
   messages: OpenAIMessage[],
+  dialect: ProviderDialect = resolveDialect(req.provider),
+  strict = false,
 ): Record<string, unknown> {
   const reasoningEffort = resolveReasoningEffort(req);
   const sampling = supportsSamplingParams(req.model, reasoningEffort);
@@ -45,13 +48,19 @@ export function buildRequest(
   return {
     model: req.model.apiModelId,
     messages,
-    max_completion_tokens: req.maxOutputTokens,
+    [dialect.chatPayload.maxTokens]: req.maxOutputTokens,
     stream: true,
-    stream_options: { include_usage: true },
-    safety_identifier: req.metadata.userIdHash,
-    ...(sampling && typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
-    ...(sampling && typeof req.topP === 'number' ? { top_p: req.topP } : {}),
-    ...(typeof reasoningEffort === 'string' && reasoningEffort.length > 0
+    ...(!strict && dialect.chatPayload.sendStreamUsageOption
+      ? { stream_options: { include_usage: true } }
+      : {}),
+    ...(!strict && dialect.chatPayload.sendSafetyIdentifier
+      ? { safety_identifier: req.metadata.userIdHash }
+      : {}),
+    ...(!strict && sampling && typeof req.temperature === 'number'
+      ? { temperature: req.temperature }
+      : {}),
+    ...(!strict && sampling && typeof req.topP === 'number' ? { top_p: req.topP } : {}),
+    ...(!strict && typeof reasoningEffort === 'string' && reasoningEffort.length > 0
       ? { reasoning_effort: reasoningEffort }
       : {}),
   };
@@ -110,6 +119,7 @@ export function buildMessages(
 
 export async function resolveMediaBlocks(
   req: NormalizedChatRequest,
+  dialect: ProviderDialect = resolveDialect(req.provider),
 ): Promise<OpenAIContentPart[][]> {
   const perMessage: OpenAIContentPart[][] = [];
 
@@ -126,7 +136,11 @@ export async function resolveMediaBlocks(
       }
       if (part.type !== 'document') continue;
 
-      if (part.preferNative && part.file.mimeType === 'application/pdf') {
+      if (
+        part.preferNative &&
+        part.file.mimeType === 'application/pdf' &&
+        dialect.documentInput.pdf === 'native'
+      ) {
         const base64 = Buffer.from(await part.file.read()).toString('base64');
         parts.push({
           type: 'file',

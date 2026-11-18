@@ -1,10 +1,12 @@
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import type { GenerationEvent, TokenUsage } from '@/providers/domain/pal.ts';
 import { providerError } from '@/providers/domain/errors.ts';
+import { getLogger } from '@/observability/logger.ts';
 import type { ExecuteContext } from '@/providers/ports/provider-adapter.ts';
 import type { OpenAIClientLike } from '../client.ts';
 import { translateError } from '../errors.ts';
-import type { FinishReason, RawOpenAIChunk } from '../types.ts';
+import type { FinishReason, OpenAIMessage, RawOpenAIChunk } from '../types.ts';
 import { buildMessages, buildRequest, mapFinishReason, resolveMediaBlocks } from './request.ts';
 
 export async function* executeChat(
@@ -12,9 +14,12 @@ export async function* executeChat(
   ctx: ExecuteContext,
   client: OpenAIClientLike,
 ): AsyncIterable<GenerationEvent> {
+  const dialect = resolveDialect(req.provider);
+  let messages: OpenAIMessage[];
   let params: unknown;
   try {
-    params = buildRequest(req, buildMessages(req, await resolveMediaBlocks(req)));
+    messages = buildMessages(req, await resolveMediaBlocks(req, dialect));
+    params = buildRequest(req, messages, dialect);
   } catch (err) {
     yield { type: 'error', error: translateError(err) };
     return;
@@ -24,8 +29,28 @@ export async function* executeChat(
   try {
     stream = await client.chat.completions.create(params, { signal: ctx.signal });
   } catch (err) {
-    yield { type: 'error', error: translateError(err) };
-    return;
+    const translated = translateError(err);
+    if (!dialect.chatPayload.strictRetry || translated.category !== 'invalid_request') {
+      yield { type: 'error', error: translated };
+      return;
+    }
+    getLogger().warn(
+      {
+        component: 'provider.openai',
+        providerId: req.provider.providerId,
+        modelId: req.model.modelId,
+        category: translated.category,
+      },
+      'retrying the chat request with a minimal payload',
+    );
+    try {
+      stream = await client.chat.completions.create(buildRequest(req, messages, dialect, true), {
+        signal: ctx.signal,
+      });
+    } catch (retryErr) {
+      yield { type: 'error', error: translateError(retryErr) };
+      return;
+    }
   }
 
   let started = false;

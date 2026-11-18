@@ -12,12 +12,19 @@ import {
   resolveReasoningEffort,
 } from '../config.ts';
 import { getLogger } from '@/observability/logger.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import { supportsSamplingParams } from '../chat/request.ts';
+
+function chatOnlyOverride(req: NormalizedChatRequest): boolean {
+  return req.provider.config['useChatCompletions'] === true;
+}
 
 export function containerEnabled(req: NormalizedChatRequest): boolean {
   const container = req.container;
   if (container === undefined) return false;
-  if (req.provider.config['useChatCompletions'] === true) return false;
+  if (chatOnlyOverride(req)) return false;
+  const dialect = resolveDialect(req.provider);
+  if (!dialect.responses || !dialect.containers) return false;
   return container.codeExecution || (container.skills?.length ?? 0) > 0;
 }
 
@@ -35,14 +42,17 @@ export function supportsSkillsShell(req: NormalizedChatRequest): boolean {
 export function imageGenerationEnabled(req: NormalizedChatRequest): boolean {
   if (!imageToolSupported(req.model.capabilities)) return false;
   if (!req.responseModalities.includes('image')) return false;
-  if (req.provider.config['useChatCompletions'] === true) return false;
+  if (chatOnlyOverride(req)) return false;
+  if (!resolveDialect(req.provider).responses) return false;
   return req.model.config['imageGeneration'] !== false;
 }
 
 export function responsesEnabled(req: NormalizedChatRequest): boolean {
+  const dialect = resolveDialect(req.provider);
+  if (!dialect.responses) return false;
+  if (containerEnabled(req) || imageGenerationEnabled(req)) return true;
+  if (!dialect.serverCompaction) return false;
   return (
-    containerEnabled(req) ||
-    imageGenerationEnabled(req) ||
     req.model.capabilities.compaction !== undefined ||
     req.messages.some((message) => message.parts.some((part) => part.type === 'compaction'))
   );
@@ -51,6 +61,7 @@ export function responsesEnabled(req: NormalizedChatRequest): boolean {
 export function compactionConfig(req: NormalizedChatRequest): readonly unknown[] | undefined {
   const capability = req.model.capabilities.compaction;
   if (capability === undefined) return undefined;
+  if (!resolveDialect(req.provider).serverCompaction) return undefined;
   const window = req.model.capabilities.contextWindow;
   const threshold = Math.min(
     window - 1,
@@ -103,7 +114,7 @@ async function buildResponsesInput(req: NormalizedChatRequest): Promise<unknown[
         continue;
       }
       if (part.type === 'document') {
-        if (part.preferNative) {
+        if (part.preferNative && resolveDialect(req.provider).documentInput.pdf === 'native') {
           const base64 = Buffer.from(await part.file.read()).toString('base64');
           content.push({
             type: 'input_file',

@@ -3,6 +3,7 @@ import type {
   NormalizedChatRequest,
   ProviderRuntimeConfig,
 } from '@/providers/domain/capabilities.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import { numberFromConfig } from '../shared.ts';
 import {
   DEFAULT_ANTHROPIC_VERSION,
@@ -21,8 +22,8 @@ export const defaultFactory: AnthropicClientFactory = (options) =>
   });
 
 export function resolveAnthropicVersion(provider: ProviderRuntimeConfig): string {
-  const version = provider.config['anthropicVersion'];
-  return typeof version === 'string' && version !== '' ? version : DEFAULT_ANTHROPIC_VERSION;
+  const version = resolveDialect(provider).anthropic?.version;
+  return version !== undefined && version !== '' ? version : DEFAULT_ANTHROPIC_VERSION;
 }
 
 export function apiBase(provider: ProviderRuntimeConfig): string {
@@ -51,19 +52,14 @@ export function requestHeaders(
   req: NormalizedChatRequest,
   compactionActive: boolean,
 ): Record<string, string> {
-  const configured = req.provider.config['anthropicBeta'];
-  const betas: string[] = Array.isArray(configured)
-    ? configured.filter((value): value is string => typeof value === 'string')
-    : typeof configured === 'string' && configured !== ''
-      ? [configured]
-      : [];
+  const dialect = resolveDialect(req.provider);
+  const betas: string[] = [...(dialect.anthropic?.betas ?? [])];
   const hasCompactionMessage = req.messages.some((m) =>
     m.parts.some((p) => p.type === 'compaction'),
   );
   if (
-    hasCompactionMessage ||
-    compactionActive ||
-    req.model.capabilities.compaction !== undefined
+    dialect.serverCompaction &&
+    (hasCompactionMessage || compactionActive || req.model.capabilities.compaction !== undefined)
   ) {
     if (!betas.includes(ON_DEMAND_COMPACTION_BETA)) {
       betas.push(ON_DEMAND_COMPACTION_BETA);
@@ -80,15 +76,10 @@ export function filesHeaders(
   apiKey: string,
 ): Record<string, string> {
   const version = resolveAnthropicVersion(provider);
-  const beta = provider.config['anthropicBeta'];
-  const betaHeader = Array.isArray(beta)
-    ? beta.filter((v): v is string => typeof v === 'string').join(',')
-    : typeof beta === 'string'
-      ? beta
-      : '';
+  const betas = resolveDialect(provider).anthropic?.betas ?? [];
   return {
     'x-api-key': apiKey,
     'anthropic-version': version,
-    ...(betaHeader !== '' ? { 'anthropic-beta': betaHeader } : {}),
+    ...(betas.length > 0 ? { 'anthropic-beta': betas.join(',') } : {}),
   };
 }

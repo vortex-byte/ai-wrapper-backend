@@ -1,8 +1,10 @@
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import type { OutgoingBlock } from './types.ts';
 
 export async function resolveMediaBlocks(req: NormalizedChatRequest): Promise<OutgoingBlock[][]> {
   const perMessage: OutgoingBlock[][] = [];
+  const nativePdf = resolveDialect(req.provider).documentInput.pdf === 'native';
 
   for (const message of req.messages) {
     const blocks: OutgoingBlock[] = [];
@@ -20,7 +22,7 @@ export async function resolveMediaBlocks(req: NormalizedChatRequest): Promise<Ou
       }
       if (part.type !== 'document') continue;
 
-      if (part.preferNative && part.file.mimeType === 'application/pdf') {
+      if (part.preferNative && part.file.mimeType === 'application/pdf' && nativePdf) {
         blocks.push({
           type: 'document',
           source: {

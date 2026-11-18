@@ -2,6 +2,7 @@ import type {
   NormalizedChatRequest,
   ProviderRuntimeConfig,
 } from '@/providers/domain/capabilities.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import {
   COMPACTION_EDIT_TYPE,
   DEFAULT_ANTHROPIC_VERSION,
@@ -56,6 +57,7 @@ export function replayContent(runState: RunState): string | OutgoingBlock[] {
 export function compactionEdit(
   req: NormalizedChatRequest,
 ): { readonly edits: readonly unknown[] } | undefined {
+  if (!resolveDialect(req.provider).serverCompaction) return undefined;
   const hasCompactionMessage = req.messages.some((m) =>
     m.parts.some((p) => p.type === 'compaction'),
   );
@@ -125,6 +127,7 @@ export function buildContainer(req: NormalizedChatRequest): {
 export function containerEnabled(req: NormalizedChatRequest): boolean {
   const container = req.container;
   if (container === undefined) return false;
+  if (!resolveDialect(req.provider).containers) return false;
   return container.codeExecution || (container.skills?.length ?? 0) > 0;
 }
 
@@ -207,6 +210,7 @@ export function buildMessages(
 export function isPromptCachingEnabled(req: NormalizedChatRequest): boolean {
   if (req.model.config['promptCaching'] === false) return false;
   if (req.provider.config['promptCaching'] === false) return false;
+  if (!resolveDialect(req.provider).promptCaching) return false;
   return req.model.capabilities.promptCaching?.supported === true;
 }
 
@@ -217,7 +221,14 @@ export function toProviderRequest(
   const turns = messages ?? buildMessages(req);
   const system = buildSystem(req);
   const container = buildContainer(req);
-  const isModern = isModernEffortModel(req.model.apiModelId);
+  const dialect = resolveDialect(req.provider);
+  const reasoningMode = dialect.anthropic?.reasoningMode ?? 'auto';
+  const isModern =
+    reasoningMode === 'adaptive'
+      ? true
+      : reasoningMode === 'budget'
+        ? false
+        : isModernEffortModel(req.model.apiModelId);
   const effort = req.reasoningEffort;
   const thinking = isModern
     ? effort !== undefined

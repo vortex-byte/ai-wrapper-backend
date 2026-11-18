@@ -1,4 +1,5 @@
 import type { NormalizedChatRequest } from '@/providers/domain/capabilities.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import type { GenerationEvent } from '@/providers/domain/pal.ts';
 import type { ExecuteContext } from '@/providers/ports/provider-adapter.ts';
 import { MAX_PAUSE_TURNS } from './config.ts';
@@ -268,6 +269,7 @@ export async function* executeStream(
   baseParams: Record<string, unknown>,
 ): AsyncIterable<GenerationEvent> {
   const runState = createRunState();
+  const continueOnPauseTurn = resolveDialect(req.provider).containers;
   let turn = 0;
   let messages = baseMessages;
   let providerStarted = false;
@@ -349,7 +351,7 @@ export async function* executeStream(
       return;
     }
 
-    if (!paused) break;
+    if (!paused || !continueOnPauseTurn) break;
     turn += 1;
     if (turn > MAX_PAUSE_TURNS) {
       runState.stopReason = 'pause_turn_exceeded';

@@ -8,6 +8,7 @@ import type { ConversationRepository } from '@/conversations/ports/conversation-
 import type { Conversation, Message, MessagePart, MessageWithParts } from '@/conversations/domain/conversation.ts';
 import { deriveTitleFromText } from '@/conversations/domain/conversation.ts';
 import type { ModelRegistry, ResolvedModel } from '@/providers/ports/model-registry.ts';
+import { resolveDialect } from '@/providers/domain/dialect.ts';
 import type { NormalizedPart, ResolvedFile } from '@/providers/domain/pal.ts';
 import type {
   ModelRuntimeConfig,
@@ -604,8 +605,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
             : maxOutputTokens;
 
         const containerConfig =
-          model.capabilities.documentGeneration ||
-          (model.config['container'] as boolean | undefined) === true
+          resolveDialect(runtime.provider).containers &&
+          (model.capabilities.documentGeneration ||
+            (model.config['container'] as boolean | undefined) === true)
             ? {
                 codeExecution: true,
                 skills: (model.config['containerSkills'] as
@@ -993,8 +995,9 @@ export function createSendService(deps: SendMessageDeps): SendService {
             : maxOutputTokens;
 
         const containerConfig =
-          model.capabilities.documentGeneration ||
-          (model.config['container'] as boolean | undefined) === true
+          resolveDialect(runtime.provider).containers &&
+          (model.capabilities.documentGeneration ||
+            (model.config['container'] as boolean | undefined) === true)
             ? {
                 codeExecution: true,
                 skills: (model.config['containerSkills'] as

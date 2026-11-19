@@ -571,9 +571,11 @@ Extend the existing `/admin/model` screens:
 
 - Provider form: `local` in the adapter select; hide `baseUrl`/`secretRef`; "Test connection"
   reports "Runs in the browser".
-- Model form for a local provider: preset text-only capabilities, expose `apiModelId`,
-  `config.local.downloadSizeBytes`, `vramRequiredMB`, and `sourceRevision`; hide
-  "import models from provider".
+- Model form for a local provider: preset text-only capabilities; the model id is chosen from the
+  WebLLM catalogue bundled with the pinned runtime, and the choice fills `vramRequiredMB`,
+  `contextWindow`, `downloadSizeBytes`, `sourceRevision`, and `requiredFeatures` (`shader-f16` for
+  `f16` builds). Download size and revision come from the Hugging Face model API in the browser;
+  both stay editable. Hide "import models from provider".
 
 ## 10. User Flows
 

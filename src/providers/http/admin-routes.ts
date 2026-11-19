@@ -63,7 +63,7 @@ export function registryAdminRoutes(deps: RegistryAdminRoutesDeps): Hono<AppEnv>
       displayName: body.displayName,
       adapter: body.adapter,
       baseUrl: body.baseUrl ?? null,
-      secretRef: body.secretRef,
+      ...(body.secretRef !== undefined ? { secretRef: body.secretRef } : {}),
       ...(body.status !== undefined ? { status: body.status } : {}),
       ...(body.config !== undefined ? { config: body.config } : {}),
       actorUserId: caller.user.id,

@@ -42,6 +42,8 @@ import { DEFAULT_SETTINGS, KNOWN_SETTINGS } from './settings/domain/settings.ts'
 
 import type { SendService } from './generations/application/send-service.ts';
 import { createSendService } from './generations/application/send-service.ts';
+import type { ClientMessageService } from './generations/application/client-message-service.ts';
+import { createClientMessageService } from './generations/application/client-message-service.ts';
 import { DrizzleGenerationRepository } from './generations/infrastructure/drizzle-generation-repository.ts';
 import { RealQuota } from './quota/infrastructure/real-quota.ts';
 import { DrizzleQuotaAccountRepository } from './quota/infrastructure/drizzle-quota-account-repository.ts';
@@ -109,6 +111,7 @@ export interface Services {
   readonly conversationRepository: ConversationRepository;
   readonly settings: SettingsService;
   readonly send: SendService;
+  readonly clientMessages: ClientMessageService;
   readonly generationRepository: GenerationRepository;
   readonly errorEvents: ErrorEventWriter;
   readonly orchestrator: GenerationManager;
@@ -285,6 +288,14 @@ export function createServices(config: Config): Services {
     settings,
   });
 
+  const clientMessages = createClientMessageService({
+    conversations: conversationRepository,
+    generations: generationRepository,
+    registry,
+    clock: systemClock,
+    idGen: uuidv7Generator,
+  });
+
   const jobQueue = new DrizzleJobQueue(systemClock, uuidv7Generator);
 
   const attachmentsExpiryHandler = createAttachmentsExpiryHandler({
@@ -377,6 +388,7 @@ export function createServices(config: Config): Services {
     conversationRepository,
     settings,
     send,
+    clientMessages,
     generationRepository,
     errorEvents,
     orchestrator,

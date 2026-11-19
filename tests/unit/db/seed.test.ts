@@ -18,12 +18,17 @@ import {
   buildSeedErrorEvents,
   buildSeedDailyUsage,
 } from '@/db/seed-data/reporting-data.ts';
+import { LOCAL_PROVIDER_SECRET_REF } from '@/providers/domain/local-model.ts';
 
 describe('example registry seed data', () => {
   it('references providers only by env var name, never a secret value', () => {
     for (const provider of EXAMPLE_PROVIDERS) {
-      expect(provider.secretRef).toMatch(/_API_KEY$/);
       expect(provider.secretRef).not.toMatch(/sk-|key-|secret-/i);
+      if (provider.adapter === 'local') {
+        expect(provider.secretRef).toBe(LOCAL_PROVIDER_SECRET_REF);
+        continue;
+      }
+      expect(provider.secretRef).toMatch(/_API_KEY$/);
     }
   });
 

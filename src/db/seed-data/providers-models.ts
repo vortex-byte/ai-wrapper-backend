@@ -33,6 +33,14 @@ export const SEED_PROVIDERS: readonly SeedProvider[] = [
     status: 'active',
     config: { timeoutMs: 5000 },
   },
+  {
+    key: 'on-device',
+    displayName: 'On-device',
+    adapter: 'local',
+    secretRef: 'UNUSED_LOCAL_KEY',
+    status: 'disabled',
+    config: {},
+  },
 ];
 
 export const SEED_MODELS: readonly SeedModel[] = [
@@ -424,6 +432,41 @@ export const SEED_MODELS: readonly SeedModel[] = [
     defaultMaxOutputTokens: 16384,
     quotaWeight: '1.500',
     sortOrder: 130,
+  },
+  {
+    providerKey: 'on-device',
+    apiModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+    displayName: 'Llama 3.2 1B (on-device)',
+    description:
+      'Runs in the browser with WebLLM and WebGPU. Weights download once and stay on the device.',
+    status: 'disabled',
+    capabilities: {
+      schemaVersion: 1,
+      streaming: true,
+      vision: false,
+      documents: { pdf: false },
+      documentGeneration: false,
+      systemPrompt: true,
+      tools: false,
+      contextWindow: 8192,
+      maxOutputTokens: 2048,
+    },
+    config: {
+      local: {
+        webllmModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+        tier: 'small',
+        downloadSizeBytes: 880000000,
+        vramRequiredMB: 1100,
+        license: 'Llama 3.2 Community License',
+        sourceRevision: 'main',
+        requiredFeatures: ['shader-f16'],
+      },
+    },
+    contextWindow: 8192,
+    maxOutputTokens: 2048,
+    defaultMaxOutputTokens: 1024,
+    quotaWeight: '1.000',
+    sortOrder: 140,
   },
 ];
 

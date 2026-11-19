@@ -36,6 +36,7 @@ export function apiRouter(config: Config, services: Services): Hono<AppEnv> {
     conversationRoutes({
       conversations: services.conversations,
       send: services.send,
+      clientMessages: services.clientMessages,
       files: services.attachments,
       auth: services.auth,
       config,

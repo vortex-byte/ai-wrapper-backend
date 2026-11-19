@@ -7,6 +7,11 @@ import type { AppEnv } from '@/http/types.ts';
 import type { AuthService } from '@/auth/application/auth-service.ts';
 import type { ModelRecord } from '../domain/registry.ts';
 import { conversationCapable } from '../domain/capabilities.ts';
+import {
+  isLocalAdapter,
+  readLocalModelInfo,
+  type LocalModelTier,
+} from '../domain/local-model.ts';
 import type { ModelRegistry } from '../ports/model-registry.ts';
 import type { SettingsLookup } from '@/settings/application/cached-settings-reader.ts';
 import {
@@ -60,6 +65,15 @@ export function modelRoutes(deps: ModelRoutesDeps): Hono<AppEnv> {
   return routes;
 }
 
+export interface WireLocalModel {
+  readonly webllmModelId: string;
+  readonly tier: LocalModelTier;
+  readonly downloadSizeBytes: number;
+  readonly vramRequiredMB: number;
+  readonly license: string;
+  readonly requiredFeatures: readonly string[];
+}
+
 export interface WireModel {
   readonly id: string;
   readonly displayName: string;
@@ -71,6 +85,10 @@ export interface WireModel {
     readonly maxImagesPerMessage: number;
   };
   readonly imageOutput: ImageOutputSurface | null;
+  /** `client` models run in the browser; `server` models run on the API host. */
+  readonly execution: 'server' | 'client';
+  /** Local runtime metadata; `null` for server models. */
+  readonly local: WireLocalModel | null;
 }
 
 /** The public model shape: no other row ids, no config, no secrets. */
@@ -78,6 +96,8 @@ export function toWireModel(
   model: ModelRecord,
   imageOutput: ImageOutputSurface | null = null,
 ): WireModel {
+  const isLocal = isLocalAdapter(model.providerAdapter);
+  const local = isLocal ? readLocalModelInfo(model.config) : null;
   return {
     id: model.id,
     displayName: model.displayName,
@@ -86,12 +106,26 @@ export function toWireModel(
     capabilities: model.capabilities,
     limits: {
       maxFilesPerMessage:
-        model.capabilities.documents.pdf || model.capabilities.vision ? 5 : 0,
+        !isLocal && (model.capabilities.documents.pdf || model.capabilities.vision) ? 5 : 0,
       maxImagesPerMessage:
-        conversationCapable(model.capabilities) && model.capabilities.vision
+        !isLocal &&
+        conversationCapable(model.capabilities) &&
+        model.capabilities.vision
           ? (model.capabilities.maxImagesPerRequest ?? 10)
           : 0,
     },
     imageOutput,
+    execution: isLocal ? 'client' : 'server',
+    local:
+      local === null
+        ? null
+        : {
+            webllmModelId: local.webllmModelId,
+            tier: local.tier,
+            downloadSizeBytes: local.downloadSizeBytes,
+            vramRequiredMB: local.vramRequiredMB,
+            license: local.license,
+            requiredFeatures: local.requiredFeatures,
+          },
   };
 }

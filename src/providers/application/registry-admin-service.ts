@@ -16,6 +16,12 @@ import type {
   ReasoningCapability,
 } from '../domain/capabilities.ts';
 import { modelKind } from '../domain/registry.ts';
+import {
+  isLocalAdapter,
+  LOCAL_PROVIDER_SECRET_REF,
+  LocalModelInfoSchema,
+  validateLocalCapabilities,
+} from '../domain/local-model.ts';
 import type {
   ModelRecord,
   ModelStatus,
@@ -46,7 +52,8 @@ export interface CreateProviderInput {
   readonly displayName: string;
   readonly adapter: string;
   readonly baseUrl?: string | null;
-  readonly secretRef: string;
+  /** Optional for browser-executed providers, which hold no credential. */
+  readonly secretRef?: string;
   readonly status?: ProviderStatus;
   readonly config?: Record<string, unknown>;
   readonly actorUserId: string;
@@ -198,6 +205,106 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
     }
   }
 
+  /** Browser-executed providers hold no credential and never talk to a remote endpoint. */
+  function assertLocalProviderShape(input: {
+    readonly baseUrl?: string | null | undefined;
+    readonly secretRef?: string | undefined;
+    readonly config?: Record<string, unknown> | undefined;
+  }): void {
+    if (input.baseUrl !== undefined && input.baseUrl !== null && input.baseUrl !== '') {
+      throw new AppError('invalid_request', 'A local provider has no base URL.', {
+        details: { fields: [{ field: 'baseUrl', message: 'Local providers have no base URL.' }] },
+      });
+    }
+    if (input.secretRef !== undefined) {
+      throw new AppError(
+        'invalid_request',
+        'A local provider holds no credential.',
+        {
+          details: {
+            fields: [{ field: 'secretRef', message: 'Not supported for local providers.' }],
+          },
+        },
+      );
+    }
+    if (input.config?.['dialect'] !== undefined) {
+      throw new AppError(
+        'invalid_request',
+        'A local provider has no provider dialect.',
+        { details: { fields: [{ field: 'config.dialect', message: 'Not supported for local providers.' }] } },
+      );
+    }
+  }
+
+  /** Local models must declare their runtime metadata and stay text-only. */
+  function assertLocalModelShape(input: {
+    readonly apiModelId: string;
+    readonly capabilities: ModelCapabilities;
+    readonly config: Record<string, unknown> | undefined;
+  }): void {
+    const raw = input.config?.['local'];
+    const parsed = LocalModelInfoSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new AppError(
+        'invalid_request',
+        'A local model needs a valid config.local block.',
+        {
+          details: {
+            fields: parsed.success
+              ? []
+              : parsed.error.issues.map((issue) => ({
+                  field: `config.local${issue.path.length > 0 ? `.${issue.path.join('.')}` : ''}`,
+                  message: issue.message,
+                })),
+          },
+        },
+      );
+    }
+    if (parsed.data.webllmModelId !== input.apiModelId) {
+      throw new AppError(
+        'invalid_request',
+        'config.local.webllmModelId must match the model API id.',
+        {
+          details: {
+            fields: [
+              {
+                field: 'config.local.webllmModelId',
+                message: `Must equal the model API id "${input.apiModelId}".`,
+              },
+            ],
+          },
+        },
+      );
+    }
+    const violations = validateLocalCapabilities(input.capabilities);
+    if (violations.length > 0) {
+      throw new AppError('invalid_request', 'A local model must be text-only.', {
+        details: {
+          fields: violations.map((violation) => ({
+            field: 'capabilities',
+            message: violation,
+          })),
+        },
+      });
+    }
+  }
+
+  /** A `config.local` block on a server model would silently change where inference runs. */
+  function assertNoLocalConfigOnServerModel(config: Record<string, unknown> | undefined): void {
+    if (config?.['local'] === undefined) return;
+    throw new AppError(
+      'invalid_request',
+      'Only local providers may carry a config.local block.',
+      {
+        details: {
+          fields: [
+            { field: 'config.local', message: 'This model runs on the server.' },
+          ],
+        },
+      },
+    );
+  }
+
   /** `null` clears the capability, omission keeps it, an object replaces what it sets. */
   function mergeReasoningCapability(
     current: ReasoningCapability | undefined,
@@ -254,6 +361,10 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       if (existing) {
         throw new AppError('conflict', 'A provider with this key already exists.');
       }
+      const isLocal = isLocalAdapter(input.adapter);
+      if (isLocal) {
+        assertLocalProviderShape(input);
+      }
       const id = deps.idGen.uuidv7();
       const config = input.config ?? DEFAULT_PROVIDER_CONFIG;
       const createdAt = deps.clock.now();
@@ -268,7 +379,7 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
               displayName: input.displayName,
               adapter: input.adapter,
               baseUrl: input.baseUrl ?? null,
-              secretRef: input.secretRef,
+              secretRef: input.secretRef ?? LOCAL_PROVIDER_SECRET_REF,
               status: input.status ?? 'active',
               config,
             },
@@ -306,6 +417,10 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
     async updateProvider(input) {
       const existing = await deps.repository.findProviderById(input.id);
       if (!existing) throw new AppError('not_found', 'Provider not found.');
+
+      if (isLocalAdapter(existing.adapter)) {
+        assertLocalProviderShape(input);
+      }
 
       const prospective: ProviderRecord = {
         ...existing,
@@ -406,6 +521,17 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
       const defaultMaxOutputTokens = input.defaultMaxOutputTokens ?? capabilities.maxOutputTokens;
       assertOutputTokenBounds({ maxOutputTokens, defaultMaxOutputTokens });
 
+      const isLocal = isLocalAdapter(provider.adapter);
+      if (isLocal) {
+        assertLocalModelShape({
+          apiModelId: input.apiModelId,
+          capabilities,
+          config: input.config,
+        });
+      } else {
+        assertNoLocalConfigOnServerModel(input.config);
+      }
+
       const existing = await deps.repository.findModelByProviderAndApiId(
         input.providerId,
         input.apiModelId,
@@ -430,7 +556,7 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
               contextWindow,
               maxOutputTokens,
               defaultMaxOutputTokens,
-              quotaWeight: input.quotaWeight ?? 1,
+              quotaWeight: isLocal ? 1 : (input.quotaWeight ?? 1),
               config: input.config ?? {},
               sortOrder: input.sortOrder ?? 0,
             },
@@ -588,6 +714,20 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
         if (provider !== null) assertDialectCapabilities(provider, mergedCapabilities);
       }
 
+      const modelProvider = await deps.repository.findProviderById(existing.providerId);
+      const effectiveCapabilities = mergedCapabilities ?? existing.capabilities;
+      const effectiveConfig = input.config ?? existing.config;
+      const isLocal = modelProvider !== null && isLocalAdapter(modelProvider.adapter);
+      if (isLocal) {
+        assertLocalModelShape({
+          apiModelId: existing.apiModelId,
+          capabilities: effectiveCapabilities,
+          config: effectiveConfig,
+        });
+      } else {
+        assertNoLocalConfigOnServerModel(effectiveConfig);
+      }
+
       const updated = await withTransaction(async (tx) => {
         const result = await deps.repository.updateModel(
           {
@@ -603,7 +743,11 @@ export function createRegistryAdminService(deps: RegistryAdminDeps): RegistryAdm
             ...(input.defaultMaxOutputTokens !== undefined
               ? { defaultMaxOutputTokens: input.defaultMaxOutputTokens }
               : {}),
-            ...(input.quotaWeight !== undefined ? { quotaWeight: input.quotaWeight } : {}),
+            ...(isLocal
+              ? { quotaWeight: 1 }
+              : input.quotaWeight !== undefined
+                ? { quotaWeight: input.quotaWeight }
+                : {}),
             ...(input.config !== undefined ? { config: input.config } : {}),
             ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
           },

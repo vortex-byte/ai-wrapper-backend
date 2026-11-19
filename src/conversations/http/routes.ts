@@ -15,11 +15,14 @@ import type { Conversation, MessagePart, MessageWithParts } from '../domain/conv
 import type { ConversationService } from '../application/conversation-service.ts';
 import type { MessageFileLookup, MessageFileSummary } from '../ports/message-file-lookup.ts';
 import type { SendService } from '@/generations/application/send-service.ts';
+import type { ClientMessageService } from '@/generations/application/client-message-service.ts';
 import {
   CreateConversationBodySchema,
   IdempotencyKeySchema,
   ListConversationsQuerySchema,
   ListMessagesQuerySchema,
+  LocalReplyBodySchema,
+  LocalUserTurnBodySchema,
   RenameConversationBodySchema,
   RetryMessageBodySchema,
   SendMessageBodySchema,
@@ -29,6 +32,7 @@ import {
 export interface ConversationRoutesDeps {
   readonly conversations: ConversationService;
   readonly send: SendService;
+  readonly clientMessages: ClientMessageService;
   readonly files: MessageFileLookup;
   readonly auth: AuthService;
   readonly config: Config;
@@ -37,7 +41,7 @@ export interface ConversationRoutesDeps {
 
 /** Every route is scoped to the signed-in user; another user's id yields `404 not_found`. */
 export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
-  const { conversations, send, files, auth, config, rateLimiter } = deps;
+  const { conversations, send, clientMessages, files, auth, config, rateLimiter } = deps;
   const routes = new Hono<AppEnv>();
 
   const generationLimit = rateLimit(config, rateLimiter, {
@@ -169,6 +173,49 @@ export function conversationRoutes(deps: ConversationRoutesDeps): Hono<AppEnv> {
       c.header('Idempotency-Replayed', 'true');
     }
     return c.json(ok(result.payload, 'Generation retried.'), 202);
+  });
+
+  routes.post('/conversations/:id/messages/local', generationLimit, async (c) => {
+    const caller = c.get('auth');
+    if (!caller) throw new AppError('unauthenticated');
+
+    const idempotencyKey = readIdempotencyKey(c.req.header('idempotency-key'));
+    const body = await parseJsonBody(c, LocalUserTurnBodySchema);
+
+    const result = await clientMessages.saveUserTurn({
+      userId: caller.user.id,
+      conversationId: c.req.param('id'),
+      idempotencyKey,
+      parts: body.parts,
+    });
+
+    if (result.replayed) {
+      c.header('Idempotency-Replayed', 'true');
+    }
+    return c.json(ok(result.payload, 'Local turn saved.'), 201);
+  });
+
+  routes.post('/conversations/:id/messages/:mid/local-reply', generationLimit, async (c) => {
+    const caller = c.get('auth');
+    if (!caller) throw new AppError('unauthenticated');
+
+    const idempotencyKey = readIdempotencyKey(c.req.header('idempotency-key'));
+    const body = await parseJsonBody(c, LocalReplyBodySchema);
+
+    const result = await clientMessages.saveReply({
+      userId: caller.user.id,
+      conversationId: c.req.param('id'),
+      userMessageId: c.req.param('mid'),
+      idempotencyKey,
+      parts: body.parts,
+      finishReason: body.finishReason,
+      ...(body.clientUsage !== undefined ? { clientUsage: body.clientUsage } : {}),
+    });
+
+    if (result.replayed) {
+      c.header('Idempotency-Replayed', 'true');
+    }
+    return c.json(ok(result.payload, 'Local reply saved.'), 201);
   });
 
   return routes;

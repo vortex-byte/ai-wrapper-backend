@@ -93,6 +93,34 @@ export const RetryMessageBodySchema = z.object({
   options: SendOptionsSchema,
 });
 
+/** Browser-executed turns carry text only: the local runtime has no attachment pipeline. */
+const LocalTextPartSchema = z
+  .object({
+    type: z.literal('text'),
+    text: z.string().min(1),
+  })
+  .strict();
+
+export const LocalUserTurnBodySchema = z
+  .object({
+    parts: z.array(LocalTextPartSchema).min(1).max(50),
+  })
+  .strict();
+
+export const LocalReplyBodySchema = z
+  .object({
+    parts: z.array(LocalTextPartSchema).min(1).max(50),
+    finishReason: z.enum(['stop', 'length']),
+    clientUsage: z
+      .object({
+        inputTokens: z.number().int().min(0).optional(),
+        outputTokens: z.number().int().min(0).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export const IdempotencyKeySchema = z.uuid();
 
 export type CreateConversationBody = z.infer<typeof CreateConversationBodySchema>;

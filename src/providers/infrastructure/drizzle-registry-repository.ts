@@ -56,6 +56,7 @@ const modelColumns = {
   providerKey: aiProviders.key,
   providerDisplayName: aiProviders.displayName,
   providerStatus: aiProviders.status,
+  providerAdapter: aiProviders.adapter,
   apiModelId: aiModels.apiModelId,
   displayName: aiModels.displayName,
   description: aiModels.description,
@@ -91,6 +92,7 @@ interface ModelRow {
   providerKey: string;
   providerDisplayName: string;
   providerStatus: string;
+  providerAdapter: string;
   apiModelId: string;
   displayName: string;
   description: string | null;
@@ -129,6 +131,7 @@ function toModel(row: ModelRow): ModelRecord {
     providerKey: row.providerKey,
     providerDisplayName: row.providerDisplayName,
     providerStatus: row.providerStatus as ProviderStatus,
+    providerAdapter: row.providerAdapter,
     apiModelId: row.apiModelId,
     displayName: row.displayName,
     description: row.description,

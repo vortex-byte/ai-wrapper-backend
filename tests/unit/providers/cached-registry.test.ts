@@ -45,6 +45,7 @@ function model(overrides: Partial<ModelRecord> = {}): ModelRecord {
     providerKey: 'openai',
     providerDisplayName: 'OpenAI',
     providerStatus: 'active',
+    providerAdapter: 'openai',
     apiModelId: 'gpt-4o-mini',
     displayName: 'GPT',
     description: null,

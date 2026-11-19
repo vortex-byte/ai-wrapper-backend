@@ -894,4 +894,203 @@ describe('registry admin HTTP surface (real PostgreSQL)', () => {
     const updatedModelData = ((await updateModel.json()) as { data: { config: Record<string, unknown> } }).data;
     expect(updatedModelData.config['systemAddendum']).toBe('Updated model instructions.');
   });
+
+  it('creates a local provider without a credential and defaults the secret ref', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const res = await app.request(
+      new Request('http://localhost/api/admin/providers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          key: 'on-device',
+          displayName: 'On-device',
+          adapter: 'local',
+          status: 'active',
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { data: { id: string; secretRef: string; baseUrl: string | null } };
+    expect(body.data.secretRef).toBe('UNUSED_LOCAL_KEY');
+    expect(body.data.baseUrl).toBeNull();
+  });
+
+  it('rejects a local provider that declares a credential or a base URL', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const withSecret = await app.request(
+      new Request('http://localhost/api/admin/providers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          key: 'on-device-secret',
+          displayName: 'On-device',
+          adapter: 'local',
+          secretRef: 'LOCAL_API_KEY',
+        }),
+      }),
+    );
+    expect(withSecret.status).toBe(400);
+
+    const withBaseUrl = await app.request(
+      new Request('http://localhost/api/admin/providers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          key: 'on-device-url',
+          displayName: 'On-device',
+          adapter: 'local',
+          baseUrl: 'https://example.invalid',
+        }),
+      }),
+    );
+    expect(withBaseUrl.status).toBe(400);
+  });
+
+  it('creates a local model with text-only capabilities and a quota weight of one', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const providerRes = await app.request(
+      new Request('http://localhost/api/admin/providers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          key: 'on-device',
+          displayName: 'On-device',
+          adapter: 'local',
+        }),
+      }),
+    );
+    const providerId = await readId(providerRes);
+
+    const modelRes = await createModel(cookie, csrfToken, providerId, {
+      apiModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+      displayName: 'Llama 3.2 1B (local)',
+      capabilities: {
+        contextWindow: 8_192,
+        maxOutputTokens: 2_048,
+        vision: false,
+        documents: { pdf: false },
+      },
+      quotaWeight: 7,
+      config: {
+        local: {
+          webllmModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+          tier: 'small',
+          downloadSizeBytes: 880_000_000,
+          vramRequiredMB: 1_100,
+          license: 'Llama 3.2 Community License',
+          sourceRevision: 'main',
+          requiredFeatures: ['shader-f16'],
+        },
+      },
+    });
+    expect(modelRes.status).toBe(201);
+    const modelBody = (await modelRes.json()) as {
+      data: { quotaWeight: number; config: Record<string, unknown> };
+    };
+    expect(modelBody.data.quotaWeight).toBe(1);
+    expect(modelBody.data.config['local']).toBeDefined();
+  });
+
+  it('rejects a local model without a valid config.local block or with non-text capabilities', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const providerRes = await app.request(
+      new Request('http://localhost/api/admin/providers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: ORIGIN,
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          key: 'on-device',
+          displayName: 'On-device',
+          adapter: 'local',
+        }),
+      }),
+    );
+    const providerId = await readId(providerRes);
+
+    const noConfig = await createModel(cookie, csrfToken, providerId, {
+      apiModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+      capabilities: {
+        contextWindow: 8_192,
+        maxOutputTokens: 2_048,
+        vision: false,
+        documents: { pdf: false },
+      },
+    });
+    expect(noConfig.status).toBe(400);
+
+    const withVision = await createModel(cookie, csrfToken, providerId, {
+      apiModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+      capabilities: {
+        contextWindow: 8_192,
+        maxOutputTokens: 2_048,
+        vision: true,
+        documents: { pdf: false },
+      },
+      config: {
+        local: {
+          webllmModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+          tier: 'small',
+          downloadSizeBytes: 880_000_000,
+          vramRequiredMB: 1_100,
+          license: 'Llama 3.2 Community License',
+          sourceRevision: 'main',
+        },
+      },
+    });
+    expect(withVision.status).toBe(400);
+  });
+
+  it('rejects a config.local block on a server model', async () => {
+    await seedUser('super_admin', 'admin@corp.example');
+    const { cookie, csrfToken } = await loginAs('admin@corp.example');
+
+    const providerRes = await createProvider(cookie, csrfToken);
+    const providerId = await readId(providerRes);
+
+    const res = await createModel(cookie, csrfToken, providerId, {
+      config: {
+        local: {
+          webllmModelId: 'gpt-4o-2024-08-06',
+          tier: 'small',
+          downloadSizeBytes: 880_000_000,
+          vramRequiredMB: 1_100,
+          license: 'MIT',
+          sourceRevision: 'main',
+        },
+      },
+    });
+    expect(res.status).toBe(400);
+  });
 });

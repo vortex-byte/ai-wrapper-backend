@@ -9,6 +9,7 @@ function model(overrides: Partial<ModelRecord> = {}): ModelRecord {
     providerKey: 'openai',
     providerDisplayName: 'OpenAI',
     providerStatus: 'active',
+    providerAdapter: 'openai',
     apiModelId: 'gpt-5.1',
     displayName: 'GPT-5.1',
     description: null,
@@ -86,5 +87,62 @@ describe('toWireModel limits', () => {
       }),
     );
     expect(wire.limits.maxImagesPerMessage).toBe(0);
+  });
+});
+
+const LOCAL_CONFIG = {
+  local: {
+    webllmModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+    tier: 'small',
+    downloadSizeBytes: 880_000_000,
+    vramRequiredMB: 1_100,
+    license: 'Llama 3.2 Community License',
+    sourceRevision: 'main',
+    requiredFeatures: ['shader-f16'],
+  },
+};
+
+describe('toWireModel execution', () => {
+  it('marks a server model as server-executed with no local metadata', () => {
+    const wire = toWireModel(model());
+    expect(wire.execution).toBe('server');
+    expect(wire.local).toBeNull();
+  });
+
+  it('marks a local model as client-executed and exposes its runtime metadata', () => {
+    const wire = toWireModel(
+      model({
+        providerAdapter: 'local',
+        apiModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+        config: LOCAL_CONFIG,
+      }),
+    );
+    expect(wire.execution).toBe('client');
+    expect(wire.local).toEqual({
+      webllmModelId: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+      tier: 'small',
+      downloadSizeBytes: 880_000_000,
+      vramRequiredMB: 1_100,
+      license: 'Llama 3.2 Community License',
+      requiredFeatures: ['shader-f16'],
+    });
+  });
+
+  it('never exposes file or image limits for a local model', () => {
+    const wire = toWireModel(
+      model({
+        providerAdapter: 'local',
+        capabilities: { ...model().capabilities, vision: true },
+        config: LOCAL_CONFIG,
+      }),
+    );
+    expect(wire.limits.maxFilesPerMessage).toBe(0);
+    expect(wire.limits.maxImagesPerMessage).toBe(0);
+  });
+
+  it('keeps a local model client-executed when its local metadata is invalid', () => {
+    const wire = toWireModel(model({ providerAdapter: 'local', config: { local: {} } }));
+    expect(wire.execution).toBe('client');
+    expect(wire.local).toBeNull();
   });
 });

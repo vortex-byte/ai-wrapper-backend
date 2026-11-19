@@ -25,6 +25,8 @@ export interface ModelRecord {
   readonly providerKey: string;
   readonly providerDisplayName: string;
   readonly providerStatus: ProviderStatus;
+  /** The provider's adapter key; `local` marks browser-executed models. */
+  readonly providerAdapter: string;
   readonly apiModelId: string;
   readonly displayName: string;
   readonly description: string | null;

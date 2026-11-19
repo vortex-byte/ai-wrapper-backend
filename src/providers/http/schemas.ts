@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PartialModelCapabilitiesSchema } from '@/providers/domain/capabilities-schema.ts';
 import { ProviderConfigSchema } from '@/providers/domain/dialect.ts';
+import { LOCAL_ADAPTER_KEY } from '@/providers/domain/local-model.ts';
 
 /** Zod schemas for provider and model administration endpoints. */
 
@@ -43,20 +44,33 @@ const BaseUrlSchema = z
   .nullable()
   .optional();
 
-export const CreateProviderBodySchema = z.object({
-  key: z
-    .string()
-    .trim()
-    .min(1)
-    .max(64)
-    .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Use lowercase letters, digits, "-" or "_".'),
-  displayName: z.string().trim().min(1).max(128),
-  adapter: z.string().trim().min(1).max(64),
-  baseUrl: BaseUrlSchema,
-  secretRef: SecretRefSchema,
-  status: ProviderStatusSchema.optional(),
-  config: ProviderConfigSchema.optional(),
-});
+export const CreateProviderBodySchema = z
+  .object({
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Use lowercase letters, digits, "-" or "_".'),
+    displayName: z.string().trim().min(1).max(128),
+    adapter: z.string().trim().min(1).max(64),
+    baseUrl: BaseUrlSchema,
+    secretRef: SecretRefSchema.optional(),
+    status: ProviderStatusSchema.optional(),
+    config: ProviderConfigSchema.optional(),
+  })
+  .refine((data) => data.adapter !== LOCAL_ADAPTER_KEY || data.secretRef === undefined, {
+    message: 'A local provider holds no credential; leave the secret field empty.',
+    path: ['secretRef'],
+  })
+  .refine((data) => data.adapter !== LOCAL_ADAPTER_KEY || data.baseUrl === undefined, {
+    message: 'A local provider has no base URL.',
+    path: ['baseUrl'],
+  })
+  .refine((data) => data.adapter === LOCAL_ADAPTER_KEY || data.secretRef !== undefined, {
+    message: 'A credential variable name is required.',
+    path: ['secretRef'],
+  });
 
 export const UpdateProviderBodySchema = z
   .object({

@@ -20,6 +20,7 @@ import {
   resolveRoutedImageModel,
   toolImageModel,
 } from '@/providers/application/image-generation-config.ts';
+import { assertServerExecution } from '@/providers/application/local-execution.ts';
 import type { SettingsService } from '@/settings/application/settings-service.ts';
 import {
   KNOWN_SETTINGS,
@@ -40,6 +41,7 @@ import type {
 import { canGenerateImages, conversationCapable, imageToolSupported } from '@/providers/domain/capabilities.ts';
 import { validatePartsForModel } from '@/providers/domain/capability-validation.ts';
 import type { Finalizer } from './finalizer.ts';
+import { toWireMessage, type WireMessage } from './wire-message.ts';
 
 function assertConversationTarget(capabilities: ModelCapabilities): void {
   if (conversationCapable(capabilities)) return;
@@ -238,17 +240,6 @@ export interface SendMessagePayload {
   } | null;
 }
 
-interface WireMessage {
-  readonly id: string;
-  readonly seq: number;
-  readonly role: string;
-  readonly status: string;
-  readonly finishReason: string | null;
-  readonly createdAt: string;
-  readonly generationId: string | null;
-  readonly parts: readonly unknown[];
-}
-
 export interface RetryMessageInput {
   readonly userId: string;
   readonly conversationId: string;
@@ -317,6 +308,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
       if (resolved.model.status !== 'active') {
         throw new AppError('model_unavailable', 'This model is not available.');
       }
+      assertServerExecution(resolved.provider.adapter);
 
       const fileParts = input.parts.filter(
         (part): part is { type: 'file'; fileId: string } => part.type === 'file',
@@ -767,6 +759,7 @@ export function createSendService(deps: SendMessageDeps): SendService {
       ) {
         throw new AppError('model_unavailable', 'This model is not available.');
       }
+      assertServerExecution(resolved.provider.adapter);
 
       const wantsImageOutput = resolveImageIntent(
         resolved.model.capabilities,
@@ -1102,31 +1095,6 @@ export function createSendService(deps: SendMessageDeps): SendService {
 
       return outcome;
     },
-  };
-}
-
-function toWireMessage(
-  message: Message,
-  parts: readonly MessagePart[],
-  generationId: string | null = null,
-): WireMessage {
-  return {
-    id: message.id,
-    seq: message.seq,
-    role: message.role,
-    status: message.status,
-    finishReason: message.finishReason,
-    createdAt: message.createdAt.toISOString(),
-    generationId,
-    parts: parts.map((part) => ({
-      id: part.id,
-      position: part.position,
-      type: part.type,
-      format: 'markdown',
-      text: part.textContent ?? '',
-      ...(part.fileId !== null ? { fileId: part.fileId } : {}),
-      ...(part.data && Object.keys(part.data).length > 0 ? { data: part.data } : {}),
-    })),
   };
 }
 

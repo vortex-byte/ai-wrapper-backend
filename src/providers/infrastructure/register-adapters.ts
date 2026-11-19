@@ -1,5 +1,6 @@
 import { AnthropicAdapter } from './adapters/anthropic/adapter.ts';
 import { GeminiAdapter } from './adapters/gemini/adapter.ts';
+import { LocalAdapter } from './adapters/local/adapter.ts';
 import { OpenAIAdapter } from './adapters/openai/adapter.ts';
 import { FakeProvider } from './fake/fake-provider.ts';
 import { InMemoryProviderRegistry } from './registry.ts';
@@ -15,5 +16,6 @@ export function createDefaultProviderRegistry(options?: {
   registry.register(new OpenAIAdapter());
   registry.register(new AnthropicAdapter());
   registry.register(new GeminiAdapter());
+  registry.register(new LocalAdapter());
   return registry;
 }

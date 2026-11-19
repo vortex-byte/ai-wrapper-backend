@@ -18,6 +18,7 @@ function model(overrides: Partial<ModelRecord> = {}): ModelRecord {
     providerKey: 'gemini',
     providerDisplayName: 'Google Gemini',
     providerStatus: 'active',
+    providerAdapter: 'gemini',
     apiModelId: 'gemini-3-flash',
     displayName: 'Gemini 3 Flash',
     description: null,

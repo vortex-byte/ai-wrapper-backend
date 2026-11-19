@@ -299,10 +299,41 @@ Returns only active models the caller may use on enabled providers. Requires no 
       "capabilities": { "streaming": true, "vision": true, "documents": { "pdf": true },
                         "imageGeneration": null, "documentGeneration": false,
                         "contextWindow": 200000, "maxOutputTokens": 8192 },
-      "limits": { "maxFilesPerMessage": 5, "maxImagesPerMessage": 10 } } ] } }
+      "limits": { "maxFilesPerMessage": 5, "maxImagesPerMessage": 10 },
+      "execution": "server", "local": null } ] } }
 ```
 
 `status`: `active | disabled`.
+
+`execution`: `server` | `client`. `client` models run entirely in the browser (WebLLM/WebGPU); the
+API host never sees their prompts or token stream. A `client` model is rejected by §6.2 and §6.3 with
+`422 unsupported_for_model`; its turns are stored through §6.4 instead.
+
+`local`: `null` for server models. For a client model it carries the browser runtime metadata:
+
+| Field | Value type | Description |
+|---|---|---|
+| `webllmModelId` | string | WebLLM model identifier; the weights are fetched from the Hugging Face CDN. |
+| `tier` | string (`small` \| `standard` \| `balanced` \| `high`) | Rough size class, used for a download hint only. |
+| `downloadSizeBytes` | integer | Approximate weight download size. |
+| `vramRequiredMB` | integer | Approximate VRAM requirement. |
+| `license` | string | Model license label; displayed as information, never enforced. |
+| `requiredFeatures` | array of strings | WebGPU feature names the browser must expose (e.g. `shader-f16`). |
+
+```json
+{ "id": "0192…", "displayName": "Llama 3.2 1B (local)", "providerLabel": "On-device",
+  "status": "active",
+  "capabilities": { "streaming": true, "vision": false, "documents": { "pdf": false },
+                    "imageGeneration": null, "documentGeneration": false,
+                    "contextWindow": 8192, "maxOutputTokens": 2048 },
+  "limits": { "maxFilesPerMessage": 0, "maxImagesPerMessage": 0 },
+  "execution": "client",
+  "local": { "webllmModelId": "Llama-3.2-1B-Instruct-q4f16_1-MLC", "tier": "small",
+             "downloadSizeBytes": 880000000, "vramRequiredMB": 1100,
+             "license": "Llama 3.2 Community License", "requiredFeatures": ["shader-f16"] } }
+```
+
+Client models always report `limits.maxFilesPerMessage = 0` and `limits.maxImagesPerMessage = 0`.
 
 `capabilities.reasoning` is present when the model exposes selectable reasoning depths:
 `{ "availableEfforts": ["low","medium","high"], "defaultEffort": "medium" }`; it is omitted
@@ -447,6 +478,10 @@ File `status`: `available | processing | expired | missing` (`expired`/`missing`
 
 Submits a new user message turn, reserves quota tokens, and queues assistant generation (idempotent via `Idempotency-Key`).
 
+> This endpoint is for **server-executed** models only. A model with `execution: "client"` (§4.1) is
+> rejected with `422 unsupported_for_model`; browser-executed turns use §6.4. **server-executed** models only. A model with `execution: "client"` (§4.1) is
+> rejected with `422 unsupported_for_model`; browser-executed turns use §6.4.
+
 **Path parameters:**
 | Parameter | Value type | Required | Description |
 |---|---|---|---|
@@ -543,6 +578,97 @@ generation history.
 | `options` | object | No | Generation execution options (same structure as §6.2). |
 
 `202` with the same `data` shape as §6.2. Requires `Idempotency-Key`.
+
+### 6.4 Local (browser-executed) turns
+
+Two endpoints persist turns whose inference ran in the browser. They are used **only** for models
+whose `execution` is `client` (§4.1); a server model is rejected with `422 unsupported_for_model`.
+
+No generation, quota reservation, usage event, daily rollup, or ledger row is created for these
+turns. The persisted messages carry `metadata.execution = "client"`; the assistant message also
+carries `metadata.local.clientUsage` when the browser reported token counts.
+
+#### 6.4.1 `POST /api/conversations/:id/messages/local` — idempotent
+
+Stores the user turn. The browser has already produced the prompt; the server only persists it.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Conversation ID. |
+
+**Request headers:**
+| Header | Value type | Required | Description |
+|---|---|---|---|
+| `Idempotency-Key` | string (UUIDv7) | Yes | Unique idempotency key. |
+| `X-CSRF-Token` | string | Yes | Stateless CSRF verification token. |
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `parts` | array of objects | Yes | Ordered text blocks (1–50). |
+| `parts[].type` | string (`text`) | Yes | Only `text` is accepted. |
+| `parts[].text` | string | Yes | Prompt text. |
+
+Unknown body fields are rejected (`422 invalid_request`).
+
+```json
+{ "parts": [ { "type": "text", "text": "Summarise this changelog." } ] }
+```
+
+`201`:
+```json
+{ "status": "ok", "message": "Local turn saved.", "data": {
+    "userMessage": { "id": "…", "seq": 12, "role": "user", "status": "complete",
+                     "finishReason": null, "generationId": null,
+                     "createdAt": "…", "parts": [ … ] } } }
+```
+
+#### 6.4.2 `POST /api/conversations/:id/messages/:mid/local-reply` — idempotent
+
+Stores the assistant answer produced in the browser for the user message `mid`.
+
+**Path parameters:**
+| Parameter | Value type | Required | Description |
+|---|---|---|---|
+| `id` | string (UUIDv7) | Yes | Conversation ID. |
+| `mid` | string (UUIDv7) | Yes | User message ID the reply answers. |
+
+**Request headers:** same as §6.4.1.
+
+**Request body:**
+| Field | Value type | Required | Description |
+|---|---|---|---|
+| `parts` | array of objects | Yes | Ordered text blocks (1–50). |
+| `parts[].type` | string (`text`) | Yes | Only `text` is accepted. |
+| `parts[].text` | string | Yes | Answer text. |
+| `finishReason` | string (`stop` \| `length`) | Yes | Why generation stopped. |
+| `clientUsage` | object | No | Token counts reported by the browser runtime. |
+| `clientUsage.inputTokens` | integer | No | Prompt tokens consumed in the browser. |
+| `clientUsage.outputTokens` | integer | No | Tokens produced in the browser. |
+
+```json
+{ "parts": [ { "type": "text", "text": "Here is the summary…" } ],
+  "finishReason": "stop",
+  "clientUsage": { "inputTokens": 412, "outputTokens": 96 } }
+```
+
+`201`:
+```json
+{ "status": "ok", "message": "Local reply saved.", "data": {
+    "assistantMessage": { "id": "…", "seq": 13, "role": "assistant", "status": "complete",
+                          "finishReason": "stop", "generationId": null,
+                          "createdAt": "…", "parts": [ … ] } } }
+```
+
+**Idempotency semantics** (both endpoints): same key + same payload → the original response is
+replayed with `Idempotency-Replayed: true`; same key + different payload →
+`422 idempotency_key_reuse`; keys expire after 24 h.
+
+**Errors:** `404 not_found` (conversation or user message not owned by the caller),
+`409 conflict` (the user message is no longer the latest turn in the conversation),
+`422 unsupported_for_model` (the conversation's model runs on the server),
+`422 invalid_request`, `422 idempotency_key_reuse`, `429 rate_limited`.
 
 ---
 
@@ -1806,6 +1932,8 @@ Errors after a stream has started cannot change the HTTP status: they arrive as 
 | User role | `user`, `admin`, `super_admin` |
 | User status | `active`, `disabled` |
 | Model status | `active`, `disabled` |
+| Model execution | `server`, `client` (`client` = runs in the browser via WebLLM/WebGPU) |
+| Local model tier | `small`, `standard`, `balanced`, `high` |
 | Conversation (derived) | `modelLocked` boolean |
 | Message role | `user`, `assistant` |
 | Message status | `streaming`, `complete`, `incomplete`, `failed` |
@@ -1827,6 +1955,7 @@ Errors after a stream has started cannot change the HTTP status: they arrive as 
 | Per IP (unauthenticated + auth endpoints) | 60 req/min; login **10 req/min** |
 | Per user — general API | 300 req/min |
 | Per user — `POST …/messages` | 20/min (plus the concurrency limit) |
+| Per user — `POST …/messages/local`, `POST …/messages/:mid/local-reply` | 20/min |
 | Per user — uploads | 30/min, 100 MB/10 min |
 | Per provider — concurrent upstream calls | configured per provider |
 

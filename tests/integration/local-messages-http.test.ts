@@ -44,7 +44,6 @@ const LOCAL_CONFIG = {
     tier: 'small',
     downloadSizeBytes: 880_000_000,
     vramRequiredMB: 1_100,
-    license: 'Llama 3.2 Community License',
     sourceRevision: 'main',
     requiredFeatures: ['shader-f16'],
   },
@@ -459,7 +458,7 @@ describe('Local (browser-executed) message persistence (real PostgreSQL)', () =>
         items: Array<{
           id: string;
           execution: string;
-          local: { webllmModelId: string; tier: string; license: string } | null;
+          local: { webllmModelId: string; tier: string } | null;
           limits: { maxFilesPerMessage: number; maxImagesPerMessage: number };
         }>;
       };
@@ -468,7 +467,6 @@ describe('Local (browser-executed) message persistence (real PostgreSQL)', () =>
     expect(local).toBeDefined();
     expect(local?.local?.webllmModelId).toBe('Llama-3.2-1B-Instruct-q4f16_1-MLC');
     expect(local?.local?.tier).toBe('small');
-    expect(local?.local?.license).toBe('Llama 3.2 Community License');
     expect(local?.limits.maxFilesPerMessage).toBe(0);
     expect(local?.limits.maxImagesPerMessage).toBe(0);
   });

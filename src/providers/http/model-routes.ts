@@ -70,7 +70,6 @@ export interface WireLocalModel {
   readonly tier: LocalModelTier;
   readonly downloadSizeBytes: number;
   readonly vramRequiredMB: number;
-  readonly license: string;
   readonly requiredFeatures: readonly string[];
 }
 
@@ -124,7 +123,6 @@ export function toWireModel(
             tier: local.tier,
             downloadSizeBytes: local.downloadSizeBytes,
             vramRequiredMB: local.vramRequiredMB,
-            license: local.license,
             requiredFeatures: local.requiredFeatures,
           },
   };

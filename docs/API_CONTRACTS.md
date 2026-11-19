@@ -317,7 +317,6 @@ API host never sees their prompts or token stream. A `client` model is rejected 
 | `tier` | string (`small` \| `standard` \| `balanced` \| `high`) | Rough size class, used for a download hint only. |
 | `downloadSizeBytes` | integer | Approximate weight download size. |
 | `vramRequiredMB` | integer | Approximate VRAM requirement. |
-| `license` | string | Model license label; displayed as information, never enforced. |
 | `requiredFeatures` | array of strings | WebGPU feature names the browser must expose (e.g. `shader-f16`). |
 
 ```json
@@ -330,7 +329,7 @@ API host never sees their prompts or token stream. A `client` model is rejected 
   "execution": "client",
   "local": { "webllmModelId": "Llama-3.2-1B-Instruct-q4f16_1-MLC", "tier": "small",
              "downloadSizeBytes": 880000000, "vramRequiredMB": 1100,
-             "license": "Llama 3.2 Community License", "requiredFeatures": ["shader-f16"] } }
+             "requiredFeatures": ["shader-f16"] } }
 ```
 
 Client models always report `limits.maxFilesPerMessage = 0` and `limits.maxImagesPerMessage = 0`.

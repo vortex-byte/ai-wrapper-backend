@@ -96,7 +96,6 @@ const LOCAL_CONFIG = {
     tier: 'small',
     downloadSizeBytes: 880_000_000,
     vramRequiredMB: 1_100,
-    license: 'Llama 3.2 Community License',
     sourceRevision: 'main',
     requiredFeatures: ['shader-f16'],
   },
@@ -123,7 +122,6 @@ describe('toWireModel execution', () => {
       tier: 'small',
       downloadSizeBytes: 880_000_000,
       vramRequiredMB: 1_100,
-      license: 'Llama 3.2 Community License',
       requiredFeatures: ['shader-f16'],
     });
   });

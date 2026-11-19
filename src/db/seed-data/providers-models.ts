@@ -457,7 +457,6 @@ export const SEED_MODELS: readonly SeedModel[] = [
         tier: 'small',
         downloadSizeBytes: 880000000,
         vramRequiredMB: 1100,
-        license: 'Llama 3.2 Community License',
         sourceRevision: 'main',
         requiredFeatures: ['shader-f16'],
       },

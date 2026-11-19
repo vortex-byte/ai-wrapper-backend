@@ -20,7 +20,6 @@ export interface LocalModelInfo {
   readonly tier: LocalModelTier;
   readonly downloadSizeBytes: number;
   readonly vramRequiredMB: number;
-  readonly license: string;
   /** Pinned upstream revision of the weights, for reproducibility. */
   readonly sourceRevision: string;
   /** WebGPU features the model needs, e.g. `shader-f16`. */
@@ -33,7 +32,6 @@ export const LocalModelInfoSchema = z
     tier: z.enum(LOCAL_MODEL_TIERS),
     downloadSizeBytes: z.number().int().positive(),
     vramRequiredMB: z.number().int().positive(),
-    license: z.string().trim().min(1).max(128),
     sourceRevision: z.string().trim().min(1).max(128),
     requiredFeatures: z.array(z.string().trim().min(1).max(64)).max(16).optional(),
   })
@@ -57,7 +55,6 @@ export function readLocalModelInfo(
     tier: parsed.data.tier,
     downloadSizeBytes: parsed.data.downloadSizeBytes,
     vramRequiredMB: parsed.data.vramRequiredMB,
-    license: parsed.data.license,
     sourceRevision: parsed.data.sourceRevision,
     requiredFeatures: parsed.data.requiredFeatures ?? [],
   };

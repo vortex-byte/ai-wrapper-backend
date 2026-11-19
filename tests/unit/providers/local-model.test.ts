@@ -15,7 +15,6 @@ const LOCAL_CONFIG = {
     tier: 'small',
     downloadSizeBytes: 880_000_000,
     vramRequiredMB: 1_100,
-    license: 'Llama 3.2 Community License',
     sourceRevision: 'main',
     requiredFeatures: ['shader-f16'],
   },
@@ -52,8 +51,7 @@ describe('readLocalModelInfo', () => {
       tier: 'small',
       downloadSizeBytes: 880_000_000,
       vramRequiredMB: 1_100,
-      license: 'Llama 3.2 Community License',
-      sourceRevision: 'main',
+        sourceRevision: 'main',
       requiredFeatures: ['shader-f16'],
     });
   });
@@ -67,6 +65,10 @@ describe('readLocalModelInfo', () => {
     expect(readLocalModelInfo({ local: { ...LOCAL_CONFIG.local, tier: 'enormous' } })).toBeNull();
   });
 
+  it('rejects unknown keys, so retired metadata must be migrated away', () => {
+    expect(readLocalModelInfo({ local: { ...LOCAL_CONFIG.local, license: 'MIT' } })).toBeNull();
+  });
+
   it('defaults requiredFeatures to an empty list', () => {
     const info = readLocalModelInfo({
       local: {
@@ -74,8 +76,7 @@ describe('readLocalModelInfo', () => {
         tier: 'small',
         downloadSizeBytes: 880_000_000,
         vramRequiredMB: 1_100,
-        license: 'Llama 3.2 Community License',
-        sourceRevision: 'main',
+            sourceRevision: 'main',
       },
     });
     expect(info?.requiredFeatures).toEqual([]);

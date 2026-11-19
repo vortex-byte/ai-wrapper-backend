@@ -220,15 +220,13 @@ user-configurable.
     "tier": "balanced",
     "downloadSizeBytes": 2100000000,
     "vramRequiredMB": 3674,
-    "license": "llama3.2",
     "sourceRevision": "main",
     "requiredFeatures": ["shader-f16"]
   }
 }
 ```
 
-- Licenses are recorded and shown to the user. **Any license is acceptable**; there is no legal
-  gate on the catalog. Pin `sourceRevision` (or a commit hash) so weights cannot change silently.
+- Pin `sourceRevision` (or a commit hash) so weights cannot change silently.
 - `quota_weight` stays `1.000` and is unused for local models.
 - `GET /api/models` gains additive fields. Existing clients ignore them:
 
@@ -244,7 +242,6 @@ user-configurable.
     "tier": "balanced",
     "downloadSizeBytes": 2100000000,
     "vramRequiredMB": 3674,
-    "license": "llama3.2",
     "requiredFeatures": ["shader-f16"]
   },
   "capabilities": { "…": "…" },
@@ -448,7 +445,6 @@ export interface ILocalModelInfo {
   webllmModelId: string;
   downloadSizeBytes: number;
   vramRequiredMB: number;
-  license: string;
 }
 
 export interface IModel {
@@ -576,7 +572,7 @@ Extend the existing `/admin/model` screens:
 - Provider form: `local` in the adapter select; hide `baseUrl`/`secretRef`; "Test connection"
   reports "Runs in the browser".
 - Model form for a local provider: preset text-only capabilities, expose `apiModelId`,
-  `config.local.downloadSizeBytes`, `vramRequiredMB`, `license`, and `sourceRevision`; hide
+  `config.local.downloadSizeBytes`, `vramRequiredMB`, and `sourceRevision`; hide
   "import models from provider".
 
 ## 10. User Flows
@@ -730,8 +726,8 @@ the deferred Transformers.js/wllama fallback), not a silent removal from scope.
    in this release.
 3. **Hugging Face:** reachable from the office network. No internal mirror at launch; keep it as a
    documented contingency.
-4. **Licenses:** any model is acceptable. Record and display the license; do not block the catalog on
-   license type.
+4. **Licenses:** any model is acceptable; the catalog is not gated on license type and no license
+   metadata is stored or displayed.
 5. **Recommendation:** no automatic model-tier selection. Show a small hint (private, approximate
    size, no quota) when the user picks a local model.
 6. **System addendum for local models:** included in MVP as a hardcoded `LOCAL_SYSTEM_PROMPT` in the
